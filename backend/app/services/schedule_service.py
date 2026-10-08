@@ -15,13 +15,22 @@ from app.services.cron import next_run as cron_next_run
 from app.services.cron import parse_cron
 
 
-def compute_next(task: ScheduledTask) -> int | None:
-    """算下次运行时刻（ms）。event 由调用方置 None；once 用 run_at。"""
+def compute_next(task: ScheduledTask, after_ms: int | None = None) -> int | None:
+    """算下次运行时刻（ms）。event 由调用方置 None；once 用 run_at。
+
+    after_ms：递推基准（毫秒）。默认从"现在"算；传入上次计划时刻可让 cron 按时区
+    正确递推（用于错过补跑 catch-up）。
+    """
+    from datetime import timezone
+
+    tz_name = getattr(task, "timezone", None) or "Asia/Shanghai"
     if task.schedule_kind == "once":
         return int(task.run_at) if task.run_at else None
     if task.schedule_kind == "interval" and task.interval_seconds:
-        return int(time.time() * 1000) + int(task.interval_seconds) * 1000
-    dt = cron_next_run(task.cron_expr or "0 9 * * *", datetime.now())
+        base = after_ms if after_ms is not None else int(time.time() * 1000)
+        return int(base) + int(task.interval_seconds) * 1000
+    after = datetime.fromtimestamp(after_ms / 1000, tz=timezone.utc) if after_ms is not None else None
+    dt = cron_next_run(task.cron_expr or "0 9 * * *", after, tz_name=tz_name)
     return int(dt.timestamp() * 1000)
 
 

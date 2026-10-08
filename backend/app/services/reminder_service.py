@@ -42,10 +42,14 @@ async def create_reminder(db: AsyncSession, *, tenant_id: int, creator_id: int |
 
 
 async def update_reminder(db: AsyncSession, r: Reminder, data: dict) -> Reminder:
+    # 仅更新显式传入的字段；due_at/assignee_id 允许传 None 以清空
     for f in ("title", "content", "due_at", "assignee_id", "status", "repeat_cron",
               "remind_before_minutes", "notify_on_due"):
-        if f in data and data[f] is not None:
-            setattr(r, f, data[f])
+        if f not in data:
+            continue
+        if data[f] is None and f not in ("due_at", "assignee_id", "content"):
+            continue
+        setattr(r, f, data[f])
     if data.get("status") == "done":
         r.done_at = int(time.time() * 1000)
     await db.flush()

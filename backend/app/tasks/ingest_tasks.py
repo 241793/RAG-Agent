@@ -147,9 +147,12 @@ async def process_document(document_id: int) -> None:
             import datetime as _dt
 
             doc.parsed_at = _dt.datetime.now(_dt.timezone.utc)
+            await db.flush()
             if kb:
-                kb.doc_count = (kb.doc_count or 0) + 1
-                kb.chunk_count = (kb.chunk_count or 0) + len(new_chunks)
+                # 据实重算，避免重灌/删除导致计数漂移
+                from app.api.v1.document import _refresh_kb_counts
+
+                await _refresh_kb_counts(db, kb.id)
             await db.commit()
             # 语料变更 → 失效 BM25 缓存
             from app.retrieval import bm25_cache

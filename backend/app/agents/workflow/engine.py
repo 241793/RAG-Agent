@@ -257,9 +257,29 @@ async def _exec_http(node: dict, data: dict, ctx: NodeContext) -> dict:
     err = _check_url(url, d.get("allow_hosts"))
     if err:
         raise ValidationError(f"HTTP 节点被拒绝: {err}")
+
+    def _as_obj(v, default):
+        if v is None:
+            return default
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except Exception:  # noqa: BLE001
+                return default
+        return v
+
+    # 支持自定义请求头（如 Authorization）、查询参数与 JSON 请求体
+    headers = {str(k): str(v) for k, v in (_as_obj(d.get("headers"), {}) or {}).items()}
+    params = _as_obj(d.get("params"), {}) or {}
+    json_body = _as_obj(d.get("json_body"), None)
     body = data.get("body") or d.get("body_template")
-    async with httpx.AsyncClient(timeout=d.get("timeout", 20), follow_redirects=False) as client:
-        resp = await client.request(method, url, content=body.encode() if body else None)
+    async with httpx.AsyncClient(
+        timeout=d.get("timeout", 20), follow_redirects=bool(d.get("follow_redirects", True))
+    ) as client:
+        resp = await client.request(
+            method, url, headers=headers or None, params=params or None,
+            content=body.encode() if body else None, json=json_body,
+        )
     return {"output": resp.text[:65536], "status": resp.status_code}
 
 
@@ -400,8 +420,12 @@ async def _exec_loop(node: dict, data: dict, ctx: NodeContext) -> dict:
         except Exception as e:  # noqa: BLE001
             errors.append({"index": idx, "error": str(e)[:200]})
             results.append(None)
-    return {"results": results, "count": len(results), "errors": errors,
-            "output": "\n".join(str(r) for r in results if r is not None)}
+    out = {"results": results, "count": len(results), "errors": errors,
+           "output": "\n".join(str(r) for r in results if r is not None)}
+    # 默认严格模式：有失败项则整节点失败（下游不会误把缺失项当成功）；可显式 tolerant=true 容忍
+    if errors and not d.get("tolerant"):
+        raise ValidationError(f"循环执行有 {len(errors)}/{len(results)} 项失败：{errors[:3]}")
+    return out
 
 
 async def _run_loop_body(body: dict, scope: dict, ctx: NodeContext):

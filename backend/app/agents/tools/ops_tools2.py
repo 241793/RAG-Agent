@@ -1555,9 +1555,12 @@ class RunWorkflowTool(WriteToolMixin):
                     node_status.append(f"{evt.get('node_id')}:{evt.get('status')}")
                 elif t == "run_finished":
                     final_text = evt.get("text") or _json.dumps(evt.get("output", ""), ensure_ascii=False)
-                    if evt.get("status") == "waiting":
+                    if evt.get("status") == "waiting" or evt.get("paused"):
                         return ToolResult(content=f"工作流运行挂起，等待人工审批（run_id={run.id}）。"
                                                   f"节点：{', '.join(node_status)}")
+                    if evt.get("err"):
+                        return ToolResult(content=f"工作流执行失败：{str(evt.get('err'))[:300]}\n"
+                                                  f"节点：{', '.join(node_status)}", is_error=True)
         except Exception as e:  # noqa: BLE001
             return ToolResult(content=f"工作流执行失败：{str(e)[:300]}", is_error=True)
         return ToolResult(content=f"工作流已运行（run_id={run.id}）。输出：{(final_text or '')[:2000]}\n"
@@ -1625,6 +1628,8 @@ class ApproveWorkflowRunTool(WriteToolMixin):
             ):
                 if evt.get("type") == "run_finished":
                     final_text = evt.get("text") or _json.dumps(evt.get("output", ""), ensure_ascii=False)
+                    if evt.get("err"):
+                        return ToolResult(content=f"续跑失败：{str(evt.get('err'))[:300]}", is_error=True)
         except Exception as e:  # noqa: BLE001
             return ToolResult(content=f"续跑失败：{str(e)[:300]}", is_error=True)
         return ToolResult(content=f"已通过审批并续跑完成（run_id={rid}）。输出：{(final_text or '')[:2000]}")

@@ -428,11 +428,61 @@ class ConvertFileTool:
         p = get_storage().path(fk)
         if not p.is_file():
             return ToolResult(content="文件不存在", is_error=True)
+        target = str(args.get("target") or "md").lower()
+        ext = p.suffix.lower().lstrip(".")
         try:
-            parsed = parse_file(p, p.suffix.lower().lstrip("."))
-            return ToolResult(content=parsed.text[:100000], data={"target": args.get("target") or "md"})
+            # 表格类源 + target=csv → 真 CSV（保留行列结构，而非把表格拍成文本）
+            if target == "csv" and ext in ("xlsx", "xlsm", "csv"):
+                text = _to_csv(p, ext)
+            else:
+                parsed = parse_file(p, ext)
+                text = parsed.text[:100000]
+                if target == "txt":
+                    text = _strip_markdown(text)
+            return ToolResult(content=text, data={"target": target, "source_ext": ext})
         except Exception as e:  # noqa: BLE001
             return ToolResult(content=f"转换失败：{str(e)[:200]}", is_error=True)
+
+
+def _to_csv(path, ext: str) -> str:
+    """把 xlsx/csv 源转成 CSV 文本（多工作表以注释行分隔）。"""
+    import csv as _csv
+    import io
+
+    if ext == "csv":
+        raw = path.read_text(encoding="utf-8-sig", errors="replace")
+        rows = list(_csv.reader(io.StringIO(raw)))
+        buf = io.StringIO()
+        _csv.writer(buf).writerows(rows)
+        return buf.getvalue()[:100000]
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(str(path), read_only=True, data_only=True)
+    buf = io.StringIO()
+    for idx, ws in enumerate(wb.worksheets):
+        if idx:
+            buf.write("\n")
+        buf.write(f"# 工作表: {ws.title}\n")
+        w = _csv.writer(buf)
+        for row in ws.iter_rows(values_only=True):
+            cells = ["" if c is None else c for c in row]
+            while cells and cells[-1] == "":
+                cells.pop()
+            if any(str(c).strip() for c in cells):
+                w.writerow(cells)
+    wb.close()
+    return buf.getvalue()[:100000]
+
+
+def _strip_markdown(text: str) -> str:
+    """粗略去除 markdown 标记（标题 #、粗体 **、行内代码 `）。"""
+    import re as _re
+
+    out = _re.sub(r"^#{1,6}\s*", "", text, flags=_re.M)
+    out = out.replace("**", "").replace("__", "")
+    out = _re.sub(r"`([^`]*)`", r"\1", out)
+    return out
 
 
 # ==================== write 类（HITL）====================

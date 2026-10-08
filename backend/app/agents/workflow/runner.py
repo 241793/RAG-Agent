@@ -166,6 +166,8 @@ async def stream_workflow(
         evt = await queue.get()
         etype = evt.get("type") if isinstance(evt, dict) else "node"
         if etype == _DONE:
+            # 对外统一暴露为 run_finished（内部哨兵不外泄）
+            evt = {**evt, "type": "run_finished"}
             yield evt
             break
         yield evt

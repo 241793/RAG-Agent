@@ -262,12 +262,30 @@ async def _refresh_doc_count(db: AsyncSession, doc) -> None:
         await db.execute(select(_func.count()).select_from(_Chunk).where(_Chunk.doc_id == doc.id))
     ).scalar_one()
     doc.chunk_count = int(cnt or 0)
-    kb = await db.get(KnowledgeBase, doc.kb_id)
-    if kb:
-        total = (
-            await db.execute(select(_func.count()).select_from(_Chunk).where(_Chunk.kb_id == kb.id))
-        ).scalar_one()
-        kb.chunk_count = int(total or 0)
+    await _refresh_kb_counts(db, doc.kb_id)
+
+
+async def _refresh_kb_counts(db: AsyncSession, kb_id: int) -> None:
+    """据实重算知识库的文档数与分块数（删除/新增后调用，避免计数只增不减）。"""
+    from sqlalchemy import func as _func
+
+    from app.models import Chunk as _Chunk
+
+    kb = await db.get(KnowledgeBase, kb_id)
+    if not kb:
+        return
+    doc_total = (
+        await db.execute(
+            select(_func.count()).select_from(Document).where(
+                Document.kb_id == kb_id, Document.status != "deleted"
+            )
+        )
+    ).scalar_one()
+    chunk_total = (
+        await db.execute(select(_func.count()).select_from(_Chunk).where(_Chunk.kb_id == kb_id))
+    ).scalar_one()
+    kb.doc_count = int(doc_total or 0)
+    kb.chunk_count = int(chunk_total or 0)
 
 
 @router.put("/{doc_id}/chunks/{chunk_id}")
@@ -446,7 +464,9 @@ async def batch_delete(
 
     docs = await _load_owned_docs(db, user, body.ids)
     storage = get_storage()
+    kb_ids = set()
     for doc in docs:
+        kb_ids.add(doc.kb_id)
         await db.execute(sql_delete(Chunk).where(Chunk.doc_id == doc.id))
         if doc.file_key:
             try:
@@ -455,6 +475,8 @@ async def batch_delete(
                 pass
         await db.delete(doc)
     await db.flush()
+    for kid in kb_ids:
+        await _refresh_kb_counts(db, kid)
     if docs:
         from app.retrieval import bm25_cache
 
@@ -691,8 +713,10 @@ async def delete_document(
             get_storage().delete(doc.file_key)
         except Exception:  # noqa: BLE001
             pass
+    kb_id = doc.kb_id
     await db.delete(doc)
     await db.flush()
+    await _refresh_kb_counts(db, kb_id)
     return {"message": "已删除"}
 
 

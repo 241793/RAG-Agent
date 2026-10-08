@@ -15,9 +15,14 @@ def rrf_fuse(
     top_n: int | None = None,
     weights: list[float] | None = None,
 ) -> list[VectorHit]:
-    """将多路排序结果融合。score = Σ weight_i * 1/(k + rank)。"""
+    """将多路排序结果融合。score = Σ weight_i * 1/(k + rank)。
+
+    同时保留每路命中的**最高原始相似度**到 hit.raw_score：RRF 分是排名制、跨查询不可比，
+    无法用于相关度阈值；而向量的余弦相似度 / BM25 分是绝对量，可用于阈值过滤。
+    """
     scores: dict[str, float] = {}
     best: dict[str, VectorHit] = {}
+    best_raw: dict[str, float] = {}
     for i, ranking in enumerate(rankings):
         w = 1.0
         if weights and i < len(weights):
@@ -28,20 +33,20 @@ def rrf_fuse(
             # 保留内容更完整的记录（父块内容优先）
             if key not in best or (hit.parent_content and not best[key].parent_content):
                 best[key] = hit
+            # 记录该命中在各路中的最高原始相似度（用于阈值判断）
+            raw = hit.raw_score if hit.raw_score is not None else hit.score
+            if raw is not None:
+                best_raw[key] = max(best_raw.get(key, float("-inf")), float(raw))
 
     ordered = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     if top_n:
         ordered = ordered[:top_n]
 
-    # 保留原始 RRF 分：k 与 rank 固定，故跨查询可比、单调。
-    # 注意：RRF 是排名制，无法表达绝对相关度——判"无命中"应靠余弦前置门
-    # （settings.retrieval_vec_min），而非此分数。score = raw_score（不归一化，
-    # 避免 sc/max 使 top-1 恒为 1.0 而失去阈值意义）。
     result: list[VectorHit] = []
     for key, sc in ordered:
         hit = best[key]
-        hit.raw_score = sc
-        hit.score = sc
+        hit.raw_score = best_raw.get(key, sc)  # 原始相似度（可比，供 score_threshold）
+        hit.score = sc                          # RRF 融合分（仅用于排序）
         hit.source = "fused"
         result.append(hit)
     return result

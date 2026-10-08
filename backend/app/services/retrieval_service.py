@@ -286,12 +286,14 @@ async def retrieve(
     else:
         fused = []
 
-    # MMR 去冗余（可选）：在重排前对候选做多样性重排，避免近重复内容挤占名额
+    # MMR 去冗余（可选）：在重排前对候选做多样性重排，避免近重复内容挤占名额。
+    # 关键：MMR 的候选池必须足够大才有意义——用候选召回池（candidate_k）而非最终 top_k，
+    # 否则只在 top_k 内去重，几乎无效（与 rerank 是否开启无关）。
     if settings.mmr_enabled and len(fused) > top_k:
         from app.retrieval.mmr import mmr_select
 
-        pool_n = settings.rerank_pool if settings.rerank_enabled else top_k
-        fused = await mmr_select(db, fused, top_k=max(top_k, pool_n), lambda_=settings.mmr_lambda)
+        pool_n = max(top_k, min(len(fused), max(candidate_k, settings.rerank_pool)))
+        fused = await mmr_select(db, fused, top_k=pool_n, lambda_=settings.mmr_lambda)
 
     # 重排（可选）
     rerank_on = settings.rerank_enabled if use_rerank is None else use_rerank
@@ -305,9 +307,10 @@ async def retrieve(
 
     fused = fused[:top_k]
 
-    # 相关度阈值过滤（阈值为 0 时不过滤）
+    # 相关度阈值过滤：用**原始相似度**（向量余弦/BM25 分）判断，而非 RRF 融合分
+    # （RRF 是排名制、跨查询不可比，拿它比阈值会导致阈值形同虚设）。
     if score_threshold > 0:
-        fused = [h for h in fused if h.score >= score_threshold]
+        fused = [h for h in fused if (h.raw_score if h.raw_score is not None else h.score) >= score_threshold]
 
     chunks = await _to_chunks(db, fused)
     # 未命中日志（异步、不阻塞）——供知识库运营发现缺口

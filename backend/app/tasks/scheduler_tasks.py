@@ -30,10 +30,10 @@ def _get_sem() -> asyncio.Semaphore:
     return _sem
 
 
-async def _compute_next(task) -> int | None:
+async def _compute_next(task, after_ms: int | None = None) -> int | None:
     from app.services.schedule_service import compute_next
 
-    return compute_next(task)
+    return compute_next(task, after_ms=after_ms)
 
 
 async def execute_task(task_id: int, *, manual: bool = False) -> None:
@@ -58,7 +58,23 @@ async def execute_task(task_id: int, *, manual: bool = False) -> None:
             await db.commit()
             run_row_id = run.id
 
-            ok, result_text, error_text, wf_run_id, run_atts = await _do_run(db, t)
+            # 超时保护：task.timeout_seconds 生效（0/None 表示不限制）
+            timeout_s = t.timeout_seconds or 0
+            if timeout_s > 0:
+                try:
+                    ok, result_text, error_text, wf_run_id, run_atts = await asyncio.wait_for(
+                        _do_run(db, t), timeout=timeout_s
+                    )
+                except asyncio.TimeoutError:
+                    ok, result_text, error_text, wf_run_id, run_atts = (
+                        False, "", f"执行超时（超过 {timeout_s} 秒）", None, None,
+                    )
+                    try:
+                        await db.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
+            else:
+                ok, result_text, error_text, wf_run_id, run_atts = await _do_run(db, t)
             finished = int(time.time() * 1000)
             run = await db.get(ScheduledTaskRun, run_row_id)
             run.status = "success" if ok else "failed"
@@ -81,7 +97,15 @@ async def execute_task(task_id: int, *, manual: bool = False) -> None:
                     t.enabled = False
                     t.next_run_at = None
                 else:
-                    t.next_run_at = await _compute_next(t)
+                    # scheduler_loop 已按「本次计划时刻」算好 next_run_at；此处仅在其缺失或
+                    # 已过期（执行耗时跨过了一个周期）时推进，避免覆盖正确的排期。
+                    now_ms = int(time.time() * 1000)
+                    nxt = t.next_run_at
+                    guard = 0
+                    while (nxt is None or nxt <= now_ms) and guard < 1000:
+                        nxt = await _compute_next(t, after_ms=nxt or now_ms)
+                        guard += 1
+                    t.next_run_at = nxt
             else:
                 t.last_status = "failed"
                 # 失败重试
@@ -310,8 +334,18 @@ async def scheduler_loop(interval_seconds: int = 30) -> None:
                 for t in rows:
                     if t.id in _RUNNING:
                         continue
-                    # once 任务派发后清空 next_run_at，避免每轮重复触发
-                    nxt = None if t.schedule_kind == "once" else await _compute_next(t)
+                    # once 任务派发后清空 next_run_at，避免每轮重复触发。
+                    # 其余任务以「本次计划时刻」为基准递推：这样服务宕机错过的触发点会自然
+                    # 递增（catch-up），而不是全部被跳过。
+                    planned = t.next_run_at
+                    nxt = None if t.schedule_kind == "once" else await _compute_next(t, after_ms=planned)
+                    # 若算出的下次仍早于现在（宕机期间积压多个周期），直接推进到当前之后，
+                    # 只补跑一次（避免一次性风暴式补跑）
+                    now_ms = int(time.time() * 1000)
+                    guard = 0
+                    while nxt is not None and nxt <= now_ms and guard < 1000:
+                        nxt = await _compute_next(t, after_ms=nxt)
+                        guard += 1
                     # CAS 抢占：只有把 next_run_at 从旧值改成功才派发
                     res = await db.execute(
                         update(ScheduledTask)

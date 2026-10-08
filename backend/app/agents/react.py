@@ -72,6 +72,7 @@ async def run_react_loop(
     openai_tools = to_openai_schema(tools)
     last_sig: str | None = None
     repeat = 0
+    exhausted = True  # 轮次耗尽（未自然结束）
 
     for turn in range(max_turns):
         acc_tool: dict[int, dict] = {}
@@ -94,6 +95,7 @@ async def run_react_loop(
 
         tool_calls = _finalize_tool_calls(acc_tool)
         if not tool_calls:
+            exhausted = False  # LLM 不再调工具 → 自然结束
             break
 
         messages.append(ChatMessage(role="assistant", content=turn_text, tool_calls=tool_calls))
@@ -193,3 +195,26 @@ async def run_react_loop(
             pending_enable.clear()
 
         yield {"type": "turn", "turn": turn + 1}
+
+    # 轮次耗尽仍想调工具 → 强制收尾一次（不带工具），避免回答戛然而止
+    if exhausted:
+        yield {"type": "delta", "text": "\n\n（已达到工具调用上限，以下为基于当前已获取信息的总结）\n"}
+        try:
+            final = await llm.chat(
+                messages + [ChatMessage(
+                    role="user",
+                    content="请直接基于以上已获得的信息给出最终回答，不要再调用工具。",
+                )],
+                model=rm.model_name, stream=True, temperature=temperature,
+            )
+            async for chunk in final:
+                if chunk.reasoning:
+                    yield {"type": "reasoning", "text": chunk.reasoning}
+                if chunk.delta:
+                    yield {"type": "delta", "text": chunk.delta}
+                if chunk.usage:
+                    yield {"type": "usage", "usage": chunk.usage}
+                if chunk.finish:
+                    break
+        except Exception:  # noqa: BLE001
+            yield {"type": "delta", "text": "（无法生成总结，请重试或缩小问题范围）"}
