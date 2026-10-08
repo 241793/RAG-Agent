@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Alert, Avatar, Button, Card, Col, Collapse, Drawer, Empty, Input, List, message, Modal, Popconfirm, Row,
+  Alert, Avatar, Button, Card, Col, Collapse, Drawer, Empty, Form, Input, List, message, Modal, Popconfirm, Row,
   Segmented, Select, Space, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, Upload,
 } from 'antd'
 import {
@@ -76,6 +76,8 @@ export default function ServiceTicketPage() {
   const [ctx, setCtx] = useState<any>(null)
   const [channelConvs, setChannelConvs] = useState<any[]>([])
   const [convOpen, setConvOpen] = useState<any>(null)
+  const [convNotes, setConvNotes] = useState<{ content: string; ts: number }[]>([])
+  const [convNote, setConvNote] = useState('')
   const [convMsgs, setConvMsgs] = useState<any[]>([])
   const [convReply, setConvReply] = useState('')
   const [convSending, setConvSending] = useState(false)
@@ -89,8 +91,24 @@ export default function ServiceTicketPage() {
   const [qrOpen, setQrOpen] = useState(false)
   const [qrTitle, setQrTitle] = useState('')
   const [qrContent, setQrContent] = useState('')
+  const [qrEdit, setQrEdit] = useState<QuickReplyItem | null>(null)
+  const [qrEditForm] = Form.useForm()
   const convRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (qrEdit) qrEditForm.setFieldsValue({ title: qrEdit.title, content: qrEdit.content })
+  }, [qrEdit])
+
+  const saveQrEdit = async () => {
+    if (!qrEdit) return
+    const v = await qrEditForm.validateFields().catch(() => null)
+    if (!v) return
+    try {
+      await serviceTicketApi.updateQuickReply(qrEdit.id, { title: v.title, content: v.content })
+      setQuickReplies(await serviceTicketApi.quickReplies()); message.success('已保存'); setQrEdit(null)
+    } catch (e) { message.error(errMsg(e)) }
+  }
 
   const load = async () => {
     setLoading(true)
@@ -170,8 +188,11 @@ export default function ServiceTicketPage() {
   }
 
   const openConversation = async (c: any) => {
-    setConvOpen(c); setConvMsgs([]); setConvReply('')
-    serviceTicketApi.conversationMeta(c.id).then((m) => setConvWatch(m.watch !== false)).catch(() => {})
+    setConvOpen(c); setConvMsgs([]); setConvReply(''); setConvNotes([]); setConvNote('')
+    serviceTicketApi.conversationMeta(c.id).then((m) => {
+      setConvWatch(m.watch !== false)
+      setConvNotes(m.notes || [])
+    }).catch(() => {})
     try {
       const msgs = await serviceTicketApi.conversationMessages(c.id)
       const keys = msgs.flatMap((m) => (m.attachments || []).map((a: any) => a.file_key)).filter(Boolean)
@@ -213,6 +234,16 @@ export default function ServiceTicketPage() {
       await serviceTicketApi.setConversationWatch(convOpen.id, watch)
       setConvWatch(watch)
       message.success(watch ? '已开启：该会话有新消息时通知你' : '已关闭提醒')
+    } catch (e) { message.error(errMsg(e)) }
+  }
+
+  const addConvNote = async () => {
+    if (!convOpen || !convNote.trim()) return
+    try {
+      const r = await serviceTicketApi.addConversationNote(convOpen.id, convNote.trim())
+      setConvNotes(r.notes || [])
+      setConvNote('')
+      message.success('已添加会话备注（仅客服可见）')
     } catch (e) { message.error(errMsg(e)) }
   }
 
@@ -562,6 +593,28 @@ export default function ServiceTicketPage() {
                 </div>
               </div>
             </Can>
+            <Can perm="service:manage">
+              <Collapse size="small" ghost style={{ marginTop: 8 }} items={[{
+                key: 'cnotes',
+                label: <span style={{ fontSize: 12 }}><EditOutlined /> 会话备注{convNotes.length ? `（${convNotes.length}）` : ''}（仅客服可见）</span>,
+                children: (
+                  <div>
+                    {convNotes.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无会话备注" />}
+                    {convNotes.map((n, i) => (
+                      <div key={i} style={{ borderLeft: '3px solid #faad14', background: '#fffbe6', borderRadius: 6, padding: '6px 10px', marginBottom: 8 }}>
+                        <div style={{ fontSize: 11, color: '#d48806' }}>{fmtTime(n.ts)}</div>
+                        <div style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{n.content}</div>
+                      </div>
+                    ))}
+                    <Space.Compact style={{ width: '100%', marginTop: 4 }}>
+                      <Input value={convNote} onChange={(e) => setConvNote(e.target.value)}
+                        placeholder="给该会话加内部备注（不会发给客户）" onPressEnter={addConvNote} />
+                      <Button type="primary" onClick={addConvNote}>添加</Button>
+                    </Space.Compact>
+                  </div>
+                ),
+              }]} />
+            </Can>
           </>
         )}
       </Drawer>
@@ -587,6 +640,7 @@ export default function ServiceTicketPage() {
           locale={{ emptyText: '暂无话术' }}
           renderItem={(q) => (
             <List.Item actions={[
+              <a key="e" onClick={() => setQrEdit(q)}>编辑</a>,
               <Popconfirm key="d" title="删除该话术？" onConfirm={async () => {
                 try { await serviceTicketApi.removeQuickReply(q.id); setQuickReplies(await serviceTicketApi.quickReplies()) }
                 catch (e) { message.error(errMsg(e)) }
@@ -596,6 +650,18 @@ export default function ServiceTicketPage() {
                 description={<Typography.Text type="secondary" style={{ fontSize: 12 }}>{q.content}</Typography.Text>} />
             </List.Item>
           )} />
+      </Modal>
+
+      {/* 编辑话术 */}
+      <Modal title="编辑话术" open={!!qrEdit} onOk={saveQrEdit} onCancel={() => setQrEdit(null)} destroyOnClose>
+        <Form form={qrEditForm} layout="vertical">
+          <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="content" label="内容" rules={[{ required: true, message: '请输入内容' }]}>
+            <Input.TextArea rows={4} />
+          </Form.Item>
+        </Form>
       </Modal>
     </PageContainer>
   )

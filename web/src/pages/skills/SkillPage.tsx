@@ -52,6 +52,9 @@ export default function SkillPage() {
   const [runScriptArgs, setRunScriptArgs] = useState('')
   const [runResult, setRunResult] = useState('')
   const [running, setRunning] = useState(false)
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
+  const [upgradeUrl, setUpgradeUrl] = useState('')
+  const [upgradeBusy, setUpgradeBusy] = useState(false)
 
   const openFile = async (path: string) => {
     if (!pkgSkillId) return
@@ -251,6 +254,17 @@ export default function SkillPage() {
       setPkg(await skillApi.getPackage(pkgSkillId)); load()
     } catch (e) { message.error(errMsg(e)) }
     return false
+  }
+
+  const doUpgradeUrl = async () => {
+    if (!pkgSkillId || !upgradeUrl.trim()) return
+    setUpgradeBusy(true)
+    try {
+      await skillApi.upgradeUrl(pkgSkillId, upgradeUrl.trim())
+      message.success('已从 URL 更新技能包')
+      setUpgradeOpen(false)
+      setPkg(await skillApi.getPackage(pkgSkillId)); load()
+    } catch (e) { message.error(errMsg(e)) } finally { setUpgradeBusy(false) }
   }
 
   const doRunScript = async () => {
@@ -525,10 +539,13 @@ export default function SkillPage() {
               </Descriptions.Item>
             </Descriptions>
             {canEdit && (
-              <Space style={{ marginTop: 12 }}>
+              <Space style={{ marginTop: 12 }} wrap>
                 <Upload beforeUpload={doUpgrade} showUploadList={false} accept=".zip">
                   <Button icon={<UploadOutlined />}>更新技能包（上传 zip）</Button>
                 </Upload>
+                <Button icon={<LinkOutlined />} onClick={() => { setUpgradeUrl(pkg?.source_uri || ''); setUpgradeOpen(true) }}>
+                  从 URL 更新
+                </Button>
               </Space>
             )}
             <Typography.Title level={5} style={{ marginTop: 16 }}>脚本</Typography.Title>
@@ -561,6 +578,17 @@ export default function SkillPage() {
           </>
         )}
       </Drawer>
+
+      {/* 从 URL 更新技能包 */}
+      <Modal title="从 URL 更新技能包" open={upgradeOpen} onOk={doUpgradeUrl} confirmLoading={upgradeBusy}
+        onCancel={() => setUpgradeOpen(false)} destroyOnClose>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          填入技能包 zip 直链或 GitHub 仓库地址，平台会拉取并覆盖当前技能包（保留脚本执行开关与权限设置）。
+        </Typography.Paragraph>
+        <Input value={upgradeUrl} onChange={(e) => setUpgradeUrl(e.target.value)}
+          placeholder="https://github.com/user/skill-repo 或 https://.../skill.zip"
+          prefix={<LinkOutlined />} />
+      </Modal>
 
       {/* 脚本试跑 */}
       <Modal title={`试跑脚本：${runScript || ''}`} open={!!runScript}

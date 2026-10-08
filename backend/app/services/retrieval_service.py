@@ -77,10 +77,87 @@ async def build_filter(
     return build_permission_filter(ps, accessible, force_kb_ids=force_kb_ids)
 
 
-async def embed_query(db: AsyncSession, *, tenant_id: int, query: str) -> list[float]:
-    emb_driver, rm = await get_embedding(db, tenant_id=tenant_id)
+async def embed_query(
+    db: AsyncSession, *, tenant_id: int, query: str, config_id: int | None = None
+) -> list[float]:
+    emb_driver, rm = await get_embedding(db, tenant_id=tenant_id, config_id=config_id)
     vecs = await emb_driver.embed([query], model=rm.model_name)
     return vecs[0]
+
+
+async def group_kbs_by_embedding_model(
+    db: AsyncSession, kb_ids: list[int]
+) -> tuple[dict[int | None, list[int]], set[int]]:
+    """按各 KB 的 embedding_model_id 分组，返回 (model_id → kb_ids, 非向量库集合)。
+
+    图文库（source_type=entry）不做向量嵌入，单独返回以便跳过向量召回。
+    未配置模型的 KB 归入 None 组，走租户默认 embedding。
+    """
+    if not kb_ids:
+        return {}, set()
+    rows = (
+        await db.execute(
+            select(KnowledgeBase.id, KnowledgeBase.source_type, KnowledgeBase.embedding_model_id)
+            .where(KnowledgeBase.id.in_(kb_ids))
+        )
+    ).all()
+    groups: dict[int | None, list[int]] = {}
+    skip: set[int] = set()
+    for kid, source_type, model_id in rows:
+        if (source_type or "local") == "entry":
+            skip.add(kid)
+            continue
+        groups.setdefault(model_id, []).append(kid)
+    return groups, skip
+
+
+async def _search_vectors_by_model(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    query: str,
+    pf: PermissionFilter,
+    groups: dict[int | None, list[int]],
+    candidate_k: int,
+    max_scan: int | None,
+) -> tuple[list[VectorHit], list[str]]:
+    """按 KB 的向量模型分组做向量召回，各组结果合并。
+
+    KB 级 embedding_model_id 若与租户默认不同，用它生成 query 向量，
+    保证「同库同模型」的向量空间一致（否则跨模型算 cosine 无意义）。
+    """
+    import asyncio
+    from dataclasses import replace
+
+    from app.core.logging import get_logger
+
+    log = get_logger("retrieval")
+    store = get_vector_store()
+    warnings: list[str] = []
+
+    async def _one(model_id: int | None, kbs: list[int]) -> list[VectorHit]:
+        sub_pf = replace(pf, accessible_kb_ids=kbs) if not pf.bypass_kb else pf
+        try:
+            qvec = await embed_query(db, tenant_id=tenant_id, query=query, config_id=model_id)
+            hits = await store.search(db, query_vec=qvec, pf=sub_pf, top_k=candidate_k, max_scan=max_scan)
+            # 标的库 id（向量库真实所属 kb），避免跨组串库
+            return [h for h in hits if h.kb_id in set(kbs)]
+        except Exception as e:  # noqa: BLE001
+            log.warning("vector_search_group_failed", model_id=model_id, err=str(e)[:200])
+            warnings.append("vector_unavailable")
+            return []
+
+    if len(groups) <= 1:
+        # 单组（绝大多数场景）：直接一次调用，保持原路径
+        only = next(iter(groups.items()), (None, []))
+        return await _one(*only), warnings
+
+    results = await asyncio.gather(*[_one(mid, kbs) for mid, kbs in groups.items()])
+    out: list[VectorHit] = []
+    for r in results:
+        out.extend(r)
+    out.sort(key=lambda h: h.score, reverse=True)
+    return out[:candidate_k], warnings
 
 
 # 追问/指代信号：短句 + 指代词 → 需要结合上下文改写再检索
@@ -152,18 +229,6 @@ async def _split_local_external(
     return local_ids, external
 
 
-async def _has_vector_kb(db: AsyncSession, kb_ids: list[int]) -> bool:
-    """目标库里是否有需要向量召回的库（非图文库）。空列表也返回 True（走默认路径）。"""
-    if not kb_ids:
-        return True
-    from app.models import KnowledgeBase
-
-    rows = (await db.execute(
-        select(KnowledgeBase.source_type).where(KnowledgeBase.id.in_(kb_ids))
-    )).scalars().all()
-    return any((st or "local") != "entry" for st in rows)
-
-
 async def _search_external(
     external_kbs: list, query: str, *, top_k: int, warnings: list[str]
 ) -> list:
@@ -233,7 +298,6 @@ async def retrieve(
     if external_kbs:
         pf.accessible_kb_ids = local_ids
 
-    store = get_vector_store()
     rankings: list[tuple[str, list[VectorHit]]] = []  # (来源标签, 结果)
 
     # 外部知识库联邦检索（并发，单源失败不阻断）
@@ -244,16 +308,27 @@ async def retrieve(
         if warnings:
             degraded = True
 
-    # 向量召回（仅本地）。若目标库全是图文库（source_type=entry，不做向量嵌入），跳过向量召回、直接走 BM25。
-    has_vector_kb = await _has_vector_kb(db, local_ids)
-    if has_vector_kb:
+    # 向量召回（仅本地）。按各 KB 的 embedding_model_id 分组：同组同模型，
+    # 保证 query 向量与库内向量处于同一向量空间（跨模型算 cosine 无意义）。
+    # 图文库（source_type=entry）不做向量嵌入，跳过。
+    emb_groups, emb_skip = await group_kbs_by_embedding_model(db, local_ids)
+    if emb_skip:
+        # 纯图文库场景：无需向量召回，直接走 BM25
+        vec_kb_ids = set(local_ids) - emb_skip
+    else:
+        vec_kb_ids = set(local_ids)
+    if emb_groups and vec_kb_ids:
         try:
-            qvec = await embed_query(db, tenant_id=ps.tenant_id, query=query)
-            vec_hits = await store.search(db, query_vec=qvec, pf=pf, top_k=candidate_k,
-                                          max_scan=settings.vector_max_scan or None)
+            vec_hits, vec_warn = await _search_vectors_by_model(
+                db, tenant_id=ps.tenant_id, query=query, pf=pf, groups=emb_groups,
+                candidate_k=candidate_k, max_scan=settings.vector_max_scan or None,
+            )
             if settings.retrieval_vec_min > 0:
                 vec_hits = [h for h in vec_hits if h.score >= settings.retrieval_vec_min]
             rankings.append(("vector", vec_hits))
+            if vec_warn:
+                degraded = True
+                warnings.extend(vec_warn)
         except Exception:  # noqa: BLE001
             from app.core.logging import get_logger
 

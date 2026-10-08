@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Card, Descriptions, Drawer, Dropdown, Empty, Form, Input, List, message, Modal, Popconfirm, Progress,
-  Segmented, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, Upload,
+  Alert, Button, Card, Descriptions, Divider, Drawer, Dropdown, Empty, Form, Input, List, message, Modal, Popconfirm, Progress,
+  Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Tooltip, Typography, Upload,
 } from 'antd'
 import {
   UploadOutlined, ReloadOutlined, DeleteOutlined, ArrowLeftOutlined,
   AppstoreOutlined, UserAddOutlined, FolderAddOutlined, LockOutlined, EditOutlined, ScissorOutlined,
   EyeOutlined, TagOutlined, PieChartOutlined, ApiOutlined, DownloadOutlined, FileTextOutlined, PaperClipOutlined,
-  SafetyCertificateOutlined,
+  SafetyCertificateOutlined, ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined,
+  SyncOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import ReactECharts from 'echarts-for-react'
-import { docApi, kbApi, rbacApi, type Doc, type KB, type KBStats, type KBMember, type ConnectorInfo } from '../../api'
+import { docApi, kbApi, providerApi, rbacApi, type Doc, type KB, type KBStats, type KBMember, type ConnectorInfo } from '../../api'
 import { errMsg } from '../../api/http'
 import DocErrorDrawer from '../../components/DocErrorDrawer'
 
@@ -134,8 +135,47 @@ export default function KBDetailPage() {
   const [connTestLoading, setConnTestLoading] = useState(false)
   const [connTestResult, setConnTestResult] = useState<{ count: number; items: any[] } | null>(null)
   const [connQuery, setConnQuery] = useState('测试')
+  const [syncSt, setSyncSt] = useState<{ enabled: boolean; last_at: number | null; last_status: string | null; last_count: number | null; last_error: string | null; seed_queries: string[]; limit: number; synced_doc_count: number } | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncCfgOpen, setSyncCfgOpen] = useState(false)
+  const [syncCfgForm] = Form.useForm()
+  const [embModels, setEmbModels] = useState<{ id: number; display_name: string }[]>([])
+  const [verDoc, setVerDoc] = useState<Doc | null>(null)
+  const [verList, setVerList] = useState<{ id: number; version: number; title: string | null; char_count: number; chunk_count: number; reason: string; created_at: string | null; current: boolean }[]>([])
+  const [verLoading, setVerLoading] = useState(false)
   const nav = useNavigate()
   const timer = useRef<any>(null)
+
+  const openVersions = async (doc: Doc) => {
+    setVerDoc(doc); setVerList([]); setVerLoading(true)
+    try { setVerList(await docApi.listVersions(doc.id)) }
+    catch (e) { message.error(errMsg(e)) }
+    finally { setVerLoading(false) }
+  }
+
+  const rollbackVersion = async (v: number) => {
+    if (!verDoc) return
+    try {
+      await docApi.rollbackVersion(verDoc.id, v)
+      message.success(`已回滚到 v${v}`)
+      setVerDoc(null); loadDocs(); loadStats()
+    } catch (e) { message.error(errMsg(e)) }
+  }
+
+  const loadEmbModels = async () => {
+    try {
+      const cfgs = await providerApi.configs()
+      setEmbModels(cfgs.filter((c) => c.purpose === 'embedding').map((c) => ({ id: c.id, display_name: c.display_name })))
+    } catch { /* 无权或未配置 */ }
+  }
+
+  const setKbEmbedding = async (modelId: number | null) => {
+    try {
+      const r = await kbApi.update(kbId, { embedding_model_id: modelId })
+      setKb(r)
+      message.success(modelId ? '已切换向量模型，旧文档需「重新处理」才会用新模型重嵌入' : '已恢复默认向量模型')
+    } catch (e) { message.error(errMsg(e)) }
+  }
 
   const isExternal = (kb?.source_type || 'local') === 'external'
   const isEntry = (kb?.source_type || 'local') === 'entry'
@@ -145,6 +185,42 @@ export default function KBDetailPage() {
 
   const loadConnector = async () => {
     try { setConnector(await kbApi.getConnector(kbId)) } catch { /* 忽略 */ }
+  }
+
+  const loadSyncStatus = async () => {
+    try { setSyncSt(await kbApi.syncStatus(kbId)) } catch { /* 忽略 */ }
+  }
+
+  const doSync = async () => {
+    setSyncing(true)
+    try {
+      const r = await kbApi.sync(kbId, syncSt?.limit || 500)
+      message.success(`同步完成：拉取 ${r.fetched} 条，新增 ${r.created} 篇，跳过重复 ${r.skipped} 篇`)
+      loadSyncStatus()
+    } catch (e) { message.error(errMsg(e)) }
+    finally { setSyncing(false) }
+  }
+
+  const openSyncConfig = () => {
+    syncCfgForm.setFieldsValue({
+      enabled: syncSt?.enabled ?? false,
+      limit: syncSt?.limit ?? 500,
+      seed_queries: (syncSt?.seed_queries || []).join('\n'),
+    })
+    setSyncCfgOpen(true)
+  }
+
+  const saveSyncConfig = async () => {
+    const v = await syncCfgForm.validateFields().catch(() => null)
+    if (!v) return
+    try {
+      await kbApi.syncConfig(kbId, {
+        enabled: v.enabled,
+        limit: Number(v.limit) || 500,
+        seed_queries: (v.seed_queries || '').split('\n').map((s: string) => s.trim()).filter(Boolean),
+      })
+      message.success('已保存同步配置'); setSyncCfgOpen(false); loadSyncStatus()
+    } catch (e) { message.error(errMsg(e)) }
   }
 
   const testConnector = async () => {
@@ -211,9 +287,45 @@ export default function KBDetailPage() {
   }
 
   const addFolder = async () => {
-    const name = window.prompt('文件夹名称')
-    if (!name) return
-    try { await docApi.createFolder(kbId, name); message.success('已创建'); loadFolders() }
+    let name = ''
+    Modal.confirm({
+      title: '新建文件夹',
+      icon: null,
+      content: (
+        <Input autoFocus placeholder="文件夹名称" onChange={(e) => { name = e.target.value }} />
+      ),
+      onOk: async () => {
+        if (!name.trim()) { message.warning('请输入名称'); throw new Error('empty') }
+        await docApi.createFolder(kbId, name.trim())
+        message.success('已创建'); loadFolders()
+      },
+    })
+  }
+
+  const renameFolder = async (folderId: number, oldName: string) => {
+    let name = oldName
+    Modal.confirm({
+      title: '重命名文件夹',
+      icon: null,
+      content: (
+        <Input autoFocus defaultValue={oldName} onChange={(e) => { name = e.target.value }} />
+      ),
+      onOk: async () => {
+        if (!name.trim()) { message.warning('请输入名称'); throw new Error('empty') }
+        if (name.trim() === oldName) return
+        await docApi.updateFolder(folderId, { name: name.trim() })
+        message.success('已重命名'); loadFolders()
+      },
+    })
+  }
+
+  const moveFolderOrder = async (folderId: number, dir: -1 | 1) => {
+    const ids = folders.map((f) => f.id)
+    const i = ids.indexOf(folderId)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= ids.length) return
+    ;[ids[i], ids[j]] = [ids[j], ids[i]]
+    try { await docApi.reorderFolders(kbId, ids); loadFolders() }
     catch (e) { message.error(errMsg(e)) }
   }
 
@@ -352,10 +464,12 @@ export default function KBDetailPage() {
         setKb(found)
         if (found?.source_type === 'external') {
           await loadConnector()
+          loadSyncStatus()
         } else {
           await loadDocs()
           await loadFolders()
           loadStats()
+          loadEmbModels()
         }
         await loadMembers()
         const r = await rbacApi.users(1, 100)
@@ -441,7 +555,22 @@ export default function KBDetailPage() {
           ) : (
             <Descriptions column={5} size="small">
               <Descriptions.Item label="可见性">{kb.visibility}</Descriptions.Item>
-              <Descriptions.Item label="向量模型">{kb.embedding_model_id || '默认'}</Descriptions.Item>
+              <Descriptions.Item label="向量模型">
+                {canManage ? (
+                  <Select
+                    size="small" style={{ minWidth: 160 }} value={kb.embedding_model_id ?? 0}
+                    onChange={(v) => setKbEmbedding(v === 0 ? null : v)}
+                    options={[
+                      { value: 0, label: '租户默认' },
+                      ...embModels.map((m) => ({ value: m.id, label: m.display_name })),
+                    ]}
+                  />
+                ) : (
+                  kb.embedding_model_id
+                    ? (embModels.find((m) => m.id === kb.embedding_model_id)?.display_name || `#${kb.embedding_model_id}`)
+                    : '默认'
+                )}
+              </Descriptions.Item>
               <Descriptions.Item label="分块策略">{kb.chunk_strategy?.type || 'parent_child'}</Descriptions.Item>
               <Descriptions.Item label="文档数">{kb.doc_count}</Descriptions.Item>
               <Descriptions.Item label="分块数">{kb.chunk_count}</Descriptions.Item>
@@ -497,6 +626,34 @@ export default function KBDetailPage() {
                 )}
                 <Alert type="info" showIcon style={{ marginTop: 12 }}
                   message="该知识库在检索时实时调用外部系统，结果与本地库一起排序融合；修改连接配置请在「编辑知识库」中进行。" />
+
+                <Divider orientation="left" style={{ marginTop: 20 }}>导入同步</Divider>
+                <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+                  message="实时检索依赖远端可用与响应速度；「导入同步」把远端内容一次性拉取并落本地索引，之后检索走本地、更快更稳，且可与本地内容一起重排。重复同步按来源去重，不会产生重复文档。" />
+                {syncSt ? (
+                  <Descriptions column={3} size="small" style={{ marginBottom: 12 }}>
+                    <Descriptions.Item label="已同步文档">{syncSt.synced_doc_count}</Descriptions.Item>
+                    <Descriptions.Item label="上次同步">
+                      {syncSt.last_at ? new Date(syncSt.last_at).toLocaleString('zh-CN') : '从未'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="上次状态">
+                      {syncSt.last_status === 'success'
+                        ? <Tag color="green">成功（新增 {syncSt.last_count ?? 0}）</Tag>
+                        : syncSt.last_status === 'failed'
+                          ? <Tag color="red">失败</Tag>
+                          : <Tag>未同步</Tag>}
+                    </Descriptions.Item>
+                    {syncSt.last_error && (
+                      <Descriptions.Item label="错误" span={3}><Typography.Text type="danger" style={{ fontSize: 12 }}>{syncSt.last_error}</Typography.Text></Descriptions.Item>
+                    )}
+                  </Descriptions>
+                ) : null}
+                <Space wrap style={{ marginBottom: 8 }}>
+                  <Button type="primary" icon={<SyncOutlined />} loading={syncing} disabled={!canManage} onClick={doSync}>
+                    立即同步
+                  </Button>
+                  <Button icon={<SettingOutlined />} disabled={!canManage} onClick={openSyncConfig}>同步配置</Button>
+                </Space>
               </Card>
             ),
           }] : [{
@@ -516,9 +673,20 @@ export default function KBDetailPage() {
                           ]} />
                         <Button size="small" icon={<FolderAddOutlined />} onClick={addFolder} disabled={!canWrite}>新建文件夹</Button>
                         {typeof folderFilter === 'number' && canWrite && (
-                          <Popconfirm title="删除该文件夹？文档会移回未分类" onConfirm={() => removeFolder(folderFilter as number)}>
-                            <Button size="small" danger icon={<DeleteOutlined />}>删除文件夹</Button>
-                          </Popconfirm>
+                          <>
+                            <Button size="small" icon={<EditOutlined />}
+                              onClick={() => {
+                                const f = folders.find((x) => x.id === folderFilter)
+                                if (f) renameFolder(f.id, f.name)
+                              }}>重命名</Button>
+                            <Button size="small" icon={<ArrowUpOutlined />} title="上移"
+                              onClick={() => moveFolderOrder(folderFilter as number, -1)} />
+                            <Button size="small" icon={<ArrowDownOutlined />} title="下移"
+                              onClick={() => moveFolderOrder(folderFilter as number, 1)} />
+                            <Popconfirm title="删除该文件夹？文档会移回未分类" onConfirm={() => removeFolder(folderFilter as number)}>
+                              <Button size="small" danger icon={<DeleteOutlined />}>删除文件夹</Button>
+                            </Popconfirm>
+                          </>
                         )}
                       </>
                     )}
@@ -654,6 +822,7 @@ export default function KBDetailPage() {
                             <>
                               <Tooltip title="在线预览"><Button size="small" icon={<EyeOutlined />} onClick={() => openPreview(r)} /></Tooltip>
                               <Tooltip title="分块管理"><Button size="small" icon={<AppstoreOutlined />} onClick={() => openChunks(r)} /></Tooltip>
+                              <Tooltip title="版本历史"><Button size="small" icon={<HistoryOutlined />} onClick={() => openVersions(r)} /></Tooltip>
                               {canWrite && (
                                 <>
                                   <Tooltip title="文档权限"><Button size="small" icon={<LockOutlined />} onClick={() => openAcl(r)} /></Tooltip>
@@ -814,6 +983,50 @@ export default function KBDetailPage() {
       <Drawer title={preview ? `预览：${preview.title}` : '文档预览'} width="72%" open={!!preview} onClose={() => setPreview(null)} destroyOnClose>
         {preview && <DocPreviewBody doc={preview} />}
       </Drawer>
+
+      {/* 版本历史 */}
+      <Drawer title={verDoc ? `版本历史：${verDoc.title}` : '版本历史'} width="62%" open={!!verDoc} onClose={() => setVerDoc(null)} destroyOnClose>        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+          message="文档每次「重新处理 / 覆盖上传」都会归档上一版。回滚会把分块与正文还原到所选版本（回滚前会先归档当前版本，操作可逆）。" />
+        <Table
+          rowKey="id" dataSource={verList} loading={verLoading} pagination={false} size="small"
+          locale={{ emptyText: <Empty description="暂无历史版本（首次入库不产生版本记录）" /> }}
+          columns={[
+            { title: '版本', dataIndex: 'version', width: 90,
+              render: (v: number, r) => <Space><Tag color={r.current ? 'green' : 'default'}>v{v}</Tag>{r.current && <Tag color="blue">当前</Tag>}</Space> },
+            { title: '分块数', dataIndex: 'chunk_count', width: 80 },
+            { title: '字符数', dataIndex: 'char_count', width: 90 },
+            { title: '归档原因', dataIndex: 'reason', width: 100,
+              render: (v: string) => <Tag>{v === 'reprocess' ? '重新处理' : v === 'reupload' ? '覆盖上传' : '手动'}</Tag> },
+            { title: '归档时间', dataIndex: 'created_at', width: 180,
+              render: (v: string | null) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
+            { title: '操作', width: 120,
+              render: (_: any, r) => r.current ? <Typography.Text type="secondary">—</Typography.Text> : (
+                canWrite ? (
+                  <Popconfirm title={`回滚到 v${r.version}？当前版本会先被归档`} onConfirm={() => rollbackVersion(r.version)}>
+                    <Button size="small" icon={<HistoryOutlined />}>回滚</Button>
+                  </Popconfirm>
+                ) : <Typography.Text type="secondary">—</Typography.Text>
+              ) },
+          ]}
+        />
+      </Drawer>
+
+      {/* 导入同步配置 */}
+      <Modal title="导入同步配置" open={syncCfgOpen} onOk={saveSyncConfig} onCancel={() => setSyncCfgOpen(false)} destroyOnClose>
+        <Form form={syncCfgForm} layout="vertical">
+          <Form.Item name="enabled" label="启用定时同步" valuePropName="checked"
+            extra="开启后可由定时任务按计划触发；也可随时手动「立即同步」">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="limit" label="单次同步上限" extra="一次最多从远端拉取的条数">
+            <Input type="number" placeholder="500" />
+          </Form.Item>
+          <Form.Item name="seed_queries" label="种子查询（每行一条）"
+            extra="连接器无「批量列举」能力时，用这些查询词去远端检索并导入；具备批量列举能力的连接器会忽略此配置">
+            <Input.TextArea rows={4} placeholder={'例如：\n产品手册\n常见问题'} />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       {/* 分块查看 + 编辑 */}
       <Drawer title={`分块：${chunks?.doc.title || ''}（共 ${chunks?.total || 0}）`} width="70%"

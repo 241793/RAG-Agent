@@ -346,6 +346,107 @@ async def db_backup(
                         media_type="application/octet-stream")
 
 
+# ===== 服务端备份管理 =====
+BACKUP_DIR = DATA_DIR / "backups"
+# 自动备份保留份数
+BACKUP_KEEP = 10
+
+
+def _backup_dir() -> Path:
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    return BACKUP_DIR
+
+
+def _prune_backups() -> int:
+    """只保留最近 BACKUP_KEEP 份自动备份，返回清理数量。"""
+    files = sorted(_backup_dir().glob("*.db"), key=lambda f: f.stat().st_mtime, reverse=True)
+    removed = 0
+    for f in files[BACKUP_KEEP:]:
+        try:
+            f.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+@router.get("/db/backups")
+async def list_backups(
+    user: User = Depends(require_permission("system:manage")),
+) -> list[dict]:
+    """列出服务端已保存的备份（名称/大小/时间）。"""
+    d = _backup_dir()
+    out: list[dict] = []
+    for f in sorted(d.glob("*.db"), key=lambda x: x.stat().st_mtime, reverse=True):
+        st = f.stat()
+        out.append({
+            "name": f.name,
+            "size": st.st_size,
+            "created_at": int(st.st_mtime * 1000),
+        })
+    return out
+
+
+@router.post("/db/backups")
+@audited("system.db_backup_create", "system")
+async def create_backup(
+    user: User = Depends(require_permission("system:manage")),
+) -> dict:
+    """创建一份服务端备份（checkpoint 后复制），并执行保留策略。"""
+    url = settings.database_url
+    if _db_kind(url) != "sqlite":
+        raise ValidationError("当前不是 SQLite，无法创建库文件备份。")
+    p = _sqlite_path(url)
+    if not p or not p.exists():
+        raise NotFoundError("数据库文件不存在")
+    try:
+        eng = make_engine(url)
+        async with eng.connect() as conn:
+            await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+        await eng.dispose()
+    except Exception:  # noqa: BLE001
+        pass
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dst = _backup_dir() / f"auto_{ts}.db"
+    shutil.copy2(p, dst)
+    removed = _prune_backups()
+    return {"ok": True, "name": dst.name, "size": dst.stat().st_size,
+            "message": f"已创建备份 {dst.name}" + (f"，清理旧备份 {removed} 份" if removed else "")}
+
+
+@router.get("/db/backups/{name}/download")
+async def download_backup(
+    name: str,
+    user: User = Depends(require_permission("system:manage")),
+):
+    """下载指定的服务端备份。"""
+    # 防路径穿越：只允许备份目录内的文件名
+    if "/" in name or "\\" in name or ".." in name:
+        raise ValidationError("非法文件名")
+    f = _backup_dir() / name
+    if not f.exists() or not f.is_file():
+        raise NotFoundError("备份不存在")
+    return FileResponse(str(f), filename=name, media_type="application/octet-stream")
+
+
+@router.delete("/db/backups/{name}")
+@audited("system.db_backup_delete", "system")
+async def delete_backup(
+    name: str,
+    user: User = Depends(require_permission("system:manage")),
+) -> dict:
+    if "/" in name or "\\" in name or ".." in name:
+        raise ValidationError("非法文件名")
+    f = _backup_dir() / name
+    if not f.exists():
+        raise NotFoundError("备份不存在")
+    try:
+        f.unlink()
+    except OSError as e:
+        raise ValidationError(f"删除失败：{e}") from e
+    return {"ok": True, "message": "已删除"}
+
+
 @router.post("/db/restore")
 @audited("system.db_restore", "system")
 async def db_restore(

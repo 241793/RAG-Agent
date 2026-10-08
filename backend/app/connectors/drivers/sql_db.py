@@ -53,16 +53,20 @@ class SqlConnector:
         self.title_col = (self.cfg.get("title_col") or "").strip() or None
         self.url_col = (self.cfg.get("url_col") or "").strip() or None
 
-    def _run(self, query: str, top_k: int) -> list[ConnectorDoc]:
-        """同步执行查询（在线程中调用）。"""
+    def _run(self, query: str, top_k: int, *, sql_override: str | None = None) -> list[ConnectorDoc]:
+        """同步执行查询（在线程中调用）。sql_override 用于批量列举。"""
         from sqlalchemy import create_engine, text
 
-        sql = self.query_sql.replace("{top_k}", str(int(top_k)))
-        params: dict = {}
-        if ":query" in sql:
-            params["query"] = f"%{query}%"  # 供 LIKE :query 使用
+        if sql_override is not None:
+            sql = sql_override.replace("{top_k}", str(int(top_k)))
+            params: dict = {}
         else:
-            sql = sql.replace("{query}", query)
+            sql = self.query_sql.replace("{top_k}", str(int(top_k)))
+            params = {}
+            if ":query" in sql:
+                params["query"] = f"%{query}%"  # 供 LIKE :query 使用
+            else:
+                sql = sql.replace("{query}", query)
         engine = create_engine(self.dsn, pool_pre_ping=True)
         try:
             out: list[ConnectorDoc] = []
@@ -91,6 +95,20 @@ class SqlConnector:
 
         return await asyncio.wait_for(
             asyncio.to_thread(self._run, query, top_k), timeout=self.timeout + 5
+        )
+
+    async def list_documents(self, *, limit: int = 500) -> list[ConnectorDoc]:
+        """批量列举：用 list_sql（若配置），否则用 query_sql 把 {query} 换成 LIKE 通配 %。"""
+        import asyncio
+
+        sql = self.cfg.get("list_sql")
+        if sql:
+            _check_readonly(sql)
+            override = sql
+        else:
+            override = self.query_sql.replace("{query}", "%")
+        return await asyncio.wait_for(
+            asyncio.to_thread(self._run, "%", limit, sql_override=override), timeout=self.timeout + 15
         )
 
     async def health(self) -> ProviderHealth:

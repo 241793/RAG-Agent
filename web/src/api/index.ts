@@ -214,6 +214,15 @@ export const kbApi = {
   getConnector: (id: number) => http.get<ConnectorInfo>(`/kbs/${id}/connector`).then((r) => r.data),
   testConnector: (id: number, query = '测试', top_k = 3) =>
     http.post<{ ok: boolean; count: number; items: any[] }>(`/kbs/${id}/connector/test`, { query, top_k }).then((r) => r.data),
+  syncStatus: (id: number) =>
+    http.get<{ enabled: boolean; last_at: number | null; last_status: string | null; last_count: number | null;
+               last_error: string | null; seed_queries: string[]; limit: number; synced_doc_count: number }>(
+      `/kbs/${id}/sync/status`).then((r) => r.data),
+  sync: (id: number, limit = 500) =>
+    http.post<{ kb_id: number; fetched: number; created: number; skipped: number; document_ids: number[] }>(
+      `/kbs/${id}/sync`, { limit }).then((r) => r.data),
+  syncConfig: (id: number, data: { enabled?: boolean; seed_queries?: string[]; limit?: number }) =>
+    http.put(`/kbs/${id}/sync/config`, data).then((r) => r.data),
   audit: (id: number, staleDays = 180) =>
     http.get<{ total: number; counts: Record<string, number>; empty: any[]; failed: any[];
                no_chunk: any[]; untagged: any[]; stale: any[] }>(
@@ -277,10 +286,22 @@ export const docApi = {
     http.post(`/documents/${id}/acl`, data).then((r) => r.data),
   removeAcl: (id: number, aclId: number) =>
     http.delete(`/documents/${id}/acl/${aclId}`).then((r) => r.data),
+  listVersions: (docId: number) =>
+    http.get<{ id: number; version: number; title: string | null; char_count: number; chunk_count: number; reason: string; created_at: string | null; current: boolean }[]>(
+      `/documents/${docId}/versions`).then((r) => r.data),
+  getVersion: (docId: number, version: number) =>
+    http.get<{ id: number; version: number; title: string | null; content: string | null; char_count: number; chunk_count: number; chunk_snapshot: any[] | null; reason: string; created_at: string | null }>(
+      `/documents/${docId}/versions/${version}`).then((r) => r.data),
+  rollbackVersion: (docId: number, version: number) =>
+    http.post<Doc>(`/documents/${docId}/versions/${version}/rollback`).then((r) => r.data),
   listFolders: (kbId: number) =>
-    http.get<{ id: number; name: string; parent_id: number | null }[]>('/documents/folders/list', { params: { kb_id: kbId } }).then((r) => r.data),
-  createFolder: (kbId: number, name: string, parentId?: number) =>
-    http.post('/documents/folders', { name, parent_id: parentId }, { params: { kb_id: kbId } }).then((r) => r.data),
+    http.get<{ id: number; name: string; parent_id: number | null; sort?: number }[]>('/documents/folders/list', { params: { kb_id: kbId } }).then((r) => r.data),
+  createFolder: (kbId: number, name: string, parentId?: number, sort?: number) =>
+    http.post('/documents/folders', { name, parent_id: parentId, sort }, { params: { kb_id: kbId } }).then((r) => r.data),
+  updateFolder: (folderId: number, data: { name?: string; sort?: number; parent_id?: number | null }) =>
+    http.patch(`/documents/folders/${folderId}`, data).then((r) => r.data),
+  reorderFolders: (kbId: number, orderedIds: number[]) =>
+    http.put('/documents/folders/order', { ordered_ids: orderedIds }, { params: { kb_id: kbId } }).then((r) => r.data),
   removeFolder: (folderId: number) => http.delete(`/documents/folders/${folderId}`).then((r) => r.data),
   moveDoc: (docId: number, folderId: number | null) =>
     http.patch(`/documents/${docId}/folder`, { folder_id: folderId }).then((r) => r.data),
@@ -1290,6 +1311,13 @@ export const systemOpsApi = {
   migrate: () => http.post<{ ok: boolean; message: string }>('/system/db/migrate').then((r) => r.data),
   reset: () => http.post<{ ok: boolean; message: string }>('/system/db/reset').then((r) => r.data),
   backupUrl: () => '/api/v1/system/db/backup',
+  listBackups: () =>
+    http.get<{ name: string; size: number; created_at: number }[]>('/system/db/backups').then((r) => r.data),
+  createBackup: () =>
+    http.post<{ ok: boolean; name: string; size: number; message: string }>('/system/db/backups').then((r) => r.data),
+  backupDownloadUrl: (name: string) => `/api/v1/system/db/backups/${encodeURIComponent(name)}/download`,
+  deleteBackup: (name: string) =>
+    http.delete<{ ok: boolean; message: string }>(`/system/db/backups/${encodeURIComponent(name)}`).then((r) => r.data),
   restore: (file: File) => {
     const fd = new FormData()
     fd.append('file', file)

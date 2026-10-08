@@ -276,6 +276,84 @@ async def test_kb_connector(
     }
 
 
+# ===== 导入同步（模式 B：拉取远端内容落本地索引）=====
+@router.get("/{kb_id}/sync/status")
+async def kb_sync_status(
+    kb_id: int,
+    _guard: User = Depends(require_permission("kb:read")),
+    ps: PrincipalSet = Depends(get_principal_set),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from sqlalchemy import func as _func
+
+    from app.models import Document
+    from app.services.kb_sync_service import sync_status
+
+    kb = await db.get(KnowledgeBase, kb_id)
+    if not kb or kb.tenant_id != ps.tenant_id:
+        raise NotFoundError("知识库不存在")
+    await _ensure_access(db, ps, kb)
+    st = sync_status(kb)
+    st["synced_doc_count"] = (
+        await db.execute(
+            select(_func.count()).select_from(Document).where(
+                Document.kb_id == kb_id, Document.source_type == "external_sync"
+            )
+        )
+    ).scalar_one()
+    return st
+
+
+@router.post("/{kb_id}/sync")
+@audited("kb.sync", "kb", id_arg="kb_id")
+async def kb_sync(
+    kb_id: int,
+    body: dict | None = None,
+    user: User = Depends(require_permission("kb:update")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """从外部系统拉取内容并导入本地索引（幂等，重复同步不产生重复文档）。"""
+    kb = await db.get(KnowledgeBase, kb_id)
+    if not kb or kb.tenant_id != user.tenant_id:
+        raise NotFoundError("知识库不存在")
+    if not await _can_manage(db, user, kb):
+        raise PermissionDeniedError("无管理权限")
+    from app.services.kb_sync_service import sync_external_kb
+
+    limit = int((body or {}).get("limit") or 500)
+    return await sync_external_kb(db, kb_id, limit=limit)
+
+
+@router.put("/{kb_id}/sync/config")
+@audited("kb.sync_config", "kb", id_arg="kb_id")
+async def kb_sync_config(
+    kb_id: int,
+    body: dict,
+    user: User = Depends(require_permission("kb:update")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """配置导入同步：启用开关、种子查询（连接器无批量列举能力时的检索词）、单次上限。"""
+    from app.services.kb_sync_service import SYNC_ENABLED, SYNC_LIMIT, SYNC_SEED_QUERIES
+
+    kb = await db.get(KnowledgeBase, kb_id)
+    if not kb or kb.tenant_id != user.tenant_id:
+        raise NotFoundError("知识库不存在")
+    if not await _can_manage(db, user, kb):
+        raise PermissionDeniedError("无管理权限")
+    settings = dict(kb.settings or {})
+    if "enabled" in body:
+        settings[SYNC_ENABLED] = bool(body["enabled"])
+    if "seed_queries" in body:
+        settings[SYNC_SEED_QUERIES] = body["seed_queries"] or []
+    if "limit" in body:
+        settings[SYNC_LIMIT] = int(body["limit"] or 500)
+    kb.settings = settings
+    await db.flush()
+    from app.services.kb_sync_service import sync_status
+
+    return sync_status(kb)
+
+
 @router.delete("/{kb_id}")
 @audited("kb.delete", "kb", id_arg="kb_id")
 async def delete_kb(

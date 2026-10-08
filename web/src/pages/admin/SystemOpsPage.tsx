@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import {
   Alert, Button, Card, Col, Descriptions, Form, Input, message, Modal, Popconfirm, Row, Select,
-  Space, Statistic, Steps, Tag, Typography, Upload,
+  Space, Statistic, Steps, Table, Tag, Typography, Upload,
 } from 'antd'
 import {
   ReloadOutlined, DatabaseOutlined, CloudDownloadOutlined, UploadOutlined, SafetyOutlined,
-  ToolOutlined, CheckCircleOutlined, CloseCircleOutlined,
+  ToolOutlined, CheckCircleOutlined, CloseCircleOutlined, SaveOutlined, DownloadOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import { systemOpsApi, type SystemInfo } from '../../api'
 import { errMsg } from '../../api/http'
@@ -41,6 +41,12 @@ export default function SystemOpsPage() {
   const [dbUrl, setDbUrl] = useState(DB_PRESETS[0].url)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [pwForm] = Form.useForm()
+  const [backups, setBackups] = useState<{ name: string; size: number; created_at: number }[]>([])
+  const [backupBusy, setBackupBusy] = useState(false)
+
+  const loadBackups = async () => {
+    try { setBackups(await systemOpsApi.listBackups()) } catch { /* 非 SQLite 时忽略 */ }
+  }
 
   const load = async () => {
     setLoading(true)
@@ -50,7 +56,7 @@ export default function SystemOpsPage() {
     } catch (e) { message.error(errMsg(e)) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
-
+  useEffect(() => { loadBackups() }, [])
   // ---- 切库向导 ----
   const pickKind = (k: string) => {
     setDbKind(k); setStep(0); setTestResult(null)
@@ -118,6 +124,29 @@ export default function SystemOpsPage() {
       },
     })
     return false
+  }
+
+  const createBackup = async () => {
+    setBackupBusy(true)
+    try {
+      const r = await systemOpsApi.createBackup()
+      message.success(r.message); loadBackups()
+    } catch (e) { message.error(errMsg(e)) } finally { setBackupBusy(false) }
+  }
+
+  const downloadBackup = (name: string) => {
+    const token = localStorage.getItem('access_token')
+    fetch(systemOpsApi.backupDownloadUrl(name), { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then((r) => { if (!r.ok) throw new Error('下载失败'); return r.blob() })
+      .then((b) => {
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(b); a.download = name; a.click(); URL.revokeObjectURL(a.href)
+      }).catch((e) => message.error(errMsg(e)))
+  }
+
+  const deleteBackup = async (name: string) => {
+    try { await systemOpsApi.deleteBackup(name); message.success('已删除'); loadBackups() }
+    catch (e) { message.error(errMsg(e)) }
   }
 
   const driverOk = (k: string) => drivers[{ postgres: 'postgres', mysql: 'mysql', sqlite: 'sqlite' }[k] || k]?.ok
@@ -203,7 +232,10 @@ export default function SystemOpsPage() {
       {/* 备份与还原 */}
       <Card bordered={false} title={<Space><CloudDownloadOutlined />备份与还原</Space>} style={{ marginBottom: 16 }}>
         <Space wrap>
-          <Button icon={<CloudDownloadOutlined />} onClick={doBackup}>下载数据库备份</Button>
+          <Can perm="system:manage">
+            <Button type="primary" icon={<SaveOutlined />} loading={backupBusy} onClick={createBackup}>创建服务端备份</Button>
+          </Can>
+          <Button icon={<CloudDownloadOutlined />} onClick={doBackup}>下载当前数据库</Button>
           <Upload beforeUpload={doRestore} showUploadList={false} accept=".db">
             <Button icon={<UploadOutlined />}>上传还原（.db）</Button>
           </Upload>
@@ -219,6 +251,27 @@ export default function SystemOpsPage() {
         <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
           备份仅对 SQLite 有效（下载 .db 文件）。上传还原会先自动备份旧库。PostgreSQL/MySQL 请用数据库自带工具导出。
         </Typography.Paragraph>
+
+        <Table
+          rowKey="name" dataSource={backups} size="small" pagination={false}
+          locale={{ emptyText: '暂无服务端备份。点「创建服务端备份」保存一份到 data/backups（自动保留最近 10 份）。' }}
+          columns={[
+            { title: '备份文件', dataIndex: 'name', ellipsis: true },
+            { title: '大小', dataIndex: 'size', width: 100, render: (v: number) => fmtBytes(v) },
+            { title: '创建时间', dataIndex: 'created_at', width: 180,
+              render: (v: number) => new Date(v).toLocaleString('zh-CN') },
+            { title: '操作', width: 140, render: (_: any, r) => (
+              <Space>
+                <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadBackup(r.name)}>下载</Button>
+                <Can perm="system:manage">
+                  <Popconfirm title="删除该备份？" onConfirm={() => deleteBackup(r.name)}>
+                    <Button size="small" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                </Can>
+              </Space>
+            ) },
+          ]}
+        />
       </Card>
 
       {/* 初始化与维护 */}

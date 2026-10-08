@@ -34,6 +34,7 @@ from app.models.knowledge_base import (
     Document,
     DocumentACL,
     DocumentFolder,
+    DocumentVersion,
     KBMember,
     KnowledgeBase,
 )
@@ -71,6 +72,7 @@ __all__ = [
     "Document",
     "DocumentACL",
     "DocumentFolder",
+    "DocumentVersion",
     "Chunk",
     "VIS_KB_DEFAULT",
     "VIS_KB_PUBLIC",

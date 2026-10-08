@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.core.errors import NotFoundError, PermissionDeniedError
+from app.core.errors import NotFoundError, PermissionDeniedError, ValidationError
 from app.core.logging import get_logger
 from app.ingest.storage import get_storage
 from app.middleware.auth_dep import load_principal_set, require_permission
@@ -242,7 +242,10 @@ async def _reembed_chunk(db: AsyncSession, chunk) -> None:
     if chunk.chunk_type == "parent":
         return
     try:
-        emb_driver, rm = await get_embedding(db, tenant_id=chunk.tenant_id)
+        # 用该块所属 KB 指定的向量模型（若有），与入库/检索保持一致
+        kb = await db.get(KnowledgeBase, chunk.kb_id)
+        kb_model_id = getattr(kb, "embedding_model_id", None) if kb else None
+        emb_driver, rm = await get_embedding(db, tenant_id=chunk.tenant_id, config_id=kb_model_id)
         vecs = await emb_driver.embed([chunk.content], model=rm.model_name)
         if vecs:
             from app.retrieval.vector_store.store import get_vector_store
@@ -690,6 +693,177 @@ async def reprocess_document(
     return doc
 
 
+# ==================== 文档版本历史 ====================
+@router.get("/{doc_id}/versions")
+async def list_document_versions(
+    doc_id: int,
+    user: User = Depends(require_permission("doc:read")),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """列出该文档的历史版本（不含正文与分块快照，仅元信息）。"""
+    from app.models import DocumentVersion
+
+    doc = await db.get(Document, doc_id)
+    if not doc or doc.tenant_id != user.tenant_id:
+        raise NotFoundError("文档不存在")
+    rows = (
+        await db.execute(
+            select(DocumentVersion)
+            .where(DocumentVersion.doc_id == doc_id)
+            .order_by(DocumentVersion.version.desc())
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": v.id,
+            "version": v.version,
+            "title": v.title,
+            "char_count": v.char_count,
+            "chunk_count": v.chunk_count,
+            "reason": v.reason,
+            "created_at": v.created_at.isoformat() if v.created_at else None,
+            "current": v.version == (doc.version or 1),
+        }
+        for v in rows
+    ]
+
+
+@router.get("/{doc_id}/versions/{version}")
+async def get_document_version(
+    doc_id: int,
+    version: int,
+    user: User = Depends(require_permission("doc:read")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """查看某版本的正文与分块快照。"""
+    from app.models import DocumentVersion
+
+    doc = await db.get(Document, doc_id)
+    if not doc or doc.tenant_id != user.tenant_id:
+        raise NotFoundError("文档不存在")
+    v = (
+        await db.execute(
+            select(DocumentVersion).where(
+                DocumentVersion.doc_id == doc_id, DocumentVersion.version == version
+            )
+        )
+    ).scalar_one_or_none()
+    if not v:
+        raise NotFoundError("版本不存在")
+    return {
+        "id": v.id, "version": v.version, "title": v.title, "content": v.content,
+        "char_count": v.char_count, "chunk_count": v.chunk_count,
+        "chunk_snapshot": v.chunk_snapshot, "reason": v.reason,
+        "created_at": v.created_at.isoformat() if v.created_at else None,
+    }
+
+
+@router.post("/{doc_id}/versions/{version}/rollback", response_model=DocumentOut)
+@audited("doc.version_rollback", "document", id_arg="doc_id")
+async def rollback_document_version(
+    doc_id: int,
+    version: int,
+    user: User = Depends(require_permission("doc:update")),
+    db: AsyncSession = Depends(get_db),
+) -> Document:
+    """回滚到指定版本：以该版本的分块快照重建分块，并重新生成向量。"""
+    from app.models import DocumentVersion
+
+    doc = await db.get(Document, doc_id)
+    if not doc or doc.tenant_id != user.tenant_id:
+        raise NotFoundError("文档不存在")
+    kb = await db.get(KnowledgeBase, doc.kb_id)
+    await _ensure_edit(db, user, kb)
+    v = (
+        await db.execute(
+            select(DocumentVersion).where(
+                DocumentVersion.doc_id == doc_id, DocumentVersion.version == version
+            )
+        )
+    ).scalar_one_or_none()
+    if not v or not v.chunk_snapshot:
+        raise NotFoundError("版本不存在或无可回滚快照")
+
+    # 先把当前版本归档，回滚本身也可逆
+    from app.tasks.ingest_tasks import _archive_version
+
+    if await _archive_version(db, doc, reason="manual"):
+        doc.version = (doc.version or 1) + 1
+
+    # 删除现有分块，按快照重建
+    from sqlalchemy import delete as _sql_delete
+
+    await db.execute(_sql_delete(Chunk).where(Chunk.doc_id == doc_id))
+    await db.flush()
+    snap = v.chunk_snapshot
+    new_chunks: list[Chunk] = []
+    for item in snap:
+        c = Chunk(
+            tenant_id=doc.tenant_id,
+            kb_id=doc.kb_id,
+            doc_id=doc_id,
+            ordinal=item.get("ordinal", 0),
+            chunk_type=item.get("chunk_type", "flat"),
+            content=item.get("content", ""),
+            parent_content=item.get("parent_content"),
+            token_count=item.get("token_count") or len(item.get("content", "")),
+            page=item.get("page"),
+            section=item.get("section"),
+            vis_scope=0,
+            enabled=True,
+        )
+        db.add(c)
+        new_chunks.append(c)
+    await db.flush()
+    # 恢复父指针（以 ordinal 映射）
+    ordinal_to_id = {c.ordinal: c.id for c in new_chunks}
+    for item, c in zip(snap, new_chunks):
+        pi = item.get("parent_ordinal")
+        if pi is not None and pi in ordinal_to_id:
+            c.parent_id = ordinal_to_id[pi]
+
+    # 正文与标题回填
+    if v.content:
+        doc.content = v.content
+    if v.title:
+        doc.title = v.title
+    doc.char_count = v.char_count or doc.char_count
+    doc.chunk_count = len(new_chunks)
+    doc.status = "ready"
+    doc.progress = 100
+    doc.error_msg = None
+    doc.error_detail = None
+    await db.flush()
+    await _refresh_kb_counts(db, doc.kb_id)
+    await db.commit()
+
+    # 重建向量（异步，失败不影响回滚结果）
+    embeddable = [c for c in new_chunks if c.chunk_type != "parent"]
+    if embeddable:
+        try:
+            from app.providers.registry import get_embedding
+
+            kb_model_id = getattr(kb, "embedding_model_id", None) if kb else None
+            emb_driver, rm = await get_embedding(db, tenant_id=doc.tenant_id, config_id=kb_model_id)
+            vecs = await emb_driver.embed([c.content for c in embeddable], model=rm.model_name)
+            from app.retrieval.vector_store.store import get_vector_store
+
+            await get_vector_store().add_embeddings(db, [(c.id, x) for c, x in zip(embeddable, vecs)])
+            await db.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("rollback_reembed_failed", document_id=doc_id, err=str(e)[:200])
+
+    # 使 BM25 缓存失效
+    try:
+        from app.retrieval import bm25_cache
+
+        bm25_cache.invalidate_tenant(doc.tenant_id)
+    except Exception:  # noqa: BLE001
+        pass
+    await db.refresh(doc)
+    return doc
+
+
 @router.delete("/{doc_id}")
 @audited("doc.delete", "document", id_arg="doc_id")
 async def delete_document(
@@ -904,6 +1078,13 @@ from app.models import DocumentFolder  # noqa: E402
 class FolderIn(_BM):
     name: str
     parent_id: int | None = None
+    sort: int | None = None
+
+
+class FolderPatchIn(_BM):
+    name: str | None = None
+    sort: int | None = None
+    parent_id: int | None = None
 
 
 @router.get("/folders/list")
@@ -931,10 +1112,68 @@ async def create_folder(
     kb = await db.get(KnowledgeBase, kb_id)
     if not kb or kb.tenant_id != user.tenant_id:
         raise NotFoundError("知识库不存在")
-    f = DocumentFolder(tenant_id=user.tenant_id, kb_id=kb_id, name=body.name, parent_id=body.parent_id)
+    f = DocumentFolder(
+        tenant_id=user.tenant_id, kb_id=kb_id, name=body.name,
+        parent_id=body.parent_id, sort=body.sort or 0,
+    )
     db.add(f)
     await db.flush()
-    return {"id": f.id, "name": f.name, "parent_id": f.parent_id}
+    return {"id": f.id, "name": f.name, "parent_id": f.parent_id, "sort": f.sort}
+
+
+@router.patch("/folders/{folder_id}")
+async def update_folder(
+    folder_id: int,
+    body: FolderPatchIn,
+    user: User = Depends(require_permission("doc:update")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """重命名 / 调整排序 / 移动文件夹。"""
+    f = await db.get(DocumentFolder, folder_id)
+    if not f or f.tenant_id != user.tenant_id:
+        raise NotFoundError("文件夹不存在")
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise ValidationError("文件夹名称不能为空")
+        f.name = name
+    if body.sort is not None:
+        f.sort = body.sort
+    if body.parent_id is not None:
+        if body.parent_id == folder_id:
+            raise ValidationError("不能把文件夹移动到自身")
+        # 防环：新父不能是自己的子孙
+        if body.parent_id:
+            cur = await db.get(DocumentFolder, body.parent_id)
+            seen = set()
+            while cur and cur.id not in seen:
+                if cur.id == folder_id:
+                    raise ValidationError("不能把文件夹移动到自己的子文件夹下")
+                seen.add(cur.id)
+                cur = await db.get(DocumentFolder, cur.parent_id) if cur.parent_id else None
+        f.parent_id = body.parent_id
+    await db.flush()
+    return {"id": f.id, "name": f.name, "parent_id": f.parent_id, "sort": f.sort}
+
+
+@router.put("/folders/order")
+async def reorder_folders(
+    kb_id: int,
+    body: dict,
+    user: User = Depends(require_permission("doc:update")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """批量调整同级文件夹顺序。body: {"ordered_ids": [id, ...]}"""
+    kb = await db.get(KnowledgeBase, kb_id)
+    if not kb or kb.tenant_id != user.tenant_id:
+        raise NotFoundError("知识库不存在")
+    ordered = body.get("ordered_ids") or []
+    for idx, fid in enumerate(ordered):
+        f = await db.get(DocumentFolder, fid)
+        if f and f.kb_id == kb_id and f.tenant_id == user.tenant_id:
+            f.sort = idx
+    await db.flush()
+    return {"message": "已排序", "count": len(ordered)}
 
 
 @router.delete("/folders/{folder_id}")

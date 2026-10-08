@@ -13,6 +13,61 @@ from app.tasks.queue import submit
 
 logger = get_logger("ingest")
 
+# 归档正文上限（字符）。避免历史版本无限膨胀；分块快照另存，回滚以快照为准。
+_ARCHIVE_CONTENT_LIMIT = 200_000
+
+
+async def _archive_version(db, doc: Document, reason: str = "reprocess") -> bool:
+    """归档文档当前版本（正文 + 分块快照），供版本历史查看与回滚。
+
+    仅在文档已有分块（即非首次入库）时归档；首次入库无旧版本，返回 False。
+    """
+    from sqlalchemy import select as _select
+
+    from app.models import DocumentVersion
+
+    old = (
+        await db.execute(
+            _select(Chunk).where(Chunk.doc_id == doc.id).order_by(Chunk.ordinal)
+        )
+    ).scalars().all()
+    if not old:
+        return False
+    # ordinal → ordinal 的父指针还原（回滚时重建父子关系用）
+    id_to_ordinal = {c.id: c.ordinal for c in old}
+    snapshot = [
+        {
+            "ordinal": c.ordinal,
+            "chunk_type": c.chunk_type,
+            "content": c.content,
+            "parent_content": c.parent_content,
+            "parent_ordinal": id_to_ordinal.get(c.parent_id) if c.parent_id else None,
+            "page": c.page,
+            "section": c.section,
+            "token_count": c.token_count,
+        }
+        for c in old
+    ]
+    # 正文：优先用 doc.content（图文条目），否则由分块拼回
+    body = (doc.content or "").strip()
+    if not body:
+        body = "\n".join(c.content for c in old if c.chunk_type != "parent")
+    ver = DocumentVersion(
+        tenant_id=doc.tenant_id,
+        doc_id=doc.id,
+        version=doc.version or 1,
+        title=doc.title,
+        content=body[:_ARCHIVE_CONTENT_LIMIT] if body else None,
+        char_count=len(body),
+        chunk_count=len(old),
+        chunk_snapshot=snapshot,
+        reason=reason,
+    )
+    db.add(ver)
+    await db.flush()
+    logger.info("document_version_archived", document_id=doc.id, version=ver.version, reason=reason)
+    return True
+
 
 async def process_document(document_id: int) -> None:
     """完整处理一个文档。独立 session、幂等（按 status 判断）。"""
@@ -24,6 +79,10 @@ async def process_document(document_id: int) -> None:
         tenant_id = doc.tenant_id
         stage = "parsing"
         try:
+            # 归档旧版本（重灌/重新处理时保留上一版，供回滚）；仅当已有旧分块才自增版本
+            if await _archive_version(db, doc, reason="reprocess"):
+                doc.version = (doc.version or 1) + 1
+
             # 1. parse
             doc.status = "parsing"
             doc.progress = 10
@@ -34,6 +93,16 @@ async def process_document(document_id: int) -> None:
                 text = (doc.content or "").strip()
                 if not text:
                     raise RuntimeError("条目内容为空")
+                pages: list = []
+                doc.char_count = len(text)
+                doc.page_count = 1
+                doc.progress = 35
+                await db.commit()
+            elif doc.source_type == "external_sync":
+                # 外部导入同步：正文来自远端片段，已存在 doc.content，无需文件解析
+                text = (doc.content or "").strip()
+                if not text:
+                    raise RuntimeError("同步文档内容为空")
                 pages: list = []
                 doc.char_count = len(text)
                 doc.page_count = 1
@@ -114,7 +183,10 @@ async def process_document(document_id: int) -> None:
             if embeddable and not is_entry_kb:
                 from app.core.config import settings
 
-                emb_driver, rm = await get_embedding(db, tenant_id=tenant_id)
+                # KB 级向量模型：该库若指定了 embedding_model_id，用它而非租户默认，
+                # 保证与检索时的 query 向量同源（否则跨模型算 cosine 无意义）。
+                kb_model_id = getattr(kb, "embedding_model_id", None) if kb else None
+                emb_driver, rm = await get_embedding(db, tenant_id=tenant_id, config_id=kb_model_id)
                 texts = [c.content for c in embeddable]
                 degraded_note = None
                 try:

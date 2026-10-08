@@ -156,3 +156,26 @@ class FeishuSheetConnector:
                                   latency_ms=int((time.time() - t0) * 1000))
         except Exception as e:  # noqa: BLE001
             return ProviderHealth(ok=False, message=str(e)[:300], latency_ms=int((time.time() - t0) * 1000))
+
+    async def list_documents(self, *, limit: int = 500) -> list[ConnectorDoc]:
+        """批量列举：把整张表每行作为一条知识（导入同步模式用）。"""
+        assert_safe_url(OPEN_API)
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=False) as client:
+            rows = await self._fetch_rows(client)
+        out: list[ConnectorDoc] = []
+        for i, row in enumerate(rows):
+            cols = self.search_cols or list(row.keys())
+            parts = [f"{c}: {row.get(c)}" for c in cols if row.get(c)]
+            content = "\n".join(parts)
+            if not content:
+                continue
+            out.append(ConnectorDoc(
+                content=content,
+                title=str(row.get(self.title_col)) if self.title_col and row.get(self.title_col) else None,
+                score=0.0,
+                source_uri=str(row.get(self.url_col)) if self.url_col and row.get(self.url_col) else None,
+                ref=f"kb{self.kb_id}:feishu:{i}",
+            ))
+            if len(out) >= limit:
+                break
+        return out

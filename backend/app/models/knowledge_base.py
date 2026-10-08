@@ -118,6 +118,25 @@ class DocumentACL(Base, IdMixin, TimestampMixin):
     effect: Mapped[str] = mapped_column(String(8), default="allow")  # allow/deny
 
 
+class DocumentVersion(Base, IdMixin, TimestampMixin, TenantMixin):
+    """文档版本快照：重新处理/覆盖上传前归档上一版正文与分块，支持查看与回滚。"""
+
+    __tablename__ = "document_version"
+
+    doc_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1)  # 被归档的版本号
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # 归档时的解析正文（截断保存，避免体积失控）
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    char_count: Mapped[int] = mapped_column(Integer, default=0)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 分块快照：[{ordinal, chunk_type, content, page, section}]，用于回滚重建
+    chunk_snapshot: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # 归档原因：reprocess=重新处理 / reupload=覆盖上传 / manual=手动
+    reason: Mapped[str] = mapped_column(String(16), default="reprocess")
+    created_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
 class Chunk(Base, IdMixin, TimestampMixin, TenantMixin):
     __tablename__ = "chunk"
 

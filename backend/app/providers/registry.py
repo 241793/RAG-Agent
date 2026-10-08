@@ -131,6 +131,9 @@ async def get_embedding(
     db: AsyncSession, *, tenant_id: int, config_id: int | None = None
 ) -> tuple[Any, ResolvedModel]:
     models = await resolve_models(db, tenant_id=tenant_id, purpose="embedding", config_id=config_id)
+    if not models and config_id:
+        # KB 指定的向量模型已停用/删除：静默回退到租户默认，避免该库整体检索失败
+        models = await resolve_models(db, tenant_id=tenant_id, purpose="embedding")
     if not models:
         raise ValidationError("未配置向量模型，请先在模型管理中配置 embedding 模型")
     rm = models[0]

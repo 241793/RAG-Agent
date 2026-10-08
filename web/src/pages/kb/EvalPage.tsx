@@ -30,6 +30,7 @@ export default function EvalPage() {
   const [dsModal, setDsModal] = useState(false)
   const [editDs, setEditDs] = useState<EvalDataset | null>(null)
   const [qModal, setQModal] = useState(false)
+  const [qEdit, setQEdit] = useState<EvalQuestion | null>(null)
   const [qDrawer, setQDrawer] = useState(false)
   const [dsForm] = Form.useForm()
   const [qForm] = Form.useForm()
@@ -71,6 +72,7 @@ export default function EvalPage() {
   }
 
   const openQ = (q?: EvalQuestion) => {
+    setQEdit(q || null)
     if (q) qForm.setFieldsValue({ question: q.question, expected_answer: q.expected_answer, expected_doc_ids: (q.expected_doc_ids || []).join(',') })
     else qForm.resetFields()
     setQModal(true)
@@ -82,8 +84,11 @@ export default function EvalPage() {
     if (v.expected_doc_ids) {
       payload.expected_doc_ids = String(v.expected_doc_ids).split(',').map((s: string) => parseInt(s.trim(), 10)).filter((n: number) => !isNaN(n))
     }
-    try { await evalApi.addQuestion(dsId, payload); message.success('已添加'); setQModal(false); loadQuestions() }
-    catch (e) { message.error(errMsg(e)) }
+    try {
+      if (qEdit) await evalApi.updateQuestion(qEdit.id, payload)
+      else await evalApi.addQuestion(dsId, payload)
+      message.success(qEdit ? '已保存' : '已添加'); setQModal(false); loadQuestions()
+    } catch (e) { message.error(errMsg(e)) }
   }
   const removeQ = async (id: number) => {
     try { await evalApi.removeQuestion(id); loadQuestions() } catch (e) { message.error(errMsg(e)) }
@@ -176,8 +181,11 @@ export default function EvalPage() {
                   render: (v) => v || <Typography.Text type="secondary">—</Typography.Text> },
                 { title: '期望文档', dataIndex: 'expected_doc_ids', width: 110,
                   render: (v) => (v && v.length) ? v.join(',') : '—' },
-                { title: '操作', width: 70, render: (_: any, r: EvalQuestion) => (
-                  <Can perm="eval:manage"><a onClick={() => removeQ(r.id)}>删</a></Can>
+                { title: '操作', width: 100, render: (_: any, r: EvalQuestion) => (
+                  <Can perm="eval:manage"><Space size="small">
+                    <a onClick={() => openQ(r)}>编辑</a>
+                    <a onClick={() => removeQ(r.id)}>删</a>
+                  </Space></Can>
                 ) },
               ]} />
           </Card>
@@ -239,7 +247,7 @@ export default function EvalPage() {
         </Form>
       </Modal>
 
-      <Modal title="添加测试问题" open={qModal} onOk={saveQ}
+      <Modal title={qEdit ? '编辑测试问题' : '添加测试问题'} open={qModal} onOk={saveQ}
         onCancel={() => setQModal(false)} destroyOnClose width={620}>
         <Form form={qForm} layout="vertical">
           <Form.Item name="question" label="问题" rules={[{ required: true }]}><Input.TextArea rows={2} /></Form.Item>
