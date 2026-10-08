@@ -82,6 +82,7 @@ export default function MainLayout() {
       label: '系统设置',
       children: [
         { key: '/admin/settings', icon: <SettingOutlined />, label: '系统设置', perm: 'system:manage' },
+        { key: '/admin/system-ops', icon: <DatabaseOutlined />, label: '数据库与运维', perm: 'system:manage' },
         { key: '/admin/notify-channels', icon: <BellOutlined />, label: '通知渠道', perm: 'notify:read' },
         { key: '/admin/event-subscriptions', icon: <BellOutlined />, label: '事件订阅', perm: 'notify:read' },
         { key: '/admin/email-sources', icon: <MailOutlined />, label: '邮件入库', perm: 'kb:read' },

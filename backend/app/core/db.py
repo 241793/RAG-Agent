@@ -65,21 +65,21 @@ class VectorType(TypeDecorator):
 
 
 # ---- engine / session ----
-_engine_kwargs: dict[str, Any] = {"echo": False, "future": True}
-if settings.is_sqlite:
-    # timeout: 遇到锁时等待（秒），而非立即失败；SQLite 单写者，需容忍短暂争锁
-    _engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 15}
-else:
-    _engine_kwargs.update(pool_pre_ping=True, pool_size=10, max_overflow=20)
+def _engine_kwargs_for(url: str) -> dict[str, Any]:
+    kw: dict[str, Any] = {"echo": False, "future": True}
+    if url.startswith("sqlite"):
+        # timeout: 遇到锁时等待（秒），而非立即失败；SQLite 单写者，需容忍短暂争锁
+        kw["connect_args"] = {"check_same_thread": False, "timeout": 15}
+    else:
+        kw.update(pool_pre_ping=True, pool_size=10, max_overflow=20)
+    return kw
 
-async_engine = create_async_engine(settings.database_url, **_engine_kwargs)
-AsyncSessionLocal = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
-
-@event.listens_for(async_engine.sync_engine, "connect")
-def _sqlite_pragmas(dbapi_conn, _):
-    """SQLite 开启 WAL，降低读写锁冲突。"""
-    if settings.is_sqlite:
+def _attach_sqlite_pragmas(engine, is_sqlite: bool) -> None:
+    @event.listens_for(engine.sync_engine, "connect")
+    def _pragmas(dbapi_conn, _):  # noqa: ANN001
+        if not is_sqlite:
+            return
         cur = dbapi_conn.cursor()
         try:
             cur.execute("PRAGMA journal_mode=WAL")
@@ -87,6 +87,32 @@ def _sqlite_pragmas(dbapi_conn, _):
             cur.execute("PRAGMA synchronous=NORMAL")
         finally:
             cur.close()
+
+
+def make_engine(url: str):
+    """按 URL 创建 async engine（并挂 SQLite PRAGMA）。"""
+    eng = create_async_engine(url, **_engine_kwargs_for(url))
+    _attach_sqlite_pragmas(eng, url.startswith("sqlite"))
+    return eng
+
+
+async_engine = make_engine(settings.database_url)
+AsyncSessionLocal = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+
+
+async def reinit_engine(url: str) -> None:
+    """运行时重建全局 engine / sessionmaker（供切库兜底与启动期落地目标库）。
+
+    注意：并发请求持有旧 session 时会有风险，仅在启动早期或切换后调用。
+    """
+    global async_engine, AsyncSessionLocal
+    old = async_engine
+    async_engine = make_engine(url)
+    AsyncSessionLocal = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        await old.dispose()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def get_db() -> AsyncSession:
@@ -101,18 +127,27 @@ async def get_db() -> AsyncSession:
 
 
 async def init_models() -> None:
-    """开发用：直接建表 + 补列（生产用 alembic）。"""
+    """开发用：对主库建表 + 补列（生产用 alembic）。"""
+    await init_models_for(async_engine)
+
+
+async def init_models_for(engine) -> list[str]:
+    """对指定 engine 建表 + 补列（供切库向导对目标库初始化复用）。返回表名列表。"""
     # 确保所有模型被导入注册
     import app.models  # noqa: F401
 
-    async with async_engine.begin() as conn:
-        if settings.is_postgres:
+    async with engine.begin() as conn:
+        if conn.dialect.name == "postgresql":
             from sqlalchemy import text
 
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            try:
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            except Exception:  # noqa: BLE001
+                pass
         await conn.run_sync(Base.metadata.create_all)
         # create_all 不会给已存在的表加列：检测缺失列并 ALTER TABLE 补上
         await conn.run_sync(_sync_missing_columns)
+    return [t.name for t in Base.metadata.sorted_tables]
 
 
 def _sync_missing_columns(sync_conn) -> None:

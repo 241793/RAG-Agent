@@ -22,6 +22,7 @@ import FilePage from './pages/admin/FilePage'
 import ToolPage from './pages/admin/ToolPage'
 import McpPage from './pages/admin/McpPage'
 import SettingsPage from './pages/admin/SettingsPage'
+import SystemOpsPage from './pages/admin/SystemOpsPage'
 import NotifyChannelPage from './pages/admin/NotifyChannelPage'
 import EventSubscriptionPage from './pages/admin/EventSubscriptionPage'
 import AgentListPage from './pages/agents/AgentListPage'
@@ -76,6 +77,7 @@ export default function App() {
         <Route path="admin/tools" element={<RequirePermission perm={ROUTE_PERMS['/admin/tools']}><ToolPage /></RequirePermission>} />
         <Route path="admin/mcp" element={<RequirePermission perm={ROUTE_PERMS['/admin/mcp']}><McpPage /></RequirePermission>} />
         <Route path="admin/settings" element={<RequirePermission perm={ROUTE_PERMS['/admin/settings']}><SettingsPage /></RequirePermission>} />
+        <Route path="admin/system-ops" element={<RequirePermission perm={ROUTE_PERMS['/admin/system-ops']}><SystemOpsPage /></RequirePermission>} />
         <Route path="admin/notify-channels" element={<RequirePermission perm={ROUTE_PERMS['/admin/notify-channels']}><NotifyChannelPage /></RequirePermission>} />
         <Route path="admin/event-subscriptions" element={<RequirePermission perm={ROUTE_PERMS['/admin/event-subscriptions']}><EventSubscriptionPage /></RequirePermission>} />
         <Route path="admin/email-sources" element={<RequirePermission perm={ROUTE_PERMS['/admin/email-sources']}><EmailSourcePage /></RequirePermission>} />

@@ -26,8 +26,72 @@ logger = get_logger("main")
 WEB_DIST = RESOURCE_DIR / "web" / "dist"
 
 
+async def _apply_pending_db() -> None:
+    """启动期应用「数据库切换」标记（崩溃兜底）。
+
+    若 data/pending_db.txt 存在：用目标库重建 engine 并试建表 →
+    成功则把目标 URL 提升为生效配置；失败则回退到 previous_url 继续启动。
+    这样切库失败不会把服务锁死。
+    """
+    import json
+
+    from sqlalchemy import select
+
+    import app.core.db as dbm
+    from app.core.config import DATA_DIR
+    from app.models import SystemSetting
+
+    f = DATA_DIR / "pending_db.txt"
+    if not f.exists():
+        return
+    try:
+        info = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        logger.warning("pending_db_unreadable")
+        f.unlink(missing_ok=True)
+        return
+
+    target = (info.get("target_url") or "").strip()
+    prev = (info.get("previous_url") or "").strip()
+    if not target:
+        f.unlink(missing_ok=True)
+        return
+
+    try:
+        await dbm.reinit_engine(target)
+        await dbm.init_models_for(dbm.async_engine)
+        # 成功：把目标 URL 提升为生效配置
+        try:
+            from app.core.db import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as db:
+                row = (await db.execute(
+                    select(SystemSetting).where(SystemSetting.key == "database_url")
+                )).scalar_one_or_none()
+                if row:
+                    row.value = target
+                else:
+                    db.add(SystemSetting(key="database_url", value=target))
+                await db.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception("pending_db_persist_failed")
+        logger.info("db_switched", target=target)
+    except Exception as e:  # noqa: BLE001
+        logger.error("db_switch_failed_fallback", target=target, err=str(e)[:200])
+        if prev:
+            try:
+                await dbm.reinit_engine(prev)
+                await dbm.init_models_for(dbm.async_engine)
+                logger.warning("db_fallback_to_previous", previous=prev)
+            except Exception:  # noqa: BLE001
+                logger.exception("db_fallback_failed")
+    finally:
+        f.unlink(missing_ok=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await _apply_pending_db()
     await init_models()
     # 叠加 Web 端「系统设置」的覆盖值（热生效项立即生效；启动期项影响本进程）
     try:

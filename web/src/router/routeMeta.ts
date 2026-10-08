@@ -14,6 +14,7 @@ export const ROUTE_PERMS: Record<string, string> = {
   '/admin/tools': 'tool:read',
   '/admin/mcp': 'mcp:read',
   '/admin/settings': 'system:manage',
+  '/admin/system-ops': 'system:manage',
   '/admin/notify-channels': 'notify:read',
   '/admin/event-subscriptions': 'notify:read',
   '/admin/email-sources': 'kb:read',

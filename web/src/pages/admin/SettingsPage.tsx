@@ -155,7 +155,7 @@ export default function SettingsPage() {
     >
       <Alert type="info" showIcon style={{ marginBottom: 16 }}
         message="配置即改即用"
-        description="多数配置（检索/内容安全/连接器/MCP/定时任务/超时等）保存后立即生效；端口、数据库、日志文件、存储路径、CORS 等启动期配置需点「重启服务」后生效。" />
+        description="多数配置（检索/内容安全/连接器/MCP/定时任务/超时等）保存后立即生效；端口、数据库、日志文件、存储路径、CORS 等启动期配置需点「重启服务」后生效。切换数据库、备份还原、初始化等运维操作请用「数据库与运维」页。" />
       {!canManage && (
         <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="你没有管理权限，以下为只读展示。" />
       )}

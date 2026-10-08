@@ -1216,6 +1216,56 @@ export const settingsApi = {
   restart: () => http.post<{ message: string }>('/system/settings/restart').then((r) => r.data),
 }
 
+// ---- 数据库与运维 ----
+export interface SystemInfo {
+  db_kind: string
+  db_url_masked: string
+  db_file?: string | null
+  db_file_size: number
+  driver_required: string[]
+  driver_ok: boolean
+  vector_backend: string
+  task_backend: string
+  data_dir: string
+  data_dir_size: number
+  files_dir_size: number
+  uptime_seconds: number
+  table_count: number
+  python: string
+  platform: string
+  frozen: boolean
+}
+export interface DbTestResult {
+  ok: boolean
+  kind?: string
+  message: string
+  driver_missing?: string[]
+}
+export const systemOpsApi = {
+  info: () => http.get<SystemInfo>('/system/info').then((r) => r.data),
+  drivers: () => http.get<Record<string, { packages: string[]; ok: boolean }>>('/system/db/drivers').then((r) => r.data),
+  testDb: (database_url: string) => http.post<DbTestResult>('/system/db/test', { database_url }).then((r) => r.data),
+  installDriver: (target: string) =>
+    http.post<{ ok: boolean; message: string; log: string; packages?: string[] }>('/system/db/install-driver', { target }).then((r) => r.data),
+  initDb: (database_url: string) =>
+    http.post<{ ok: boolean; message: string; table_count?: number }>('/system/db/init', { database_url }).then((r) => r.data),
+  saveRestart: (database_url: string) =>
+    http.post<{ ok: boolean; message: string }>('/system/db/save-restart', { database_url }).then((r) => r.data),
+  migrate: () => http.post<{ ok: boolean; message: string }>('/system/db/migrate').then((r) => r.data),
+  reset: () => http.post<{ ok: boolean; message: string }>('/system/db/reset').then((r) => r.data),
+  backupUrl: () => '/api/v1/system/db/backup',
+  restore: (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post<{ ok: boolean; message: string }>('/system/db/restore', fd).then((r) => r.data)
+  },
+  seed: () => http.post<{ ok: boolean; message: string }>('/system/seed').then((r) => r.data),
+  resetAdminPassword: (username: string, new_password: string) =>
+    http.post<{ ok: boolean; message: string }>('/system/reset-admin-password', { username, new_password }).then((r) => r.data),
+  cleanup: (scope = 'all') =>
+    http.post<{ ok: boolean; message: string; removed: number; freed_bytes: number }>('/system/cleanup', { scope }).then((r) => r.data),
+}
+
 // ---- 通知渠道 ----
 export interface NotifyChannelItem {
   id: number

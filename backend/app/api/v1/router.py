@@ -29,6 +29,7 @@ from app.api.v1 import (
     skills,
     sso,
     system,
+    system_ops,
     tools,
     usage,
     webhooks,
@@ -67,3 +68,4 @@ api_router.include_router(notify_channels.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(channels.router)
 api_router.include_router(system.router)
+api_router.include_router(system_ops.router)
