@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, Col, Row, Statistic, List, Tag, Button, Space, Typography, message, Skeleton, Timeline, Badge } from 'antd'
+import { Card, Col, Row, Statistic, List, Tag, Button, Space, Typography, message, Skeleton, Timeline, Badge, Modal, Empty } from 'antd'
 import {
   DatabaseOutlined, FileTextOutlined, ThunderboltOutlined, ApiOutlined,
   MessageOutlined, RobotOutlined, ExperimentOutlined, ArrowRightOutlined, BellOutlined, ClockCircleOutlined,
@@ -23,7 +23,17 @@ export default function DashboardPage() {
   const [toolStats, setToolStats] = useState<any>(null)
   const [activities, setActivities] = useState<any[]>([])
   const [unread, setUnread] = useState(0)
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [notifications, setNotifications] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+
+  const openNotifications = async () => {
+    setNotifOpen(true)
+    try {
+      const r = await notificationApi.list(1, 20)
+      setNotifications(r.items)
+    } catch (e) { message.error(errMsg(e)) }
+  }
 
   useEffect(() => {
     (async () => {
@@ -216,10 +226,8 @@ export default function DashboardPage() {
                 <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
                   你有 <b style={{ color: '#2563eb' }}>{unread}</b> 条未读消息通知（任务完成、工作流结果等）。
                 </Typography.Paragraph>
-                <Button type="primary" onClick={() => { /* 铃铛在 Header，提示用户点击 */ }}>
-                  查看消息
-                </Button>
-                <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>（点击右上角铃铛）</Typography.Text>
+                <Button type="primary" onClick={openNotifications}>查看消息</Button>
+                <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>（也可点击右上角铃铛）</Typography.Text>
               </div>
             ) : <Typography.Text type="secondary">暂无未读消息</Typography.Text>}
           </Card>
@@ -248,6 +256,43 @@ export default function DashboardPage() {
           />
         ) : <Typography.Text type="secondary">还没有对话，去「智能问答」开始吧</Typography.Text>}
       </Card>
+
+      <Modal title="消息通知" open={notifOpen} onCancel={() => setNotifOpen(false)} footer={null} width={640}>
+        {notifications.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无消息" />
+        ) : (
+          <List
+            dataSource={notifications}
+            renderItem={(n: any) => (
+              <List.Item
+                style={{ cursor: n.link ? 'pointer' : 'default', opacity: n.read ? 0.6 : 1 }}
+                onClick={async () => {
+                  if (!n.read) {
+                    try { await notificationApi.markRead([n.id]); setNotifications((arr) => arr.map((x) => x.id === n.id ? { ...x, read: true } : x)); setUnread((u) => Math.max(0, u - 1)) } catch { /* ignore */ }
+                  }
+                  if (n.link) { setNotifOpen(false); nav(n.link) }
+                }}
+              >
+                <Space size={6} style={{ marginBottom: 2 }}>
+                  <Tag color={{ info: 'blue', success: 'green', warning: 'orange', error: 'red' }[n.level as string] || 'default'}>
+                    {({ system: '系统', task: '定时任务', workflow: '工作流', chat: '消息' } as Record<string, string>)[n.kind] || n.kind}
+                  </Tag>
+                  <Typography.Text strong style={{ fontSize: 13 }}>{n.title}</Typography.Text>
+                  {!n.read && <Badge status="processing" />}
+                </Space>
+                {n.body && (
+                  <Typography.Paragraph style={{ fontSize: 12, color: '#8c8c8c', margin: '2px 0 0' }}>
+                    {n.body}
+                  </Typography.Paragraph>
+                )}
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  {n.created_at ? dayjs(n.created_at).format('MM-DD HH:mm') : ''}
+                </Typography.Text>
+              </List.Item>
+            )}
+          />
+        )}
+      </Modal>
     </div>
   )
 }

@@ -111,10 +111,17 @@ export default function KBDetailPage() {
   const [entryBusy, setEntryBusy] = useState(false)
   const [audit, setAudit] = useState<any>(null)
   const [auditLoading, setAuditLoading] = useState(false)
+  const [misses, setMisses] = useState<{ query: string; count: number }[] | null>(null)
+  const [missLoading, setMissLoading] = useState(false)
   const loadAudit = async () => {
     setAuditLoading(true)
     try { setAudit(await kbApi.audit(kbId)) } catch (e) { message.error(errMsg(e)) }
     finally { setAuditLoading(false) }
+  }
+  const loadMisses = async () => {
+    setMissLoading(true)
+    try { setMisses(await kbApi.missedQueries(30)) } catch (e) { message.error(errMsg(e)) }
+    finally { setMissLoading(false) }
   }
   const [aclType, setAclType] = useState<string>('user')
   const [aclPid, setAclPid] = useState<number | undefined>()
@@ -703,6 +710,7 @@ export default function KBDetailPage() {
           {
             key: 'audit', label: <Space><SafetyCertificateOutlined />内容巡检</Space>,
             children: (
+              <Space direction="vertical" style={{ width: '100%' }} size={16}>
               <Card
                 title="内容巡检" extra={<Button size="small" icon={<ReloadOutlined />} loading={auditLoading} onClick={loadAudit}>扫描</Button>}
               >
@@ -736,6 +744,27 @@ export default function KBDetailPage() {
                   </Space>
                 )}
               </Card>
+              <Card
+                title="未命中查询（近 30 天）"
+                extra={<Button size="small" icon={<ReloadOutlined />} loading={missLoading} onClick={loadMisses}>加载</Button>}
+              >
+                <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+                  这些提问在知识库中检索不到内容——按频次排序，是最值得补的内容缺口。
+                </Typography.Paragraph>
+                {!misses ? <Empty description="点击「加载」查看未命中查询" /> : misses.length === 0 ? (
+                  <Alert type="success" showIcon message="近 30 天没有未命中记录" />
+                ) : (
+                  <Table
+                    rowKey="query" size="small" dataSource={misses} pagination={{ pageSize: 10 }}
+                    columns={[
+                      { title: '查询', dataIndex: 'query' },
+                      { title: '次数', dataIndex: 'count', width: 90,
+                        render: (n: number) => <Tag color={n >= 5 ? 'red' : n >= 2 ? 'orange' : 'default'}>{n}</Tag> },
+                    ]}
+                  />
+                )}
+              </Card>
+              </Space>
             ),
           },
           ...(canManage ? [{

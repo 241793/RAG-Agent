@@ -3,7 +3,7 @@ import {
   Button, Card, DatePicker, Form, Input, InputNumber, List, message, Modal, Popconfirm, Select, Space,
   Switch, Tag, Typography,
 } from 'antd'
-import { PlusOutlined, CheckOutlined, DeleteOutlined, ClockCircleOutlined } from '@ant-design/icons'
+import { PlusOutlined, CheckOutlined, DeleteOutlined, ClockCircleOutlined, EditOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { reminderApi, rbacApi, type ReminderItem } from '../../api'
 import { errMsg } from '../../api/http'
@@ -16,6 +16,7 @@ export default function TodoPage() {
   const [items, setItems] = useState<ReminderItem[]>([])
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<ReminderItem | null>(null)
   const [users, setUsers] = useState<{ id: number; username: string; display_name?: string }[]>([])
   const [form] = Form.useForm()
 
@@ -29,18 +30,36 @@ export default function TodoPage() {
     rbacApi.users(1, 200).then((r) => setUsers(r.items)).catch(() => {})
   }, [])
 
-  const openModal = () => { form.resetFields(); form.setFieldsValue({ notify_on_due: true, remind_before_minutes: 0 }); setOpen(true) }
+  const openModal = () => {
+    setEditing(null)
+    form.resetFields()
+    form.setFieldsValue({ notify_on_due: true, remind_before_minutes: 0 })
+    setOpen(true)
+  }
+  const openEdit = (r: ReminderItem) => {
+    setEditing(r)
+    form.setFieldsValue({
+      title: r.title, content: r.content,
+      due_at: r.due_at ? dayjs(r.due_at) : null,
+      assignee_id: r.assignee_id ?? undefined,
+      notify_on_due: r.notify_on_due,
+      remind_before_minutes: r.remind_before_minutes,
+    })
+    setOpen(true)
+  }
   const submit = async () => {
     const v = await form.validateFields().catch(() => null)
     if (!v) return
+    const payload = {
+      title: v.title, content: v.content,
+      due_at: v.due_at ? v.due_at.valueOf() : null,
+      assignee_id: v.assignee_id ?? null, notify_on_due: v.notify_on_due,
+      remind_before_minutes: v.remind_before_minutes,
+    }
     try {
-      await reminderApi.create({
-        title: v.title, content: v.content,
-        due_at: v.due_at ? v.due_at.valueOf() : null,
-        assignee_id: v.assignee_id, notify_on_due: v.notify_on_due,
-        remind_before_minutes: v.remind_before_minutes,
-      })
-      message.success('已创建'); setOpen(false); load()
+      if (editing) { await reminderApi.update(editing.id, payload); message.success('已更新') }
+      else { await reminderApi.create(payload); message.success('已创建') }
+      setOpen(false); setEditing(null); load()
     } catch (e) { message.error(errMsg(e)) }
   }
   const markDone = async (r: ReminderItem) => {
@@ -66,6 +85,7 @@ export default function TodoPage() {
             const overdue = r.due_at && r.due_at < now
             return (
               <List.Item actions={[
+                <Button key="e" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>,
                 <Button key="d" size="small" icon={<CheckOutlined />} onClick={() => markDone(r)}>完成</Button>,
                 <Popconfirm key="x" title="删除该待办？" onConfirm={async () => { await reminderApi.remove(r.id); load() }}>
                   <Button size="small" danger icon={<DeleteOutlined />} />
@@ -96,7 +116,8 @@ export default function TodoPage() {
         </Card>
       )}
 
-      <Modal title="新建待办 / 日程" open={open} onOk={submit} onCancel={() => setOpen(false)} destroyOnClose width={560}>
+      <Modal title={editing ? '编辑待办 / 日程' : '新建待办 / 日程'} open={open}
+        onOk={submit} onCancel={() => { setOpen(false); setEditing(null) }} destroyOnClose width={560}>
         <Form form={form} layout="vertical">
           <Form.Item name="title" label="标题" rules={[{ required: true }]}><Input placeholder="如：提交周报" /></Form.Item>
           <Form.Item name="content" label="说明"><Input.TextArea rows={2} /></Form.Item>

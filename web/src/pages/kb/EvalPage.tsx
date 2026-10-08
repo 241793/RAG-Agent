@@ -130,7 +130,7 @@ export default function EvalPage() {
       title="问答质量评估"
       subtitle="用一组测试问题批量跑 RAG 问答，由 AI 裁判打分（忠实度/相关性），并统计期望文档命中率——量化知识库答得准不准"
       extra={
-        <Can perm="eval:manage">
+        <Can perm="eval:manage" fallback={<Tag color="default">只读模式（需 eval:manage 权限才能新建/运行评测）</Tag>}>
           <Space>
             <Button icon={<PlusOutlined />} onClick={() => openDs()}>新建数据集</Button>
             <Button type="primary" icon={<PlayCircleOutlined />} loading={running}
@@ -142,7 +142,7 @@ export default function EvalPage() {
       <Row gutter={16}>
         <Col xs={24} md={7}>
           <Card size="small" title="数据集" bordered={false}
-            extra={<Button size="small" icon={<PlusOutlined />} onClick={() => openDs()} />}>
+            extra={<Can perm="eval:manage"><Button size="small" icon={<PlusOutlined />} onClick={() => openDs()} /></Can>}>
             {datasets.length === 0 ? <Empty description="暂无数据集" /> : (
               <List size="small" dataSource={datasets}
                 renderItem={(d) => (
@@ -150,10 +150,12 @@ export default function EvalPage() {
                     style={{ cursor: 'pointer', background: d.id === dsId ? '#e6f4ff' : undefined, paddingLeft: 8, borderRadius: 4 }}
                     onClick={() => setDsId(d.id)}
                     actions={[
-                      <a key="e" onClick={(e) => { e.stopPropagation(); openDs(d) }}>改</a>,
-                      <Popconfirm key="d" title="删除该数据集？" onConfirm={() => removeDs(d.id)}>
-                        <a onClick={(e) => e.stopPropagation()}>删</a>
-                      </Popconfirm>,
+                      <Can key="e" perm="eval:manage"><a onClick={(e) => { e.stopPropagation(); openDs(d) }}>改</a></Can>,
+                      <Can key="d" perm="eval:manage">
+                        <Popconfirm title="删除该数据集？" onConfirm={() => removeDs(d.id)}>
+                          <a onClick={(e) => e.stopPropagation()}>删</a>
+                        </Popconfirm>
+                      </Can>,
                     ]}>
                     <List.Item.Meta title={d.name}
                       description={<Typography.Text type="secondary" style={{ fontSize: 12 }}>{d.question_count ?? 0} 个问题</Typography.Text>} />
@@ -182,7 +184,10 @@ export default function EvalPage() {
 
           {run && (
             <Card size="small" bordered={false} style={{ marginTop: 16 }} title="评测结果"
-              extra={<Button size="small" icon={<DownloadOutlined />} disabled={run.status !== 'done'} onClick={downloadCsv}>导出 CSV</Button>}>
+              extra={<Space size={8}>
+                <Button size="small" onClick={() => setQDrawer(true)}>详情</Button>
+                <Button size="small" icon={<DownloadOutlined />} disabled={run.status !== 'done'} onClick={downloadCsv}>导出 CSV</Button>
+              </Space>}>
               {run.status === 'running' || run.status === 'pending' ? (
                 <div style={{ padding: '8px 0' }}>
                   <Progress percent={run.total ? Math.round((run.progress / run.total) * 100) : 0}
