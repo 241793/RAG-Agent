@@ -3,7 +3,10 @@
 可对接企业内部系统、也供员工直接使用，具备多权限体系、智能体与自动化能力的企业级 RAG 平台。
 
 后端 FastAPI + SQLAlchemy 2.0 async，前端 React 19 + TypeScript + Vite + antd，**默认 SQLite 零依赖起步**，可平滑切换 PostgreSQL(+pgvector)/MySQL。
-
+<div>
+<img width="1900" height="864" alt="b3f131b9-495f-474d-ba72-85c43c11da73" src="https://github.com/user-attachments/assets/42638f2f-c107-42c1-a08f-3d5a75590350" />
+<img width="1910" height="873" alt="ed0b949d-e1a7-43ce-a42f-89a3473dc705" src="https://github.com/user-attachments/assets/4622b380-b610-4254-9e2f-001e0ab4ed59" />
+</div>
 ---
 
 ## 功能全景
