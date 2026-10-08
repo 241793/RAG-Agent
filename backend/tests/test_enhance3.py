@@ -159,3 +159,29 @@ def test_backup_endpoints_exist():
     paths = [p for p, _ in methods if "backup" in p]
     assert paths, "应存在备份相关端点"
 
+
+
+# ==================== 存量 NULL 列兜底（本轮 500 修复）====================
+def test_document_out_tolerates_null_columns():
+    """存量行 kind/status/visibility 为 NULL 时，DocumentOut 应兜底而非 500。"""
+    from app.schemas.kb import DocumentOut
+
+    d = DocumentOut.model_validate({
+        "id": 1, "kb_id": 1, "title": "t", "kind": None, "file_size": 0,
+        "status": None, "visibility": None, "progress": 0,
+        "page_count": 0, "char_count": 0, "chunk_count": 0,
+        "created_at": "2026-01-01T00:00:00Z",
+    })
+    assert d.kind == "file"
+    assert d.status == "pending"
+    assert d.visibility == "inherit"
+
+
+def test_scalar_default_helper():
+    from app.core.db import _scalar_default
+    from app.models import Document
+
+    col = Document.__table__.c.kind
+    assert _scalar_default(col) == "'file'"
+    # 可空无默认列返回 None（不误改）
+    assert _scalar_default(Document.__table__.c.content) is None

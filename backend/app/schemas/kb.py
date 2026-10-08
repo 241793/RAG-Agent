@@ -90,3 +90,20 @@ class DocumentOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    # 存量行可能 kind/status/visibility 为 NULL（后加列），兜底为默认值，
+    # 否则 from_attributes 取到 None 会触发响应校验 500。
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _kind_default(cls, v):
+        return v if isinstance(v, str) and v else "file"
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _status_default(cls, v):
+        return v if isinstance(v, str) and v else "pending"
+
+    @field_validator("visibility", mode="before")
+    @classmethod
+    def _visibility_default(cls, v):
+        return v if isinstance(v, str) and v else "inherit"

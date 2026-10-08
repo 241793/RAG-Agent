@@ -151,7 +151,12 @@ async def init_models_for(engine) -> list[str]:
 
 
 def _sync_missing_columns(sync_conn) -> None:
-    """对比 ORM 定义与现有表结构，补齐缺失列（仅 SQLite/简单场景）。"""
+    """对比 ORM 定义与现有表结构，补齐缺失列（仅 SQLite/简单场景）。
+
+    关键：ADD COLUMN 必须带上 DEFAULT，否则存量行新列为 NULL，会导致
+    「列非空但值为 None」的响应校验 500（如 Document.kind）。加列后再回填一次，
+    保证已有行也有值。
+    """
     from sqlalchemy import inspect, text
 
     inspector = inspect(sync_conn)
@@ -161,12 +166,46 @@ def _sync_missing_columns(sync_conn) -> None:
             continue
         cols = {c["name"] for c in inspector.get_columns(table.name)}
         for col in table.columns:
-            if col.name in cols:
+            if col.name not in cols:
+                # 生成 ALTER TABLE ADD COLUMN（类型用 SQLite 兼容写法）
+                coltype = col.type.compile(dialect=sync_conn.dialect)
+                ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {coltype}'
+                # 标量默认值：让存量行立即有值，避免 NULL
+                default_literal = _scalar_default(col)
+                if default_literal is not None:
+                    ddl += f" DEFAULT {default_literal}"
+                try:
+                    sync_conn.execute(text(ddl))
+                except Exception:  # noqa: BLE001
+                    pass  # 已有列 / 不支持的类型，忽略
+                    continue
+            # 回填：仅针对「非空列却存在 NULL」的存量行（ADD COLUMN 的 DEFAULT 不会改写
+            # 已有 NULL 行；老版本加列时未带 DEFAULT 也会留下 NULL）。可空列不动，避免误改。
+            if col.nullable or col.default is None:
                 continue
-            # 生成 ALTER TABLE ADD COLUMN（类型用 SQLite 兼容写法）
-            coltype = col.type.compile(dialect=sync_conn.dialect)
-            ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {coltype}'
+            default_literal = _scalar_default(col)
+            if default_literal is None:
+                continue
             try:
-                sync_conn.execute(text(ddl))
+                sync_conn.execute(
+                    text(
+                        f'UPDATE "{table.name}" SET "{col.name}" = {default_literal} '
+                        f'WHERE "{col.name}" IS NULL'
+                    )
+                )
             except Exception:  # noqa: BLE001
-                pass  # 已有列 / 不支持的类型，忽略
+                pass
+
+
+def _scalar_default(col) -> str | None:
+    """把 ORM 列定义的标量默认值转成 SQL 字面量；非标量（函数/序列）返回 None。"""
+    if col.default is None or not getattr(col.default, "is_scalar", False):
+        return None
+    raw = col.default.arg
+    if isinstance(raw, bool):
+        return "1" if raw else "0"
+    if isinstance(raw, (int, float)):
+        return str(raw)
+    if isinstance(raw, str):
+        return "'" + raw.replace("'", "''") + "'"
+    return None
