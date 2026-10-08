@@ -194,7 +194,8 @@ export default function WorkflowEditPage() {
           )}
 
           <Typography.Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>
-            点击「运行」在右侧面板中运行、查看实时日志与历史（不再跳转聊天）。
+            拖拽节点边缘圆点连线；<b>鼠标移到连线上会出现「×」可删除</b>，也可点击选中连线后按 Delete；
+            拖拽连线端点可改接到其它节点。点击「运行」在右侧面板中查看实时日志与历史。
           </Typography.Paragraph>
         </div>
 
