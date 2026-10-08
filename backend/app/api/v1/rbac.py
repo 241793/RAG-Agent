@@ -1,0 +1,547 @@
+"""RBAC 接口：角色/权限矩阵、用户、用户-角色授予、部门树、用户组。"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.db import get_db
+from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError
+from app.core.security import hash_password
+from app.middleware.auth_dep import get_current_user, require_permission
+from app.services.audit_service import audited
+from app.models import (
+    Department,
+    Permission,
+    Role,
+    RolePermission,
+    User,
+    UserGroup,
+    UserGroupMember,
+    UserRole,
+)
+from app.schemas.rbac import (
+    DeptCreate,
+    DeptOut,
+    DeptTreeNode,
+    DeptUpdate,
+    GroupCreate,
+    GroupUpdate,
+    GroupMembersIn,
+    GroupOut,
+    PermissionOut,
+    RoleCreate,
+    RoleOut,
+    RolePermissionsIn,
+    RoleUpdate,
+    UserCreate,
+    UserListItem,
+    UserRoleGrant,
+    UserRoleOut,
+    UserUpdate,
+)
+
+router = APIRouter(prefix="/admin", tags=["rbac"])
+
+
+# ==================== 角色 ====================
+@router.get("/roles", response_model=list[RoleOut])
+async def list_roles(
+    user: User = Depends(require_permission("role:read")),
+    db: AsyncSession = Depends(get_db),
+) -> list[Role]:
+    rows = (
+        await db.execute(
+            select(Role).where(
+                (Role.tenant_id == user.tenant_id) | (Role.tenant_id.is_(None))
+            )
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@router.post("/roles", response_model=RoleOut)
+@audited("role.create", "role")
+async def create_role(
+    body: RoleCreate,
+    user: User = Depends(require_permission("role:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> Role:
+    role = Role(
+        tenant_id=user.tenant_id,
+        code=body.code,
+        name=body.name,
+        scope=body.scope,
+        is_system=False,
+        description=body.description,
+    )
+    db.add(role)
+    await db.flush()
+    return role
+
+
+@router.patch("/roles/{role_id}", response_model=RoleOut)
+@audited("role.update", "role", id_arg="role_id")
+async def update_role(
+    role_id: int,
+    body: RoleUpdate,
+    user: User = Depends(require_permission("role:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> Role:
+    role = await db.get(Role, role_id)
+    if not role or (role.tenant_id not in (None, user.tenant_id)):
+        raise NotFoundError("角色不存在")
+    if role.is_system:
+        raise PermissionDeniedError("内置角色不可修改")
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(role, k, v)
+    await db.flush()
+    return role
+
+
+@router.delete("/roles/{role_id}")
+@audited("role.delete", "role", id_arg="role_id")
+async def delete_role(
+    role_id: int,
+    user: User = Depends(require_permission("role:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    role = await db.get(Role, role_id)
+    if not role or role.tenant_id != user.tenant_id:
+        raise NotFoundError("角色不存在")
+    if role.is_system:
+        raise PermissionDeniedError("内置角色不可删除")
+    in_use = (
+        await db.execute(select(UserRole).where(UserRole.role_id == role_id))
+    ).scalars().first()
+    if in_use:
+        raise ConflictError("角色已被授予用户，无法删除")
+    await db.delete(role)
+    await db.flush()
+    return {"message": "已删除"}
+
+
+@router.get("/permissions", response_model=list[PermissionOut])
+async def list_permissions(
+    user: User = Depends(require_permission("role:read")),
+    db: AsyncSession = Depends(get_db),
+) -> list[Permission]:
+    rows = (await db.execute(select(Permission).order_by(Permission.resource, Permission.action))).scalars().all()
+    return list(rows)
+
+
+@router.get("/roles/{role_id}/permissions", response_model=list[int])
+async def get_role_permissions(
+    role_id: int,
+    user: User = Depends(require_permission("role:read")),
+    db: AsyncSession = Depends(get_db),
+) -> list[int]:
+    rows = (
+        await db.execute(select(RolePermission.permission_id).where(RolePermission.role_id == role_id))
+    ).all()
+    return [r[0] for r in rows]
+
+
+@router.put("/roles/{role_id}/permissions")
+@audited("role.permissions", "role", id_arg="role_id")
+async def set_role_permissions(
+    role_id: int,
+    body: RolePermissionsIn,
+    user: User = Depends(require_permission("role:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    role = await db.get(Role, role_id)
+    if not role or (role.tenant_id not in (None, user.tenant_id)):
+        raise NotFoundError("角色不存在")
+    if role.is_system:
+        raise PermissionDeniedError("内置角色权限不可修改")
+    from sqlalchemy import delete
+
+    await db.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
+    for pid in set(body.permission_ids):
+        db.add(RolePermission(role_id=role_id, permission_id=pid))
+    await db.flush()
+    return {"message": "已保存"}
+
+
+# ==================== 用户 ====================
+@router.get("/users")
+async def list_users(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: str | None = None,
+    user: User = Depends(require_permission("user:read")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from sqlalchemy import or_
+
+    stmt = select(User).where(
+        User.tenant_id == user.tenant_id,
+        or_(User.user_type.is_(None), User.user_type != "external"),
+    )
+    if search:
+        like = f"%{search}%"
+        stmt = stmt.where((User.username.like(like)) | (User.display_name.like(like)))
+    total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+    rows = (
+        await db.execute(
+            stmt.order_by(User.id.desc()).offset((page - 1) * page_size).limit(page_size)
+        )
+    ).scalars().all()
+    return {
+        "items": [UserListItem.model_validate(r) for r in rows],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+@router.post("/users", response_model=UserListItem)
+@audited("user.create", "user")
+async def create_user(
+    body: UserCreate,
+    user: User = Depends(require_permission("user:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    exists = (
+        await db.execute(
+            select(User).where(User.tenant_id == user.tenant_id, User.username == body.username)
+        )
+    ).scalar_one_or_none()
+    if exists:
+        raise ConflictError("用户名已存在")
+    u = User(
+        tenant_id=user.tenant_id,
+        username=body.username,
+        password_hash=hash_password(body.password),
+        display_name=body.display_name or body.username,
+        email=body.email,
+        department_id=body.department_id,
+        is_admin=body.is_admin,
+    )
+    db.add(u)
+    await db.flush()
+    # 自动授予内置「普通用户」角色，避免新用户权限集为空而全站 403
+    if not u.is_admin:
+        viewer = (
+            await db.execute(
+                select(Role).where(Role.tenant_id.is_(None), Role.code == "viewer")
+            )
+        ).scalar_one_or_none()
+        if viewer:
+            db.add(
+                UserRole(
+                    tenant_id=user.tenant_id,
+                    user_id=u.id,
+                    role_id=viewer.id,
+                    scope_type="tenant",
+                    scope_id=0,
+                )
+            )
+            await db.flush()
+    return u
+
+
+@router.patch("/users/{user_id}", response_model=UserListItem)
+@audited("user.update", "user", id_arg="user_id")
+async def update_user(
+    user_id: int,
+    body: UserUpdate,
+    user: User = Depends(require_permission("user:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    u = await db.get(User, user_id)
+    if not u or u.tenant_id != user.tenant_id:
+        raise NotFoundError("用户不存在")
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(u, k, v)
+    await db.flush()
+    return u
+
+
+@router.get("/users/{user_id}/roles", response_model=list[UserRoleOut])
+async def list_user_roles(
+    user_id: int,
+    user: User = Depends(require_permission("user:read")),
+    db: AsyncSession = Depends(get_db),
+) -> list[UserRoleOut]:
+    rows = (
+        await db.execute(select(UserRole).where(UserRole.user_id == user_id))
+    ).scalars().all()
+    role_ids = [r.role_id for r in rows]
+    roles = {}
+    if role_ids:
+        for role in (await db.execute(select(Role).where(Role.id.in_(role_ids)))).scalars().all():
+            roles[role.id] = role
+    out = []
+    for r in rows:
+        item = UserRoleOut.model_validate(r)
+        if r.role_id in roles:
+            item.role_code = roles[r.role_id].code
+            item.role_name = roles[r.role_id].name
+        out.append(item)
+    return out
+
+
+@router.post("/users/{user_id}/roles", response_model=UserRoleOut)
+@audited("user_role.grant", "user_role")
+async def grant_user_role(
+    user_id: int,
+    body: UserRoleGrant,
+    user: User = Depends(require_permission("user:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> UserRoleOut:
+    target = await db.get(User, user_id)
+    if not target or target.tenant_id != user.tenant_id:
+        raise NotFoundError("用户不存在")
+    role = await db.get(Role, body.role_id)
+    if not role:
+        raise NotFoundError("角色不存在")
+    # 角色 scope 与授予 scope 的合法性校验
+    if role.scope == "platform" and body.scope_type != "platform":
+        raise PermissionDeniedError("平台级角色只能授予 platform 范围")
+    if role.scope == "kb" and body.scope_type != "kb":
+        raise PermissionDeniedError("知识库级角色必须授予到具体知识库")
+    if role.scope == "department":
+        if body.scope_type != "department" or body.scope_id is None:
+            raise PermissionDeniedError("部门级角色必须授予到具体部门")
+
+    ur = UserRole(
+        tenant_id=user.tenant_id,
+        user_id=user_id,
+        role_id=body.role_id,
+        scope_type=body.scope_type,
+        scope_id=body.scope_id,
+        granted_by=user.id,
+        expires_at=body.expires_at,
+    )
+    db.add(ur)
+    await db.flush()
+    item = UserRoleOut.model_validate(ur)
+    item.role_code = role.code
+    item.role_name = role.name
+    return item
+
+
+@router.delete("/users/{user_id}/roles/{ur_id}")
+@audited("user_role.revoke", "user_role", id_arg="ur_id")
+async def revoke_user_role(
+    user_id: int,
+    ur_id: int,
+    user: User = Depends(require_permission("user:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    ur = await db.get(UserRole, ur_id)
+    if not ur or ur.user_id != user_id:
+        raise NotFoundError("授予不存在")
+    await db.delete(ur)
+    await db.flush()
+    return {"message": "已撤销"}
+
+
+# ==================== 部门 ====================
+@router.get("/departments/tree", response_model=list[DeptTreeNode])
+async def dept_tree(
+    user: User = Depends(require_permission("dept:read")),
+    db: AsyncSession = Depends(get_db),
+) -> list[DeptTreeNode]:
+    rows = (
+        await db.execute(
+            select(Department).where(
+                Department.tenant_id == user.tenant_id, Department.is_deleted.is_(False)
+            )
+        )
+    ).scalars().all()
+    nodes = {d.id: DeptTreeNode.model_validate(d) for d in rows}
+    roots: list[DeptTreeNode] = []
+    for d in rows:
+        node = nodes[d.id]
+        if d.parent_id and d.parent_id in nodes:
+            nodes[d.parent_id].children.append(node)
+        else:
+            roots.append(node)
+    return roots
+
+
+@router.post("/departments", response_model=DeptOut)
+@audited("dept.create", "department")
+async def create_dept(
+    body: DeptCreate,
+    user: User = Depends(require_permission("dept:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> Department:
+    parent = await db.get(Department, body.parent_id) if body.parent_id else None
+    d = Department(
+        tenant_id=user.tenant_id,
+        parent_id=body.parent_id,
+        name=body.name,
+        code=body.code,
+        sort=body.sort,
+        depth=(parent.depth + 1) if parent else 0,
+    )
+    db.add(d)
+    await db.flush()
+    d.path = (parent.path if parent else "") + f"{d.id}."
+    await db.flush()
+    return d
+
+
+@router.patch("/departments/{dept_id}", response_model=DeptOut)
+@audited("dept.update", "department", id_arg="dept_id")
+async def update_dept(
+    dept_id: int,
+    body: DeptUpdate,
+    user: User = Depends(require_permission("dept:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> Department:
+    from sqlalchemy import func as sqlfunc
+    from sqlalchemy import update
+
+    d = await db.get(Department, dept_id)
+    if not d or d.tenant_id != user.tenant_id:
+        raise NotFoundError("部门不存在")
+
+    if body.name is not None:
+        d.name = body.name
+    if body.code is not None:
+        d.code = body.code
+    if body.sort is not None:
+        d.sort = body.sort
+
+    # 移动部门
+    if body.parent_id is not None and body.parent_id != d.parent_id:
+        new_parent = await db.get(Department, body.parent_id) if body.parent_id else None
+        if new_parent and (new_parent.path or "").startswith(d.path):
+            raise PermissionDeniedError("不能把部门移动到自己的子部门下")
+        old_path = d.path
+        new_path = (new_parent.path if new_parent else "") + f"{d.id}."
+        delta = (new_parent.depth + 1 - d.depth) if new_parent else -d.depth
+        # 更新自身与所有子孙
+        await db.execute(
+            update(Department)
+            .where(Department.path.like(f"{old_path}%"))
+            .values(
+                path=sqlfunc.replace(Department.path, old_path, new_path),
+                depth=Department.depth + delta,
+            )
+        )
+        d.parent_id = body.parent_id
+    await db.flush()
+    await db.refresh(d)
+    return d
+
+
+@router.delete("/departments/{dept_id}")
+@audited("dept.delete", "department", id_arg="dept_id")
+async def delete_dept(
+    dept_id: int,
+    user: User = Depends(require_permission("dept:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    d = await db.get(Department, dept_id)
+    if not d or d.tenant_id != user.tenant_id:
+        raise NotFoundError("部门不存在")
+    children = (
+        await db.execute(
+            select(func.count()).select_from(Department).where(
+                Department.parent_id == dept_id, Department.is_deleted.is_(False)
+            )
+        )
+    ).scalar_one()
+    if children:
+        raise ConflictError("请先删除子部门")
+    d.is_deleted = True
+    await db.flush()
+    return {"message": "已删除"}
+
+
+# ==================== 用户组 ====================
+@router.get("/groups", response_model=list[GroupOut])
+async def list_groups(
+    user: User = Depends(require_permission("group:read")),
+    db: AsyncSession = Depends(get_db),
+) -> list[UserGroup]:
+    rows = (
+        await db.execute(select(UserGroup).where(UserGroup.tenant_id == user.tenant_id))
+    ).scalars().all()
+    return list(rows)
+
+
+@router.post("/groups", response_model=GroupOut)
+@audited("group.create", "user_group")
+async def create_group(
+    body: GroupCreate,
+    user: User = Depends(require_permission("group:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> UserGroup:
+    g = UserGroup(tenant_id=user.tenant_id, name=body.name, description=body.description)
+    db.add(g)
+    await db.flush()
+    return g
+
+
+@router.patch("/groups/{group_id}")
+@audited("group.update", "user_group", id_arg="group_id")
+async def update_group(
+    group_id: int,
+    body: GroupUpdate,
+    user: User = Depends(require_permission("group:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> GroupOut:
+    g = await db.get(UserGroup, group_id)
+    if not g or g.tenant_id != user.tenant_id:
+        raise NotFoundError("用户组不存在")
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(g, k, v)
+    await db.flush()
+    return GroupOut.model_validate(g)
+
+
+@router.delete("/groups/{group_id}")
+@audited("group.delete", "user_group", id_arg="group_id")
+async def delete_group(
+    group_id: int,
+    user: User = Depends(require_permission("group:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from sqlalchemy import delete as sql_delete
+
+    g = await db.get(UserGroup, group_id)
+    if not g or g.tenant_id != user.tenant_id:
+        raise NotFoundError("用户组不存在")
+    await db.execute(sql_delete(UserGroupMember).where(UserGroupMember.group_id == group_id))
+    await db.delete(g)
+    await db.flush()
+    return {"message": "已删除"}
+
+
+@router.get("/groups/{group_id}/members", response_model=list[int])
+async def list_group_members(
+    group_id: int,
+    user: User = Depends(require_permission("group:read")),
+    db: AsyncSession = Depends(get_db),
+) -> list[int]:
+    rows = (
+        await db.execute(select(UserGroupMember.user_id).where(UserGroupMember.group_id == group_id))
+    ).all()
+    return [r[0] for r in rows]
+
+
+@router.put("/groups/{group_id}/members")
+@audited("group.members", "user_group", id_arg="group_id")
+async def set_group_members(
+    group_id: int,
+    body: GroupMembersIn,
+    user: User = Depends(require_permission("group:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from sqlalchemy import delete as sql_delete
+
+    g = await db.get(UserGroup, group_id)
+    if not g or g.tenant_id != user.tenant_id:
+        raise NotFoundError("用户组不存在")
+    await db.execute(sql_delete(UserGroupMember).where(UserGroupMember.group_id == group_id))
+    for uid in set(body.user_ids):
+        db.add(UserGroupMember(user_id=uid, group_id=group_id))
+    await db.flush()
+    return {"message": "已保存"}

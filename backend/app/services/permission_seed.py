@@ -1,0 +1,234 @@
+"""权限原子项与内置角色的定义与播种（幂等）。
+
+被 scripts/seed.py 调用，也可在生产环境单独执行。
+"""
+from __future__ import annotations
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Permission, Role, RolePermission, User, UserRole
+
+# ===== 权限原子项（resource:action）=====
+PERMISSIONS: list[tuple[str, str, str, str]] = [
+    # (code, name, resource, action)
+    ("kb:create", "创建知识库", "kb", "create"),
+    ("kb:read", "查看知识库", "kb", "read"),
+    ("kb:update", "编辑知识库", "kb", "update"),
+    ("kb:delete", "删除知识库", "kb", "delete"),
+    ("kb:member_manage", "管理知识库成员", "kb", "member_manage"),
+    ("doc:upload", "上传文档", "doc", "upload"),
+    ("doc:read", "查看文档", "doc", "read"),
+    ("doc:update", "编辑文档", "doc", "update"),
+    ("doc:delete", "删除文档", "doc", "delete"),
+    ("doc:download", "下载文档", "doc", "download"),
+    ("doc:acl_manage", "管理文档权限", "doc", "acl_manage"),
+    ("file:read", "读取对话文件", "file", "read"),
+    ("file:write", "生成/改写文件", "file", "write"),
+    ("file:manage", "管理全部文件", "file", "manage"),
+    ("retrieval:query", "检索", "retrieval", "query"),
+    ("chat:use", "使用问答", "chat", "use"),
+    ("chat:read_all", "查看全部用户问答", "chat", "read_all"),
+    ("model:read", "查看模型", "model", "read"),
+    ("model:manage", "管理模型", "model", "manage"),
+    ("user:read", "查看用户", "user", "read"),
+    ("user:manage", "管理用户", "user", "manage"),
+    ("role:read", "查看角色", "role", "read"),
+    ("role:manage", "管理角色", "role", "manage"),
+    ("dept:read", "查看部门", "dept", "read"),
+    ("dept:manage", "管理部门", "dept", "manage"),
+    ("group:read", "查看用户组", "group", "read"),
+    ("group:manage", "管理用户组", "group", "manage"),
+    ("audit:read", "查看审计日志", "audit", "read"),
+    ("apikey:read", "查看密钥", "apikey", "read"),
+    ("apikey:manage", "管理密钥", "apikey", "manage"),
+    ("workflow:read", "查看工作流", "workflow", "read"),
+    ("workflow:edit", "编辑工作流", "workflow", "edit"),
+    ("workflow:run", "运行工作流", "workflow", "run"),
+    ("app:read", "查看应用", "app", "read"),
+    ("app:edit", "编辑应用", "app", "edit"),
+    ("app:run", "运行应用", "app", "run"),
+    ("agent:read", "查看智能体", "agent", "read"),
+    ("agent:edit", "编辑智能体", "agent", "edit"),
+    ("agent:run", "运行智能体", "agent", "run"),
+    ("skill:read", "查看技能", "skill", "read"),
+    ("skill:edit", "编辑技能", "skill", "edit"),
+    ("tool:read", "查看工具", "tool", "read"),
+    ("tool:manage", "管理工具", "tool", "manage"),
+    ("tool:invoke", "调用外部工具", "tool", "invoke"),
+    ("mcp:read", "查看 MCP 服务器", "mcp", "read"),
+    ("mcp:manage", "管理 MCP 服务器", "mcp", "manage"),
+    ("mcp:invoke", "调用 MCP 工具", "mcp", "invoke"),
+    ("skill:execute", "执行技能脚本", "skill", "execute"),
+    ("agent:admin_tool", "使用管理类 AI 工具", "agent", "admin_tool"),
+    ("schedule:read", "查看定时任务", "schedule", "read"),
+    ("schedule:manage", "管理定时任务", "schedule", "manage"),
+    ("channel:read", "查看外部渠道", "channel", "read"),
+    ("channel:manage", "管理外部渠道", "channel", "manage"),
+    ("notify:read", "查看通知渠道", "notify", "read"),
+    ("notify:manage", "管理通知渠道", "notify", "manage"),
+    ("service:read", "查看客服工单", "service", "read"),
+    ("service:manage", "处理客服工单", "service", "manage"),
+    ("service:submit", "外部系统提交工单（对外 API）", "service", "submit"),
+    ("record:read", "查看录单记录", "record", "read"),
+    ("record:manage", "智能录单", "record", "manage"),
+    ("eval:read", "查看问答评测", "eval", "read"),
+    ("eval:manage", "管理问答评测（建集/运行）", "eval", "manage"),
+    ("system:read", "查看系统日志", "system", "read"),
+    ("system:write", "管理系统日志（清理）", "system", "write"),
+    ("system:manage", "管理系统设置", "system", "manage"),
+    ("sso:read", "查看 SSO", "sso", "read"),
+    ("sso:manage", "管理 SSO", "sso", "manage"),
+    ("tenant:manage", "租户管理", "tenant", "manage"),
+]
+
+# 权限 code -> 简写分组
+_ALL = [p[0] for p in PERMISSIONS]
+
+# ===== 内置角色（tenant_id=None, is_system=True）=====
+# (code, name, scope, 权限 code 列表)
+ROLES: list[tuple[str, str, str, list[str]]] = [
+    ("super_admin", "超级管理员", "platform", _ALL),
+    ("tenant_admin", "租户管理员", "tenant", [c for c in _ALL if c != "tenant:manage"]),
+    ("kb_admin", "知识库管理员", "tenant", [
+        "kb:create", "kb:read", "kb:update", "kb:delete", "kb:member_manage",
+        "doc:upload", "doc:read", "doc:update", "doc:delete", "doc:download", "doc:acl_manage",
+        "retrieval:query", "chat:use", "audit:read", "eval:read", "eval:manage",
+    ]),
+    ("kb_editor", "知识库编辑者", "kb", [
+        "kb:read", "doc:upload", "doc:read", "doc:update", "doc:delete", "doc:download",
+        "retrieval:query", "chat:use",
+    ]),
+    ("kb_viewer", "知识库查看者", "kb", [
+        "kb:read", "doc:read", "doc:download", "retrieval:query", "chat:use",
+    ]),
+    ("app_admin", "应用管理员", "tenant", [
+        "app:read", "app:edit", "app:run",
+        "workflow:read", "workflow:edit", "workflow:run",
+        "model:read", "retrieval:query", "chat:use",
+        "agent:read", "agent:edit", "agent:run", "skill:read", "tool:read",
+    ]),
+    ("agent_admin", "智能体管理员", "tenant", [
+        "agent:read", "agent:edit", "agent:run",
+        "skill:read", "skill:edit", "tool:read", "tool:manage",
+        "mcp:read", "mcp:invoke",
+        "workflow:read", "workflow:edit", "workflow:run",
+        "model:read", "retrieval:query", "chat:use",
+    ]),
+    ("viewer", "普通用户", "tenant", ["kb:read", "doc:read", "file:read", "retrieval:query", "chat:use"]),
+    ("guest", "访客", "tenant", ["chat:use"]),
+    # 外部客服客户：能问答、检索、调只读外部工具（查订单/物流），但无法用写/管理工具
+    ("service_agent", "客服客户", "tenant", [
+        "chat:use", "retrieval:query", "tool:invoke", "mcp:invoke",
+    ]),
+    # ===== 部门级能力档（scope=department，授予到具体部门）=====
+    ("dept_viewer", "部门查看者", "department", [
+        "kb:read", "doc:read", "doc:download", "file:read", "retrieval:query", "chat:use",
+    ]),
+    ("dept_editor", "部门编辑者", "department", [
+        "kb:read", "kb:create", "doc:upload", "doc:read", "doc:update", "doc:delete",
+        "doc:download", "file:read", "file:write", "retrieval:query", "chat:use",
+    ]),
+    ("dept_agent_admin", "部门智能体管理员", "department", [
+        "agent:read", "agent:edit", "agent:run", "skill:read", "skill:edit",
+        "file:read", "file:write", "retrieval:query", "chat:use",
+    ]),
+]
+
+
+async def seed_permissions_and_roles(db: AsyncSession) -> dict[str, int]:
+    """幂等播种权限与内置角色，返回 {role_code: role_id}。"""
+    # 1. 权限
+    existing = {
+        p.code for (p,) in (await db.execute(select(Permission).where(Permission.code.in_(_ALL)))).all()
+    }
+    code_to_perm: dict[str, Permission] = {}
+    for code, name, resource, action in PERMISSIONS:
+        if code in existing:
+            perm = (await db.execute(select(Permission).where(Permission.code == code))).scalar_one()
+        else:
+            perm = Permission(code=code, name=name, resource=resource, action=action)
+            db.add(perm)
+            await db.flush()
+        code_to_perm[code] = perm
+
+    # 2. 角色
+    role_ids: dict[str, int] = {}
+    for code, name, scope, perm_codes in ROLES:
+        role = (
+            await db.execute(select(Role).where(Role.tenant_id.is_(None), Role.code == code))
+        ).scalar_one_or_none()
+        if not role:
+            role = Role(tenant_id=None, code=code, name=name, scope=scope, is_system=True)
+            db.add(role)
+            await db.flush()
+        role_ids[code] = role.id
+
+        # 3. 角色权限（幂等：先删后建，保证与定义一致）
+        from sqlalchemy import delete
+
+        await db.execute(delete(RolePermission).where(RolePermission.role_id == role.id))
+        for pc in perm_codes:
+            if pc in code_to_perm:
+                db.add(RolePermission(role_id=role.id, permission_id=code_to_perm[pc].id))
+    await db.flush()
+    return role_ids
+
+
+async def backfill_admin_super(db: AsyncSession, tenant_id: int, role_ids: dict[str, int]) -> None:
+    """给现有 is_admin 用户回填 super_admin 授予（幂等）。"""
+    admins = (
+        await db.execute(select(User).where(User.is_admin.is_(True), User.tenant_id == tenant_id))
+    ).scalars().all()
+    super_id = role_ids.get("super_admin")
+    if not super_id:
+        return
+    for u in admins:
+        exists = (
+            await db.execute(
+                select(UserRole).where(
+                    UserRole.user_id == u.id,
+                    UserRole.role_id == super_id,
+                    UserRole.scope_type == "tenant",
+                )
+            )
+        ).scalar_one_or_none()
+        if not exists:
+            db.add(
+                UserRole(
+                    tenant_id=tenant_id,
+                    user_id=u.id,
+                    role_id=super_id,
+                    scope_type="tenant",
+                    scope_id=0,
+                )
+            )
+    await db.flush()
+
+
+async def backfill_viewer_role(db: AsyncSession, tenant_id: int, role_ids: dict[str, int]) -> None:
+    """给非管理员、且没有任何角色授予的用户回填 viewer（幂等）。
+
+    背景：补齐权限码强制后，无角色用户权限集为空会全站 403，需兜底为普通用户。
+    """
+    viewer_id = role_ids.get("viewer")
+    if not viewer_id:
+        return
+    users = (
+        await db.execute(select(User).where(User.is_admin.is_(False), User.tenant_id == tenant_id))
+    ).scalars().all()
+    for u in users:
+        has_role = (
+            await db.execute(select(UserRole.id).where(UserRole.user_id == u.id).limit(1))
+        ).scalar_one_or_none()
+        if has_role is None:
+            db.add(
+                UserRole(
+                    tenant_id=tenant_id,
+                    user_id=u.id,
+                    role_id=viewer_id,
+                    scope_type="tenant",
+                    scope_id=0,
+                )
+            )
+    await db.flush()

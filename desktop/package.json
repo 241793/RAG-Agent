@@ -1,0 +1,41 @@
+{
+  "name": "rag-desktop",
+  "version": "1.0.0",
+  "description": "企业 RAG 知识库智能体平台 - 桌面版",
+  "main": "main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --dir",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.rag.knowledgebase",
+    "productName": "RAG知识库",
+    "directories": {
+      "output": "release"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "npmRebuild": false,
+    "files": [
+      "main.js",
+      "loading.html"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend/dist/rag-backend",
+        "to": "backend",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": ["dir"],
+      "icon": "icon.ico"
+    }
+  }
+}

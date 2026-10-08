@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>RAG 知识库 · 启动中</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      height: 100vh; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      font-family: system-ui, 'Microsoft YaHei', sans-serif;
+      background: linear-gradient(135deg, #001529, #003a70);
+      color: #fff;
+    }
+    .logo { font-size: 26px; font-weight: 700; letter-spacing: 1px; }
+    .spinner {
+      margin: 28px 0 16px; width: 44px; height: 44px;
+      border: 4px solid rgba(255,255,255,.25);
+      border-top-color: #1677ff; border-radius: 50%;
+      animation: spin .9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .tip { color: #c9d6e3; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="logo">企业 RAG 知识库</div>
+  <div class="spinner"></div>
+  <div class="tip">正在启动服务，请稍候…（首次启动可能需要几秒）</div>
+</body>
+</html>

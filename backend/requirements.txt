@@ -1,0 +1,45 @@
+# 核心依赖（默认 SQLite 零依赖方案，纯 pip 可装）
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+
+sqlalchemy[asyncio]>=2.0.25
+alembic>=1.13
+aiosqlite>=0.19
+greenlet>=3.0
+
+pydantic>=2.6
+pydantic-settings>=2.2
+pyjwt>=2.8
+
+httpx>=0.27
+openai>=1.30
+structlog>=24.1
+numpy>=1.26
+
+# 文档解析
+pymupdf>=1.24
+python-docx>=1.1
+openpyxl>=3.1
+python-pptx>=0.6
+beautifulsoup4>=4.12
+lxml>=5.2
+markdown>=3.6
+Pillow>=10.0
+PyYAML>=6.0
+
+# 办公文件生成（AI 生成 PDF 等产物）
+reportlab>=4.0
+
+# 外部 IM 渠道接入（QQ机器人/微信/企业微信/飞书）
+websockets>=12.0        # QQBot / 企业微信 长连接
+cryptography>=41.0      # QQBot Ed25519 回调验签
+lark-oapi>=1.4          # 飞书官方 SDK（长连接）
+pycryptodome>=3.20      # 企业微信回调 AES 解密（lark-oapi 亦依赖）
+
+# === 以下按需手动安装 ===
+# PostgreSQL:  pip install asyncpg pgvector
+# MySQL:       pip install asyncmy
+# Redis:       pip install redis
+# Anthropi:    pip install anthropi
+# 本地模型:     pip install FlagEmbedding

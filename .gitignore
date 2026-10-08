@@ -1,0 +1,40 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+build/
+dist/
+
+# ---- Node / 前端 ----
+node_modules/
+web/dist/
+
+# ---- 环境与机密 ----
+.env
+.venv/
+venv/
+env/
+
+# ---- 数据（本地库/上传文件）----
+data/
+*.db
+*.sqlite3
+
+# ---- 日志 ----
+*.log
+logs/
+
+# ---- 桌面打包产物 ----
+release/
+*.exe
+*.msi
+*.blockmap
+*.icon-set
+
+# ---- 工具 / IDE ----
+.claud/
+.idea/
+.vscode/
+.DS_Store

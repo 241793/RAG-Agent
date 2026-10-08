@@ -1,0 +1,195 @@
+"""共享 ReAct 工具循环：AgentRunner 与问答页（chat_service）复用同一套工具调用逻辑。
+
+产出统一事件流（yield dict），由 API 层转 SSE：
+  delta | reasoning | tool_call | tool_result | citations | usage | pending_action | _suspended | turn
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from typing import AsyncIterator, Awaitable, Callable
+
+from app.agents.tools.base import ToolContext, ToolResult
+from app.agents.tools.registry import to_openai_schema, tool_allowed
+from app.core.logging import get_logger
+from app.providers.base import ChatMessage, ToolCall, ToolCallDelta
+
+logger = get_logger("agent.react")
+
+TOOL_TIMEOUT = 60
+
+
+def _finalize_tool_calls(acc: dict[int, dict]) -> list[ToolCall]:
+    out = []
+    for _, s in sorted(acc.items()):
+        out.append(ToolCall(
+            id=s.get("id") or f"call_{_}",
+            name=s.get("name") or "",
+            arguments=s.get("arguments") or "{}",
+        ))
+    return out
+
+
+def _accumulate(acc: dict[int, dict], deltas: list[ToolCallDelta]) -> None:
+    for d in deltas:
+        slot = acc.setdefault(d.index, {"id": "", "name": "", "arguments": ""})
+        if d.id:
+            slot["id"] = d.id
+        if d.name:
+            slot["name"] = d.name
+        slot["arguments"] += d.arguments_delta
+
+
+async def run_react_loop(
+    *,
+    db,
+    ps,
+    perms: set[str],
+    llm,
+    rm,
+    messages: list[ChatMessage],
+    tools: list,
+    conversation_id: int | None = None,
+    agent_id: int | None = None,
+    tool_config: dict | None = None,
+    dynamic_tools: dict[str, object] | None = None,
+    temperature: float = 0.3,
+    max_turns: int = 6,
+    allow_auto_write: bool = False,
+    on_audit: Callable[[ToolCall, ToolResult, bool], Awaitable[None]] | None = None,
+    on_pending_action: Callable[[object, ToolCall, dict], Awaitable[object]] | None = None,
+) -> AsyncIterator[dict]:
+    """多轮工具循环。write 工具：有 on_pending_action 则挂起（HITL），否则 allow_auto_write 时直执行。
+
+    dynamic_tools：待命工具池（name→Tool）。它们**不**随初始 schema 下发；
+    当某次工具结果 data.enable_tools 命中时，按需启用（下一轮 LLM 可见），用于省 token。
+    默认 None → 行为与不带该参数完全一致（向后兼容）。
+
+    返回事件流；调用方负责落库助手消息。
+    """
+    tool_by_name = {t.name: t for t in tools}
+    openai_tools = to_openai_schema(tools)
+    last_sig: str | None = None
+    repeat = 0
+
+    for turn in range(max_turns):
+        acc_tool: dict[int, dict] = {}
+        turn_text = ""
+        pending_enable: list[str] = []
+        stream = await llm.chat(messages, model=rm.model_name, stream=True,
+                                temperature=temperature, tools=openai_tools)
+        async for chunk in stream:
+            if chunk.reasoning:
+                yield {"type": "reasoning", "text": chunk.reasoning}
+            if chunk.delta:
+                turn_text += chunk.delta
+                yield {"type": "delta", "text": chunk.delta}
+            if chunk.tool_calls:
+                _accumulate(acc_tool, chunk.tool_calls)
+            if chunk.usage:
+                yield {"type": "usage", "usage": chunk.usage}
+            if chunk.finish:
+                break
+
+        tool_calls = _finalize_tool_calls(acc_tool)
+        if not tool_calls:
+            break
+
+        messages.append(ChatMessage(role="assistant", content=turn_text, tool_calls=tool_calls))
+
+        sig = json.dumps([(tc.name, tc.arguments) for tc in tool_calls], sort_keys=True)
+        if sig == last_sig:
+            repeat += 1
+            if repeat >= 2:
+                yield {"type": "delta", "text": "\n（检测到重复调用，已终止）"}
+                break
+        else:
+            repeat = 0
+            last_sig = sig
+
+        for tc in tool_calls:
+            yield {"type": "tool_call", "id": tc.id, "name": tc.name,
+                   "arguments": tc.arguments, "turn": turn + 1}
+            tool = tool_by_name.get(tc.name)
+            if not tool:
+                result = ToolResult(content=f"未知工具: {tc.name}", is_error=True)
+            elif not tool_allowed(tool, perms):
+                result = ToolResult(content=f"无权限调用工具: {tc.name}", is_error=True)
+                if on_audit:
+                    await on_audit(tc, result, True)
+            elif (getattr(tool, "kind", "read") == "write"
+                  and on_pending_action
+                  and not getattr(tool, "auto_approve", False)):
+                # 写操作 → HITL 挂起（auto_approve=True 的高频工具免确认，直接执行）
+                try:
+                    args = json.loads(tc.arguments or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                action = await on_pending_action(tool, tc, args)
+                yield {
+                    "type": "pending_action", "action_id": action.id, "tool_name": tool.name,
+                    "arguments": args,
+                    "summary": getattr(action, "summary", "") or "",
+                    "expires_at": getattr(action, "expires_at", None),
+                }
+                yield {"type": "_suspended", "action_id": action.id}
+                return
+            else:
+                try:
+                    args = json.loads(tc.arguments or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                ctx = ToolContext(
+                    db=db, ps=ps, tenant_id=ps.tenant_id, user_id=ps.user_id,
+                    conversation_id=conversation_id, agent_id=agent_id,
+                    config=((tool_config or {}).get("builtin", {}).get(tc.name) or {}),
+                )
+                _t0 = time.time()
+                try:
+                    result = await asyncio.wait_for(tool.run(args, ctx), timeout=TOOL_TIMEOUT)
+                except asyncio.TimeoutError:
+                    result = ToolResult(content="工具执行超时", is_error=True)
+                except Exception as e:  # noqa: BLE001
+                    result = ToolResult(content=f"工具执行错误: {str(e)[:150]}", is_error=True)
+                result.latency_ms = int((time.time() - _t0) * 1000)
+                if on_audit:
+                    await on_audit(tc, result, False)
+
+            yield {
+                "type": "tool_result", "id": tc.id, "name": tc.name,
+                "content": result.content[:4000], "is_error": result.is_error,
+                "data": result.data, "turn": turn + 1,
+            }
+            # 动态启用：工具结果若声明 enable_tools，收集起来在下一轮生效
+            if dynamic_tools and isinstance(result.data, dict):
+                for nm in (result.data.get("enable_tools") or []):
+                    if nm not in tool_by_name and nm not in pending_enable:
+                        pending_enable.append(str(nm))
+            if result.citations:
+                cites = [c.model_dump() if hasattr(c, "model_dump") else c for c in result.citations]
+                yield {"type": "citations", "citations": cites}
+            messages.append(ChatMessage(role="tool", content=result.content, tool_call_id=tc.id, name=tc.name))
+
+        # 结算动态启用：本轮请求的工具在"下一轮"LLM 调用时可见（权限二次复核）
+        if pending_enable:
+            added = False
+            for nm in pending_enable:
+                cand = dynamic_tools.get(nm) if dynamic_tools else None
+                if cand is None:
+                    continue
+                if not tool_allowed(cand, perms):  # 纵深防御：启用前再复核权限
+                    if on_audit:
+                        await on_audit(
+                            ToolCall(id=f"enable_{nm}", name=nm, arguments="{}"),
+                            ToolResult(content="动态启用被拒绝：权限不足", is_error=True), True,
+                        )
+                    continue
+                if nm not in tool_by_name:
+                    tool_by_name[nm] = cand
+                    added = True
+            if added:
+                openai_tools = to_openai_schema(list(tool_by_name.values()))
+            pending_enable.clear()
+
+        yield {"type": "turn", "turn": turn + 1}

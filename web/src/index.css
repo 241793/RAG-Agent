@@ -1,0 +1,215 @@
+:root {
+  /* 设计 token */
+  --color-primary: #2563eb;
+  --color-primary-soft: #eff4ff;
+  --color-text-1: #1f2937;
+  --color-text-2: #4b5563;
+  --color-text-3: #9ca3af;
+  --color-border: #eef0f3;
+  --color-bg-layout: #f5f7fa;
+  --color-bg-card: #ffffff;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --shadow-hover: 0 6px 20px rgba(16, 24, 40, 0.08);
+  --gap: 16px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: var(--color-text-1);
+  background: var(--color-bg-layout);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d5d9df;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #bcc2ca;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 通用卡片 */
+.app-card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+/* 页面容器 */
+.page-container {
+  max-width: 1440px;
+  margin: 0 auto;
+}
+.page-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--color-text-1);
+  margin: 0;
+}
+.page-subtitle {
+  font-size: 13px;
+  color: var(--color-text-3);
+  margin-top: 2px;
+}
+
+/* 响应式：窄屏自适应 */
+@media (max-width: 992px) {
+  .page-container {
+    max-width: 100%;
+  }
+  /* 页面内容区 padding 收窄 */
+  .ant-layout-content {
+    padding: 12px !important;
+  }
+  .page-title {
+    font-size: 18px;
+  }
+}
+
+@media (max-width: 576px) {
+  .ant-layout-content {
+    padding: 8px !important;
+  }
+  /* 表格横向滚动更顺滑 */
+  .ant-table-wrapper {
+    overflow-x: auto;
+  }
+  /* 统计卡在极窄屏占满整行 */
+  .ant-col {
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
+}
+
+/* 统计卡 */
+.stat-card {
+  transition: box-shadow 0.2s;
+}
+.stat-card:hover {
+  box-shadow: var(--shadow-hover);
+}
+
+/* Markdown 渲染 */
+.md-body p {
+  margin: 0 0 8px;
+}
+.md-body p:last-child {
+  margin-bottom: 0;
+}
+.md-body pre {
+  background: #f6f8fa;
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.md-body code {
+  background: #f0f2f5;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.9em;
+}
+.md-body table {
+  border-collapse: collapse;
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid #e5e7eb;
+  padding: 4px 8px;
+}
+.md-body img {
+  max-width: 100%;
+}
+/* 代码块：工具栏（语言标签 + 复制/预览） */
+.md-body .code-block {
+  position: relative;
+  margin: 8px 0;
+}
+.md-body .code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  background: #f6f8fa;
+  border: 1px solid #eaecef;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  padding: 2px 6px;
+}
+.md-body .code-toolbar .code-lang {
+  margin-right: auto;
+  font-size: 12px;
+  color: #8c8c8c;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.md-body .code-block > div:last-child {
+  border: 1px solid #eaecef;
+  border-radius: 0 0 8px 8px !important;
+}
+/* 行内代码不继承代码块的底色 */
+.md-body .md-inline-code {
+  background: #f0f2f5;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.9em;
+}
+/* 流式期间纯文本渲染（不跑 Markdown/高亮，避免逐 token 重排卡顿） */
+.md-body.streaming-plain {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 思考过程块 */
+.reasoning-block {
+  border: 1px solid #eee;
+  background: #fafafa;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.reasoning-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  font-size: 13px;
+  color: #8c8c8c;
+  cursor: pointer;
+  user-select: none;
+}
+.reasoning-head:hover {
+  background: #f0f2f5;
+}
+.reasoning-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12.5px;
+  color: #595959;
+  padding: 4px 10px 10px;
+  max-height: 320px;
+  overflow-y: auto;
+}

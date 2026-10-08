@@ -1,0 +1,123 @@
+import { useState } from 'react'
+import { Button, Card, Col, Descriptions, Form, Input, message, Row, Space, Tag, Typography } from 'antd'
+import { LockOutlined, UserOutlined } from '@ant-design/icons'
+import { authApi } from '../../api'
+import { errMsg } from '../../api/http'
+import { useAuth } from '../../stores/auth'
+import PageContainer from '../../components/PageContainer'
+
+// 权限码 → 易读名（缺省回退原码）
+const PERM_LABELS: Record<string, string> = {
+  'kb:create': '创建知识库', 'kb:read': '查看知识库', 'kb:update': '编辑知识库',
+  'kb:delete': '删除知识库', 'kb:member_manage': '管理知识库成员',
+  'doc:upload': '上传文档', 'doc:read': '查看文档', 'doc:update': '编辑文档',
+  'doc:delete': '删除文档', 'doc:download': '下载文档', 'doc:acl_manage': '管理文档权限',
+  'chat:use': '使用问答', 'chat:read_all': '查看全部用户问答',
+  'retrieval:query': '检索', 'model:read': '查看模型', 'model:manage': '管理模型',
+  'agent:read': '查看智能体', 'agent:edit': '编辑智能体', 'agent:run': '运行智能体',
+  'skill:read': '查看技能', 'skill:edit': '编辑技能',
+  'tool:read': '查看工具', 'tool:manage': '管理工具',
+  'schedule:read': '查看定时任务', 'schedule:manage': '管理定时任务',
+  'channel:read': '查看外部渠道', 'channel:manage': '管理外部渠道',
+  'workflow:read': '查看工作流', 'workflow:edit': '编辑工作流', 'workflow:run': '运行工作流',
+  'user:read': '查看用户', 'user:manage': '管理用户',
+  'role:read': '查看角色', 'role:manage': '管理角色',
+  'dept:read': '查看部门', 'dept:manage': '管理部门',
+  'group:read': '查看用户组', 'group:manage': '管理用户组',
+  'audit:read': '查看审计日志', 'apikey:read': '查看密钥', 'apikey:manage': '管理密钥',
+  'system:read': '查看系统日志', 'system:write': '管理系统日志',
+  'sso:read': '查看 SSO', 'sso:manage': '管理 SSO', 'tenant:manage': '租户管理',
+}
+
+export default function AccountPage() {
+  const user = useAuth((s) => s.user)
+  const setUser = useAuth((s) => s.setUser)
+  const [form] = Form.useForm()
+  const [saving, setSaving] = useState(false)
+
+  const changePassword = async () => {
+    const v = await form.validateFields()
+    setSaving(true)
+    try {
+      await authApi.changePassword(v.old_password, v.new_password)
+      message.success('密码已修改，请牢记新密码')
+      form.resetFields()
+    } catch (e) { message.error(errMsg(e)) } finally { setSaving(false) }
+  }
+
+  const refresh = async () => {
+    try { setUser(await authApi.me()) } catch { /* ignore */ }
+  }
+
+  return (
+    <PageContainer
+      title="我的账号"
+      subtitle="查看你的资料、角色与权限，并可修改登录密码"
+      extra={<Button onClick={refresh}>刷新</Button>}
+    >
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={14}>
+          <Card title={<Space><UserOutlined />账号资料</Space>} style={{ marginBottom: 16 }}>
+            <Descriptions column={1} size="small">
+              <Descriptions.Item label="用户名">{user?.username}</Descriptions.Item>
+              <Descriptions.Item label="姓名">{user?.display_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="邮箱">{user?.email || '-'}</Descriptions.Item>
+              <Descriptions.Item label="部门">{user?.department_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="账号类型">
+                {user?.is_admin ? <Tag color="gold">管理员</Tag> : <Tag>普通用户</Tag>}
+              </Descriptions.Item>
+              <Descriptions.Item label="角色">
+                <Space wrap>
+                  {(user?.roles || []).length
+                    ? user!.roles!.map((r) => <Tag key={r.id} color="blue">{r.name}</Tag>)
+                    : '-'}
+                </Space>
+              </Descriptions.Item>
+            </Descriptions>
+          </Card>
+
+          <Card title={<Space><LockOutlined />修改密码</Space>}>
+            <Form form={form} layout="vertical" style={{ maxWidth: 420 }}>
+              <Form.Item name="old_password" label="原密码" rules={[{ required: true, message: '请输入原密码' }]}>
+                <Input.Password autoComplete="current-password" />
+              </Form.Item>
+              <Form.Item name="new_password" label="新密码" rules={[{ required: true, message: '请输入新密码' }, { min: 6, message: '至少 6 位' }]}>
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+              <Form.Item name="confirm" label="确认新密码" dependencies={['new_password']}
+                rules={[
+                  { required: true, message: '请再次输入新密码' },
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      if (!value || getFieldValue('new_password') === value) return Promise.resolve()
+                      return Promise.reject(new Error('两次输入不一致'))
+                    },
+                  }),
+                ]}>
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+              <Button type="primary" loading={saving} onClick={changePassword}>保存</Button>
+            </Form>
+          </Card>
+        </Col>
+
+        <Col xs={24} lg={10}>
+          <Card title="我的权限">
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+              以下为你当前拥有的权限码，决定你能看到与操作的功能：
+            </Typography.Paragraph>
+            {user?.is_admin ? (
+              <Tag color="gold">全部权限（管理员）</Tag>
+            ) : (user?.permissions || []).length ? (
+              <Space wrap>
+                {(user!.permissions || []).map((p) => (
+                  <Tag key={p} color={p === '*' ? 'gold' : 'default'}>{p === '*' ? '全部权限' : (PERM_LABELS[p] || p)}</Tag>
+                ))}
+              </Space>
+            ) : <Typography.Text type="secondary">暂无权限，请联系管理员分配角色</Typography.Text>}
+          </Card>
+        </Col>
+      </Row>
+    </PageContainer>
+  )
+}
