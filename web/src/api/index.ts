@@ -214,6 +214,12 @@ export const kbApi = {
   getConnector: (id: number) => http.get<ConnectorInfo>(`/kbs/${id}/connector`).then((r) => r.data),
   testConnector: (id: number, query = '测试', top_k = 3) =>
     http.post<{ ok: boolean; count: number; items: any[] }>(`/kbs/${id}/connector/test`, { query, top_k }).then((r) => r.data),
+  audit: (id: number, staleDays = 180) =>
+    http.get<{ total: number; counts: Record<string, number>; empty: any[]; failed: any[];
+               no_chunk: any[]; untagged: any[]; stale: any[] }>(
+      `/kbs/${id}/audit`, { params: { stale_days: staleDays } }).then((r) => r.data),
+  missedQueries: (days = 30, limit = 20) =>
+    http.get<{ query: string; count: number }[]>('/retrieval/missed-queries', { params: { days, limit } }).then((r) => r.data),
 }
 
 // ---- Document ----
@@ -786,6 +792,36 @@ export const workflowApi = {
   listRuns: (agentId: number, limit = 20) =>
     http.get<{ runs: any[] }>(`/agents/${agentId}/workflow/runs`, { params: { limit } }).then((r) => r.data),
   approveUrl: (runId: number) => `${API_BASE}/workflow-runs/${runId}/approve`,
+  pendingApprovals: () =>
+    http.get<{ run_id: number; agent_id: number; agent_name: string; pending_node_id?: string | null;
+               input?: any; created_at?: string }[]>('/approvals/pending').then((r) => r.data),
+}
+
+// ---- 待办 / 日程 / 提醒 ----
+export interface ReminderItem {
+  id: number
+  title: string
+  content?: string | null
+  due_at?: number | null
+  status: string
+  assignee_id?: number | null
+  creator_id?: number | null
+  source: string
+  repeat_cron?: string | null
+  remind_before_minutes: number
+  notify_on_due: boolean
+  notified_at?: number | null
+  done_at?: number | null
+  created_at?: string
+}
+export const reminderApi = {
+  list: (params: { assignee_id?: number; status?: string } = {}) =>
+    http.get<ReminderItem[]>('/reminders', { params }).then((r) => r.data),
+  create: (data: Partial<ReminderItem>) => http.post<ReminderItem>('/reminders', data).then((r) => r.data),
+  update: (id: number, data: Partial<ReminderItem>) =>
+    http.patch<ReminderItem>(`/reminders/${id}`, data).then((r) => r.data),
+  done: (id: number) => http.post<ReminderItem>(`/reminders/${id}/done`).then((r) => r.data),
+  remove: (id: number) => http.delete(`/reminders/${id}`).then((r) => r.data),
 }
 
 // 工作流运行 SSE

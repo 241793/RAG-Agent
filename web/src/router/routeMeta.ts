@@ -5,6 +5,8 @@ export const ROUTE_PERMS: Record<string, string> = {
   '/chat': 'chat:use',
   '/kb': 'kb:read',
   '/retrieval': 'retrieval:query',
+  '/todo': 'chat:use',
+  '/approvals': 'workflow:read',
   '/eval': 'eval:read',
   '/agents': 'agent:read',
   '/skills': 'skill:read',

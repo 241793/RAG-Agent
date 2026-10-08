@@ -64,6 +64,8 @@ export default function MainLayout() {
       ],
     },
     { key: '/retrieval', icon: <ExperimentOutlined />, label: '检索调试' },
+    { key: '/todo', icon: <FormOutlined />, label: '待办日程' },
+    { key: '/approvals', icon: <SafetyCertificateOutlined />, label: '审批中心', perm: 'workflow:read' },
     { key: '/eval', icon: <FileSearchOutlined />, label: '问答评测', perm: 'eval:read' },
     {
       key: 'g-org',

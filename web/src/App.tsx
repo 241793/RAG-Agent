@@ -6,6 +6,8 @@ import KBListPage from './pages/kb/KBListPage'
 import KBDetailPage from './pages/kb/KBDetailPage'
 import RetrievalDebugPage from './pages/kb/RetrievalDebugPage'
 import EvalPage from './pages/kb/EvalPage'
+import TodoPage from './pages/todo/TodoPage'
+import ApprovalPage from './pages/approvals/ApprovalPage'
 import ChatPage from './pages/chat/ChatPage'
 import ModelPage from './pages/admin/ModelPage'
 import RolePage from './pages/admin/RolePage'
@@ -65,6 +67,8 @@ export default function App() {
         <Route path="kb/:id" element={<RequirePermission perm={ROUTE_PERMS['/kb']}><KBDetailPage /></RequirePermission>} />
         <Route path="retrieval" element={<RequirePermission perm={ROUTE_PERMS['/retrieval']}><RetrievalDebugPage /></RequirePermission>} />
         <Route path="eval" element={<RequirePermission perm={ROUTE_PERMS['/eval']}><EvalPage /></RequirePermission>} />
+        <Route path="todo" element={<TodoPage />} />
+        <Route path="approvals" element={<RequirePermission perm={ROUTE_PERMS['/approvals']}><ApprovalPage /></RequirePermission>} />
         <Route path="chat" element={<RequirePermission perm={ROUTE_PERMS['/chat']}><ChatPage /></RequirePermission>} />
         <Route path="agents" element={<RequirePermission perm={ROUTE_PERMS['/agents']}><AgentListPage /></RequirePermission>} />
         <Route path="agents/:id/chat" element={<RequirePermission perm={ROUTE_PERMS['/agents']}><AgentChatPage /></RequirePermission>} />

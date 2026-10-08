@@ -7,6 +7,7 @@ import {
   UploadOutlined, ReloadOutlined, DeleteOutlined, ArrowLeftOutlined,
   AppstoreOutlined, UserAddOutlined, FolderAddOutlined, LockOutlined, EditOutlined, ScissorOutlined,
   EyeOutlined, TagOutlined, PieChartOutlined, ApiOutlined, DownloadOutlined, FileTextOutlined, PaperClipOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import ReactECharts from 'echarts-for-react'
@@ -108,6 +109,13 @@ export default function KBDetailPage() {
   const [entryContent, setEntryContent] = useState('')
   const [entryFiles, setEntryFiles] = useState<File[]>([])
   const [entryBusy, setEntryBusy] = useState(false)
+  const [audit, setAudit] = useState<any>(null)
+  const [auditLoading, setAuditLoading] = useState(false)
+  const loadAudit = async () => {
+    setAuditLoading(true)
+    try { setAudit(await kbApi.audit(kbId)) } catch (e) { message.error(errMsg(e)) }
+    finally { setAuditLoading(false) }
+  }
   const [aclType, setAclType] = useState<string>('user')
   const [aclPid, setAclPid] = useState<number | undefined>()
   const [aclEffect, setAclEffect] = useState<string>('allow')
@@ -692,6 +700,44 @@ export default function KBDetailPage() {
               </Card>
             ),
           }]),
+          {
+            key: 'audit', label: <Space><SafetyCertificateOutlined />内容巡检</Space>,
+            children: (
+              <Card
+                title="内容巡检" extra={<Button size="small" icon={<ReloadOutlined />} loading={auditLoading} onClick={loadAudit}>扫描</Button>}
+              >
+                {!audit ? <Empty description="点击「扫描」检查内容质量" /> : (
+                  <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                    <Space wrap>
+                      <Tag color="red">失败 {audit.counts?.failed || 0}</Tag>
+                      <Tag color="orange">空文档 {audit.counts?.empty || 0}</Tag>
+                      <Tag color="gold">无分块 {audit.counts?.no_chunk || 0}</Tag>
+                      <Tag color="default">未标签 {audit.counts?.untagged || 0}</Tag>
+                      <Tag color="blue">陈旧 {audit.counts?.stale || 0}</Tag>
+                    </Space>
+                    {[
+                      ['失败（需修复）', audit.failed, 'red'],
+                      ['空文档（无正文）', audit.empty, 'orange'],
+                      ['已就绪但无分块', audit.no_chunk, 'gold'],
+                      ['陈旧（超 180 天未更新）', audit.stale, 'blue'],
+                    ].map(([label, list, color]: any) => (list && list.length) ? (
+                      <div key={label}>
+                        <Typography.Text strong>{label}（{list.length}）</Typography.Text>
+                        <div style={{ marginTop: 6 }}>
+                          {list.slice(0, 20).map((d: any) => (
+                            <Tag key={d.id} color={color} style={{ marginBottom: 4 }}>{d.title}（#{d.id}）</Tag>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null)}
+                    {!Object.values(audit.counts || {}).some((n: any) => n > 0) && (
+                      <Alert type="success" showIcon message="未发现问题，内容质量良好" />
+                    )}
+                  </Space>
+                )}
+              </Card>
+            ),
+          },
           ...(canManage ? [{
             key: 'members', label: '成员管理',
             children: (
