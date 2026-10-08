@@ -92,6 +92,14 @@ class Settings(BaseSettings):
     provider_health_interval_min: int = 30  # Provider 健康检查周期（分钟，0=关闭）
     inject_capabilities_default: bool = True  # 向 AI 注入「平台能力 + 账号权限」摘要
     github_token: str = ""  # 搜索技能用（GitHub API Token）；配置后 search 限流 10→30 次/分钟
+    # 检索质量增强
+    query_rewrite_enabled: bool = True   # 多轮追问：结合历史改写检索 query
+    mmr_enabled: bool = True             # 融合后做 MMR 去冗余（多样性）
+    mmr_lambda: float = 0.7              # MMR 相关性/多样性权衡
+    rrf_k: int = 60                      # RRF 常数
+    rrf_weight_vector: float = 1.0       # 向量路权重
+    rrf_weight_bm25: float = 1.0         # BM25 路权重
+    rrf_weight_external: float = 1.0     # 外部源权重
 
     # 外部知识库连接器
     connector_allow_private: bool = False  # 允许外部源指向内网/环回（企业内网部署时开启）

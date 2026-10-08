@@ -41,6 +41,8 @@ from app.models.model_provider import ModelConfig, ModelProvider, UsageLog
 from app.models.notification import Notification
 from app.models.notify_channel import NotifyChannel
 from app.models.record_template import RecordEntry, RecordTemplate
+from app.models.reminder import Reminder
+from app.models.retrieval_miss import RetrievalMiss
 from app.models.scheduled_task_run import ScheduledTaskRun
 from app.models.tenant import Department, Tenant
 from app.models.webhook_token import WebhookToken
@@ -100,6 +102,8 @@ __all__ = [
     "NotifyChannel",
     "RecordTemplate",
     "RecordEntry",
+    "Reminder",
+    "RetrievalMiss",
     "EvalDataset",
     "EvalQuestion",
     "EvalRun",

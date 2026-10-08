@@ -1,7 +1,7 @@
 """定时任务执行历史（每次执行落一条）。"""
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -20,3 +20,5 @@ class ScheduledTaskRun(Base, IdMixin, TimestampMixin, TenantMixin):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempt: Mapped[int] = mapped_column(Integer, default=1)  # 第几次尝试
     workflow_run_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # 本轮产物（工作流产出的文件）：[{file_key, name, mime, size}]，供通知附带
+    attachments: Mapped[list | None] = mapped_column(JSON, nullable=True)

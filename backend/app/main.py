@@ -139,6 +139,11 @@ async def lifespan(app: FastAPI):
 
     sla_task = asyncio.create_task(periodic_sla_check(300))
 
+    # 待办/日程提醒扫描
+    from app.tasks.reminder_tasks import periodic_reminder_check
+
+    reminder_task = asyncio.create_task(periodic_reminder_check(60))
+
     # 外部 IM 渠道宿主（长连接）
     from app.channels.manager import channel_manager
 
@@ -160,6 +165,7 @@ async def lifespan(app: FastAPI):
     log_task.cancel()
     email_task.cancel()
     sla_task.cancel()
+    reminder_task.cancel()
     try:
         await channel_manager.stop_all()
     except Exception:  # noqa: BLE001

@@ -288,6 +288,38 @@ async def send_conversation_attachment(
     return r
 
 
+@router.get("/export")
+async def export_tickets(
+    status: str | None = Query(None),
+    user: User = Depends(require_permission("service:read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """导出工单为 CSV。必须放在 /{ticket_id} 之前，否则被其吞掉。"""
+    import csv
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    rows = await S.list_tickets(db, tenant_id=user.tenant_id, status=status, limit=200)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["工单号", "标题", "状态", "优先级", "分类", "来源", "外部用户",
+                "指派给", "SLA是否超时", "满意度", "创建时间", "关闭时间", "解决说明"])
+    for t in rows:
+        w.writerow([
+            t.id, t.subject or "", t.status, t.priority, t.category or "", t.source or "",
+            t.external_user or "", t.assignee_id or "",
+            "是" if t.sla_breached else "否", t.satisfaction or "",
+            t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "",
+            t.closed_at or "", (t.resolution or "").replace("\n", " "),
+        ])
+    data = buf.getvalue().encode("utf-8-sig")
+    return StreamingResponse(
+        iter([data]), media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="service_tickets.csv"'},
+    )
+
+
 @router.get("", response_model=list[TicketOut])
 async def list_tickets(
     status: str | None = Query(None),
@@ -454,3 +486,4 @@ async def update_ticket(
     await db.flush()
     await db.commit()
     return TicketOut.model_validate(t)
+

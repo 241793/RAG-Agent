@@ -181,6 +181,24 @@ async def kb_stats(
     }
 
 
+@router.get("/{kb_id}/audit")
+async def kb_audit(
+    kb_id: int,
+    stale_days: int = 180,
+    _guard: User = Depends(require_permission("kb:read")),
+    ps: PrincipalSet = Depends(get_principal_set),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """内容巡检：空/失败/无分块/未标签/陈旧文档清单。"""
+    from app.services.kb_audit_service import audit_kb
+
+    kb = await db.get(KnowledgeBase, kb_id)
+    if not kb or kb.tenant_id != ps.tenant_id:
+        raise NotFoundError("知识库不存在")
+    await _ensure_access(db, ps, kb)
+    return await audit_kb(db, kb_id=kb_id, tenant_id=ps.tenant_id, stale_days=stale_days)
+
+
 # ===== 连接器配置（外部知识库）=====
 @router.post("/connector/test")
 async def test_connector(

@@ -43,6 +43,32 @@ async def _get_agent_workflow(db: AsyncSession, agent_id: int, tenant_id: int) -
     return a, wf
 
 
+@router.get("/approvals/pending")
+async def pending_approvals(
+    user: User = Depends(require_permission("workflow:read")),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """待我审批的工作流运行（status=waiting）。"""
+    rows = (
+        await db.execute(
+            select(WorkflowRun).where(
+                WorkflowRun.tenant_id == user.tenant_id, WorkflowRun.status == "waiting"
+            ).order_by(WorkflowRun.id.desc()).limit(100)
+        )
+    ).scalars().all()
+    # 补智能体名
+    agent_ids = [r.agent_id for r in rows if r.agent_id]
+    names: dict[int, str] = {}
+    if agent_ids:
+        for a in (await db.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars().all():
+            names[a.id] = a.name
+    return [
+        {"run_id": r.id, "agent_id": r.agent_id, "agent_name": names.get(r.agent_id or 0, f"#{r.agent_id}"),
+         "pending_node_id": r.pending_node_id, "input": r.input, "created_at": r.created_at}
+        for r in rows
+    ]
+
+
 @router.get("/agents/{agent_id}/workflow")
 async def get_workflow(
     agent_id: int,

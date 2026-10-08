@@ -112,11 +112,14 @@ def _render_docx(content: str) -> bytes:
     return buf.getvalue()
 
 
-def _render_xlsx(content: str, rows: list | None) -> bytes:
+def _render_xlsx(content: str, rows: list | None,
+                 charts: list | None = None, sheet_name: str | None = None) -> bytes:
     import openpyxl
 
     wb = openpyxl.Workbook()
     ws = wb.active
+    if sheet_name:
+        ws.title = str(sheet_name)[:31]
     if rows:
         for row in rows:
             ws.append(list(row))
@@ -124,6 +127,39 @@ def _render_xlsx(content: str, rows: list | None) -> bytes:
         for ln in content.split("\n"):
             cells = ln.split(",") if "," in ln else ln.split("\t")
             ws.append([c.strip() for c in cells])
+    # 图表：rows 首行为表头时，分类用第 1 列、系列用其余列
+    for ch in (charts or []):
+        try:
+            ctype = str(ch.get("type") or "bar").lower()
+            title = str(ch.get("title") or "")
+            anchor = str(ch.get("anchor") or "H2")
+            data = ch.get("data")  # 可选：显式 {categories:[], series:[{name, values:[]}]}
+            existing = ws.max_row
+            if data and data.get("series"):
+                cats = data.get("categories") or []
+                start = existing + 2
+                ws.cell(row=start, column=1, value=ch.get("category_title") or "类别")
+                for j, s in enumerate(data["series"], start=2):
+                    ws.cell(row=start, column=j, value=s.get("name") or f"系列{j-1}")
+                for i, cval in enumerate(cats):
+                    ws.cell(row=start + 1 + i, column=1, value=cval)
+                    for j, s in enumerate(data["series"], start=2):
+                        vals = s.get("values") or []
+                        if i < len(vals):
+                            ws.cell(row=start + 1 + i, column=j, value=vals[i])
+                min_col, max_col = 1, 1 + len(data["series"])
+                min_row, max_row = start, start + len(cats)
+            else:
+                min_col, min_row, max_col, max_row = 1, 1, ws.max_column, ws.max_row
+            from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+
+            ref = Reference(ws, min_col=min_col, min_row=min_row, max_col=max_col, max_row=max_row)
+            chart = {"bar": BarChart, "line": LineChart, "pie": PieChart}.get(ctype, BarChart)()
+            chart.title = title or None
+            chart.add_data(ref, titles_from_data=True)
+            ws.add_chart(chart, anchor)
+        except Exception:  # noqa: BLE001
+            continue  # 单个图表失败不影响整体导出
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -243,7 +279,8 @@ def _render(args: dict) -> tuple[bytes, str]:
     if fmt == "docx":
         return _render_docx(content), _MIME["docx"]
     if fmt == "xlsx":
-        return _render_xlsx(content, args.get("rows")), _MIME["xlsx"]
+        return _render_xlsx(content, args.get("rows"), charts=args.get("charts"),
+                            sheet_name=args.get("sheet_name")), _MIME["xlsx"]
     if fmt == "pptx":
         return _render_pptx(content, args.get("slides")), _MIME["pptx"]
     if fmt == "pdf":

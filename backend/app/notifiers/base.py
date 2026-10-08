@@ -20,6 +20,8 @@ class NotificationMessage:
     ref_id: int | None = None
     user_id: int | None = None   # 站内消息收件人
     meta: dict = field(default_factory=dict)
+    # 附件（供邮件/外部渠道带文件）：[{name, data: bytes, mime}]
+    attachments: list | None = None
 
 
 @runtime_checkable

@@ -7,6 +7,8 @@ from __future__ import annotations
 import asyncio
 import smtplib
 import time
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
 
@@ -17,6 +19,19 @@ from app.providers.base import ProviderHealth
 class SmtpNotifier:
     def __init__(self, *, config: dict | None = None) -> None:
         self.cfg = config or {}
+
+    def _build_mail(self, msg: NotificationMessage) -> MIMEMultipart:
+        mail = MIMEMultipart()
+        mail.attach(MIMEText(msg.body or msg.title, "plain", "utf-8"))
+        for att in (msg.attachments or []):
+            try:
+                data = att.get("data") or b""
+                part = MIMEApplication(data, Name=att.get("name") or "file")
+                part["Content-Disposition"] = f'attachment; filename="{att.get("name") or "file"}"'
+                mail.attach(part)
+            except Exception:  # noqa: BLE001
+                continue
+        return mail
 
     def _send_sync(self, msg: NotificationMessage) -> None:
         cfg = self.cfg
@@ -29,7 +44,7 @@ class SmtpNotifier:
         if not to_addrs:
             raise ValueError("SMTP 未配置收件人 to_addrs")
 
-        mail = MIMEText(msg.body or msg.title, "plain", "utf-8")
+        mail = self._build_mail(msg)
         mail["Subject"] = msg.title
         mail["From"] = formataddr(("RAG 知识库", cfg.get("from_addr") or cfg.get("username") or ""))
         mail["To"] = ", ".join(to_addrs)

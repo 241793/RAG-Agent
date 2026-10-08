@@ -9,14 +9,22 @@ def _key(hit: VectorHit) -> str:
     return hit.ext_ref or f"c{hit.chunk_id}"
 
 
-def rrf_fuse(rankings: list[list[VectorHit]], k: int = 60, top_n: int | None = None) -> list[VectorHit]:
-    """将多路排序结果融合。score = Σ 1/(k + rank)。"""
+def rrf_fuse(
+    rankings: list[list[VectorHit]],
+    k: int = 60,
+    top_n: int | None = None,
+    weights: list[float] | None = None,
+) -> list[VectorHit]:
+    """将多路排序结果融合。score = Σ weight_i * 1/(k + rank)。"""
     scores: dict[str, float] = {}
     best: dict[str, VectorHit] = {}
-    for ranking in rankings:
+    for i, ranking in enumerate(rankings):
+        w = 1.0
+        if weights and i < len(weights):
+            w = float(weights[i])
         for rank, hit in enumerate(ranking, start=1):
             key = _key(hit)
-            scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank)
+            scores[key] = scores.get(key, 0.0) + w * (1.0 / (k + rank))
             # 保留内容更完整的记录（父块内容优先）
             if key not in best or (hit.parent_content and not best[key].parent_content):
                 best[key] = hit

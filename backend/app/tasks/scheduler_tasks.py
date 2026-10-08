@@ -58,7 +58,7 @@ async def execute_task(task_id: int, *, manual: bool = False) -> None:
             await db.commit()
             run_row_id = run.id
 
-            ok, result_text, error_text, wf_run_id = await _do_run(db, t)
+            ok, result_text, error_text, wf_run_id, run_atts = await _do_run(db, t)
             finished = int(time.time() * 1000)
             run = await db.get(ScheduledTaskRun, run_row_id)
             run.status = "success" if ok else "failed"
@@ -67,6 +67,7 @@ async def execute_task(task_id: int, *, manual: bool = False) -> None:
             run.output = (result_text or "")[:8000]
             run.error = (error_text or "")[:4000] or None
             run.workflow_run_id = wf_run_id
+            run.attachments = run_atts or None
 
             t.last_run_at = finished
             t.last_result = (result_text or error_text or "")[:2000]
@@ -172,7 +173,8 @@ async def _do_run(db, t) -> tuple[bool, str, str, int | None]:
             r2 = await db.get(WorkflowRun, run_id)
             r2.status = "success"; r2.output = final; r2.finished_at = int(time.time() * 1000)
             text = str(final.get("output", final)) if isinstance(final, dict) else str(final)
-            return True, text, "", run_id
+            attachments = await _collect_artifacts(db, final, t.tenant_id)
+            return True, text, "", run_id, attachments
         else:
             # 不建会话、不落 Message：无人值守地跑一次提示词
             runner = AgentRunner(
@@ -183,10 +185,48 @@ async def _do_run(db, t) -> tuple[bool, str, str, int | None]:
             async for evt in runner.run(t.prompt or t.name):
                 if evt.get("type") == "delta":
                     text += evt.get("text", "")
-            return True, text, "", None
+            return True, text, "", None, []
     except Exception as e:  # noqa: BLE001
         logger.exception("scheduled_task_run_failed", task_id=t.id)
-        return False, "", str(e)[:1000], None
+        return False, "", str(e)[:1000], None, []
+
+
+async def _collect_artifacts(db, final, tenant_id: int) -> list[dict]:
+    """从工作流最终输出里递归找出 artifact_id/file_key，查 Artifact 组附件。"""
+    from sqlalchemy import select
+
+    from app.models import Artifact
+
+    ids: set[int] = set()
+    keys: set[str] = set()
+
+    def _walk(o):
+        if isinstance(o, dict):
+            if o.get("artifact_id"):
+                try:
+                    ids.add(int(o["artifact_id"]))
+                except (TypeError, ValueError):
+                    pass
+            if o.get("file_key") and isinstance(o.get("file_key"), str):
+                keys.add(o["file_key"])
+            for v in o.values():
+                _walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                _walk(v)
+
+    _walk(final)
+    if not ids and not keys:
+        return []
+    conds = []
+    if ids:
+        conds.append(Artifact.id.in_(ids))
+    if keys:
+        conds.append(Artifact.file_key.in_(keys))
+    from sqlalchemy import or_
+
+    rows = (await db.execute(select(Artifact).where(Artifact.tenant_id == tenant_id, or_(*conds)))).scalars().all()
+    return [{"file_key": a.file_key, "name": a.file_name, "mime": a.mime, "size": a.size} for a in rows]
 
 
 async def _notify(task_id: int, *, ok: bool, result: str, error: str, manual: bool = False) -> None:
@@ -215,17 +255,32 @@ async def _notify(task_id: int, *, ok: bool, result: str, error: str, manual: bo
                 .order_by(ScheduledTaskRun.id.desc()).limit(1)
             )).scalars().first()
             summary = (result[:400] if ok else error[:400]) or ""
+            # 附件：把本轮产物读成 bytes 供邮件/外部渠道发送
+            atts: list[dict] = []
+            if last_run and last_run.attachments:
+                from app.ingest.storage import get_storage
+
+                storage = get_storage()
+                for a in last_run.attachments[:5]:
+                    try:
+                        atts.append({"name": a.get("name") or "file",
+                                     "mime": a.get("mime") or "application/octet-stream",
+                                     "data": storage.read(a["file_key"])})
+                    except Exception:  # noqa: BLE001
+                        continue
             msg = NotificationMessage(
                 title=f"{prefix}「{t.name}」{'执行成功' if ok else '执行失败'}",
                 body=summary,
                 level="success" if ok else "error",
                 kind="task", link="/scheduled", ref_type="scheduled_task", ref_id=task_id,
                 user_id=t.owner_id,
+                attachments=atts or None,
                 meta={
                     "task_id": task_id, "task_name": t.name,
                     "status": "success" if ok else "failed",
                     "duration_ms": last_run.duration_ms if last_run else None,
                     "run_id": last_run.id if last_run else None,
+                    "attachment_count": len(atts),
                 },
             )
             await dispatch(db, tenant_id=t.tenant_id, msg=msg, user_id=t.owner_id)

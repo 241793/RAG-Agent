@@ -83,6 +83,54 @@ async def embed_query(db: AsyncSession, *, tenant_id: int, query: str) -> list[f
     return vecs[0]
 
 
+# 追问/指代信号：短句 + 指代词 → 需要结合上下文改写再检索
+_REFER_WORDS = ("它", "他", "她", "这个", "那个", "这", "那", "这些", "那些", "该", "此", "上述", "前面", "刚才", "呢", "还有")
+
+
+def _needs_condense(query: str) -> bool:
+    """启发式判断 query 是否依赖上下文（短句或含指代词）。"""
+    q = (query or "").strip()
+    if not q or len(q) > 40:
+        return False
+    if len(q) <= 12:
+        return True
+    return any(w in q for w in _REFER_WORDS)
+
+
+async def condense_query(db: AsyncSession, *, tenant_id: int, query: str, history: list) -> str:
+    """多轮追问改写：把「最近上下文 + 当前 query」压成独立完整问题。失败回退原文。"""
+    from app.core.config import settings
+
+    if not getattr(settings, "query_rewrite_enabled", True):
+        return query
+    if not history or not _needs_condense(query):
+        return query
+    # 取最近 3 轮 user 消息作上下文
+    recent = [m.content for m in history[-6:] if getattr(m, "role", "") == "user" and m.content][-3:]
+    if not recent:
+        return query
+    try:
+        from app.providers.base import ChatMessage
+        from app.providers.registry import get_llm
+
+        llm, rm = await get_llm(db, tenant_id=tenant_id)
+        sys = ("你是检索查询改写器。用户的问题可能是省略主语的追问（用「它/这个/上述」等指代）。"
+               "请结合历史对话，把它改写成**一个独立、完整、可检索**的问题。"
+               "只输出改写后的问题本身，不要解释、不要引号。若问题已完整，原样输出。")
+        usr = "【历史对话】\n" + "\n".join(f"- {c}" for c in recent) + f"\n\n【当前问题】\n{query}\n\n【改写】"
+        res = await llm.chat(
+            [ChatMessage(role="system", content=sys), ChatMessage(role="user", content=usr)],
+            model=rm.model_name, stream=False, temperature=0.0,
+        )
+        out = (getattr(res, "content", "") or "").strip().strip('"').strip("'")
+        # 合理性校验：非空、不太长、不是空话
+        if 0 < len(out) <= 200:
+            return out
+    except Exception:  # noqa: BLE001
+        pass
+    return query
+
+
 async def _split_local_external(
     db: AsyncSession, kb_ids: list[int]
 ) -> tuple[list[int], list]:
@@ -186,13 +234,13 @@ async def retrieve(
         pf.accessible_kb_ids = local_ids
 
     store = get_vector_store()
-    rankings: list[list[VectorHit]] = []
+    rankings: list[tuple[str, list[VectorHit]]] = []  # (来源标签, 结果)
 
     # 外部知识库联邦检索（并发，单源失败不阻断）
     if external_kbs:
         ext_hits = await _search_external(external_kbs, query, top_k=candidate_k, warnings=warnings)
         if ext_hits:
-            rankings.append(ext_hits)
+            rankings.append(("external", ext_hits))
         if warnings:
             degraded = True
 
@@ -205,7 +253,7 @@ async def retrieve(
                                           max_scan=settings.vector_max_scan or None)
             if settings.retrieval_vec_min > 0:
                 vec_hits = [h for h in vec_hits if h.score >= settings.retrieval_vec_min]
-            rankings.append(vec_hits)
+            rankings.append(("vector", vec_hits))
         except Exception:  # noqa: BLE001
             from app.core.logging import get_logger
 
@@ -225,14 +273,25 @@ async def retrieve(
             kw_hits = await keyword_search(db, query=query, pf=pf, top_k=candidate_k)
         if settings.retrieval_bm25_min > 0:
             kw_hits = [h for h in kw_hits if h.score >= settings.retrieval_bm25_min]
-        rankings.append(kw_hits)
+        rankings.append(("bm25", kw_hits))
 
     if len(rankings) > 1:
-        fused = rrf_fuse(rankings, top_n=max(candidate_k, top_k))
+        wmap = {"vector": settings.rrf_weight_vector, "bm25": settings.rrf_weight_bm25,
+                "external": settings.rrf_weight_external}
+        fused = rrf_fuse([r for _s, r in rankings], k=settings.rrf_k,
+                         top_n=max(candidate_k, top_k),
+                         weights=[wmap.get(s, 1.0) for s, _r in rankings])
     elif rankings:
-        fused = rankings[0][:max(candidate_k, top_k)]
+        fused = rankings[0][1][:max(candidate_k, top_k)]
     else:
         fused = []
+
+    # MMR 去冗余（可选）：在重排前对候选做多样性重排，避免近重复内容挤占名额
+    if settings.mmr_enabled and len(fused) > top_k:
+        from app.retrieval.mmr import mmr_select
+
+        pool_n = settings.rerank_pool if settings.rerank_enabled else top_k
+        fused = await mmr_select(db, fused, top_k=max(top_k, pool_n), lambda_=settings.mmr_lambda)
 
     # 重排（可选）
     rerank_on = settings.rerank_enabled if use_rerank is None else use_rerank
@@ -251,10 +310,34 @@ async def retrieve(
         fused = [h for h in fused if h.score >= score_threshold]
 
     chunks = await _to_chunks(db, fused)
+    # 未命中日志（异步、不阻塞）——供知识库运营发现缺口
+    if not chunks and (query or "").strip():
+        try:
+            import asyncio
+
+            asyncio.create_task(_log_miss(ps.tenant_id, query, pf.accessible_kb_ids, ps.user_id))
+        except Exception:  # noqa: BLE001
+            pass
     return RetrievalResponse(
         query=query, chunks=chunks, timing_ms=int((time.time() - t0) * 1000),
         trusted=len(chunks) > 0, degraded=degraded, warnings=warnings,
     )
+
+
+async def _log_miss(tenant_id: int, query: str, kb_ids: list[int], user_id: int | None) -> None:
+    """独立 session 记录未命中（失败静默）。"""
+    try:
+        from app.core.db import AsyncSessionLocal
+        from app.models import RetrievalMiss
+
+        async with AsyncSessionLocal() as db:
+            db.add(RetrievalMiss(
+                tenant_id=tenant_id, query=query[:500],
+                kb_ids=",".join(str(k) for k in (kb_ids or [])[:20]), user_id=user_id,
+            ))
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def _rerank(

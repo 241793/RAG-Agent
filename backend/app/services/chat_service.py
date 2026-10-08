@@ -143,8 +143,12 @@ async def prepare(
         messages.append(ChatMessage(role="user", content=query, images=images or None))
         return messages, [], []
 
+    from app.services.retrieval_service import condense_query
+
+    # 多轮追问：结合历史改写检索用 query（喂给 LLM 的仍是原文）
+    retrieval_query = await condense_query(db, tenant_id=ps.tenant_id, query=query, history=hist)
     resp = await retrieve(
-        db, ps=ps, query=query, kb_ids=body_kb_ids or None, top_k=top_k, score_threshold=score_threshold
+        db, ps=ps, query=retrieval_query, kb_ids=body_kb_ids or None, top_k=top_k, score_threshold=score_threshold
     )
     context, citations = _build_context(resp.chunks)
     messages = [ChatMessage(role="system", content=SYSTEM_PROMPT)]

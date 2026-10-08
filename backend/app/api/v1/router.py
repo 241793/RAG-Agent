@@ -20,6 +20,7 @@ from app.api.v1 import (
     provider,
     rbac,
     record_templates,
+    reminders,
     retrieval,
     scheduled_tasks,
     security,
@@ -64,6 +65,7 @@ api_router.include_router(notifications.router)
 api_router.include_router(service_tickets.router)
 api_router.include_router(service_api.router)
 api_router.include_router(record_templates.router)
+api_router.include_router(reminders.router)
 api_router.include_router(notify_channels.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(channels.router)
