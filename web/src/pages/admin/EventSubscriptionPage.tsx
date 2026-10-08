@@ -70,7 +70,7 @@ export default function EventSubscriptionPage() {
         message="回调格式"
         description={<>
           平台向订阅 URL POST <Typography.Text code>{'{"event":"ticket.created","tenant_id":1,"ts":1700000000000,"data":{...}}'}</Typography.Text>；
-          若配置了密钥，会带请求头 <Typography.Text code>X-Signature: sha256=HMAC(secret, "{ts}.{body}")</Typography.Text>、
+          若配置了密钥，会带请求头 <Typography.Text code>{'X-Signature: sha256=HMAC(secret, "{ts}.{body}")'}</Typography.Text>、
           <Typography.Text code>X-Timestamp</Typography.Text>，供你校验来源与防重放。
         </>} />
       <Card bordered={false}>

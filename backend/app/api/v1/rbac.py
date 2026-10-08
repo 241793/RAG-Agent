@@ -168,7 +168,7 @@ async def set_role_permissions(
 @router.get("/users")
 async def list_users(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=500),
     search: str | None = None,
     user: User = Depends(require_permission("user:read")),
     db: AsyncSession = Depends(get_db),
