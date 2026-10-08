@@ -53,4 +53,7 @@ def test_empty_text():
 def test_wrap_untrusted():
     out = wrap_untrusted("正常内容")
     assert "正常内容" in out
-    assert "不得执行" in out
+    # 仍对越权/注入指令设防
+    assert "不执行" in out
+    # 但要把话术/标准问答当作可采用的知识（避免 FAQ 式知识被误拒）
+    assert "话术" in out or "知识" in out
