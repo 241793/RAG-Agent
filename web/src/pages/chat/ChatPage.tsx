@@ -7,6 +7,7 @@ import {
   SendOutlined, UserOutlined, RobotOutlined, ClearOutlined, PlusOutlined, DeleteOutlined,
   StopOutlined, ReloadOutlined, CopyOutlined, LikeOutlined, DislikeOutlined, PaperClipOutlined,
   SettingOutlined, EditOutlined, UnorderedListOutlined, ArrowDownOutlined, ToolOutlined, MoreOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -49,8 +50,9 @@ export default function ChatPage() {
   const [aiTools, setAiTools] = useState(true)      // 允许 AI 调用平台工具
   const [autoWrite, setAutoWrite] = useState(false) // 写操作免确认（全自动）
   const [input, setInput] = useState('')
-  const [msgs, setMsgs] = useState<Msg[]>([])
-  const [streaming, setStreaming] = useState(false)
+  // 按对话隔离的消息与流式状态：支持多对话并行生成，切换不打断
+  const [convMsgs, setConvMsgs] = useState<Record<string, Msg[]>>({})
+  const [streamingKeys, setStreamingKeys] = useState<Set<string>>(new Set())
   const [convId, setConvId] = useState<number | undefined>()
   const [convs, setConvs] = useState<Conversation[]>([])
   const [models, setModels] = useState<ModelConfig[]>([])
@@ -69,12 +71,58 @@ export default function ChatPage() {
   const [viewUsers, setViewUsers] = useState<{ user_id: number; name: string; conversation_count: number; channel_label?: string | null; external_id?: string | null }[]>([])
   const [viewUser, setViewUser] = useState<number | undefined>()
   const listRef = useRef<HTMLDivElement>(null)
-  const abortRef = useRef<AbortController | null>(null)
-  const convIdRef = useRef<number | undefined>(undefined)
+  const abortMap = useRef<Map<string, AbortController>>(new Map())
   const atBottomRef = useRef(true)          // 用户是否贴近底部
   const [showJump, setShowJump] = useState(false)   // 显示"回到最新"
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [highlightIdx, setHighlightIdx] = useState<number | null>(null)
+
+  // 草稿态（新对话，尚无真实 id）用固定 key 占位，收到 meta 后迁移到真实 id
+  const DRAFT = 'draft'
+  const curKey = convId != null ? String(convId) : DRAFT
+  // 派生：当前显示对话的消息与流式标志（JSX 沿用 msgs / streaming）
+  const msgs = convMsgs[curKey] || []
+  const streaming = streamingKeys.has(curKey)
+
+  // 按 key 更新某会话最后一条 assistant（供流式回调使用，与当前显示解耦）
+  const patchLast = (key: string, fn: (m: Msg) => Msg) => setConvMsgs((prev) => {
+    const arr = prev[key]
+    if (!arr?.length) return prev
+    const c = arr.slice()
+    c[c.length - 1] = fn(c[c.length - 1])
+    return { ...prev, [key]: c }
+  })
+  // 按 key 更新第 idx 条（HITL 用）
+  const patchAt = (key: string, idx: number, fn: (m: Msg) => Msg) => setConvMsgs((prev) => {
+    const arr = prev[key]
+    if (!arr) return prev
+    const c = arr.slice()
+    c[idx] = fn(c[idx])
+    return { ...prev, [key]: c }
+  })
+  const setStreamingKey = (key: string, on: boolean) => setStreamingKeys((s) => {
+    const n = new Set(s)
+    if (on) n.add(key); else n.delete(key)
+    return n
+  })
+  // 草稿 → 真实 id 的原子迁移（消息/流式标志/控制器一并搬，避免按钮闪回「发送」）
+  const adoptDraft = (realId: number) => {
+    const k = String(realId)
+    setConvMsgs((p) => {
+      const draftMsgs = p[DRAFT] || []
+      const next = { ...p }
+      delete next[DRAFT]
+      next[k] = draftMsgs
+      return next
+    })
+    setStreamingKeys((s) => {
+      if (!s.has(DRAFT)) return s
+      const n = new Set(s); n.delete(DRAFT); n.add(k); return n
+    })
+    const ctrl = abortMap.current.get(DRAFT)
+    if (ctrl) { abortMap.current.set(k, ctrl); abortMap.current.delete(DRAFT) }
+    setConvId(realId)
+  }
 
   const loadConvs = async () => {
     try {
@@ -109,7 +157,7 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => { convIdRef.current = convId; refreshUsage() }, [convId])
+  useEffect(() => { refreshUsage() }, [convId])
   useEffect(() => { loadConvs() }, [viewUser])
 
   // 仅在用户贴底时自动跟随（向上翻历史不被打断）
@@ -145,23 +193,34 @@ export default function ChatPage() {
   }
 
   const openConversation = async (id: number) => {
-    try {
-      setConvId(id)
-      const ms = await chatApi.messages(id)
-      setMsgs(ms.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({
-        id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
-        reasoning: (m as any).reasoning,
-        citations: m.citations, attachments: m.attachments, artifacts: m.artifacts, feedback: m.feedback,
-        usage: m.usage, model: m.model,
-      })))
-      // 回填模型选择器
-      const c = convs.find((x) => x.id === id)
-      if (c?.model_config_id) setModelId(c.model_config_id)
-      setConvSummary(c?.summary || null)
-    } catch (e) { message.error(errMsg(e)) }
+    setConvId(id)
+    const k = String(id)
+    // 该会话正在后台流式：本地 convMsgs[k] 一直在被 patch，不用后端历史覆盖（会冲掉进度）
+    if (!streamingKeys.has(k)) {
+      try {
+        const ms = await chatApi.messages(id)
+        setConvMsgs((p) => ({
+          ...p,
+          [k]: ms.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({
+            id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+            reasoning: (m as any).reasoning,
+            citations: m.citations, attachments: m.attachments, artifacts: m.artifacts, feedback: m.feedback,
+            usage: m.usage, model: m.model,
+          })),
+        }))
+      } catch (e) { message.error(errMsg(e)) }
+    }
+    // 回填模型选择器
+    const c = convs.find((x) => x.id === id)
+    if (c?.model_config_id) setModelId(c.model_config_id)
+    setConvSummary(c?.summary || null)
   }
 
-  const newConversation = () => { setMsgs([]); setConvId(undefined); setPendingAtts([]); setConvUsage(null); setDocKb(undefined) }
+  const newConversation = () => {
+    setConvId(undefined)  // curKey → 'draft'
+    setConvMsgs((p) => ({ ...p, [DRAFT]: [] }))
+    setPendingAtts([]); setConvUsage(null); setDocKb(undefined)
+  }
 
   // 切换模型：立即持久化到当前会话
   const changeModel = async (id: number) => {
@@ -230,29 +289,27 @@ export default function ChatPage() {
     return false
   }
 
-  const runStream = async (payload: any, handlers: StreamHandlers, url?: string) => {
+  const runStream = async (payload: any, handlers: StreamHandlers, url?: string, key: string = curKey) => {
     const ctrl = new AbortController()
-    abortRef.current = ctrl
-    setStreaming(true)
+    abortMap.current.set(key, ctrl)
+    setStreamingKey(key, true)
     try {
       await streamChat(payload, handlers, ctrl.signal, url)
     } catch (e: any) {
       if (e?.name !== 'AbortError') message.error(errMsg(e))
     } finally {
-      setStreaming(false); abortRef.current = null
+      abortMap.current.delete(key); setStreamingKey(key, false)
       void refreshUsage()
-      const cid = convIdRef.current
-      if (cid) void refreshLastAssistant(cid)
+      // 仅真实会话 id 才回拉补全 artifacts
+      const cid = Number(key)
+      if (Number.isFinite(cid) && key !== DRAFT) void refreshLastAssistant(cid)
     }
   }
 
   // 确认 AI 写操作（HITL）：执行后续跑，续跑事件渲染到同一条助手消息
   const confirmAction = async (idx: number, actionId: number, decision: 'approve' | 'reject') => {
-    setMsgs((arr) => {
-      const c = [...arr]
-      c[idx] = { ...c[idx], pendingResolved: true, streaming: decision === 'approve' }
-      return c
-    })
+    const key = curKey  // 快照，续跑期间切走也不写错会话
+    patchAt(key, idx, (m) => ({ ...m, pendingResolved: true, streaming: decision === 'approve' }))
     try {
       const token = localStorage.getItem('access_token')
       const resp = await fetch('/api/v1/chat/tool-confirm', {
@@ -264,10 +321,8 @@ export default function ChatPage() {
       const reader = resp.body.getReader()
       const decoder = new TextDecoder()
       let buf = '', ev = ''
-      // 把事件应用到第 idx 条消息
-      const patch = (fn: (m: any) => any) => setMsgs((m) => {
-        const c = [...m]; c[idx] = fn(c[idx]); return c
-      })
+      // 把事件应用到 key 会话的第 idx 条消息
+      const patch = (fn: (m: any) => any) => patchAt(key, idx, fn)
       const onToolResult = (data: any) => patch((msg) => {
         const steps = [...(msg.steps || [])]
         // 优先按 id 匹配；否则回填最后一条还没有结果的 step（HITL 挂起那条）
@@ -301,10 +356,10 @@ export default function ChatPage() {
       }
       patch((msg) => ({ ...msg, streaming: false }))
       if (decision === 'approve') message.success('已执行')
-      const cid = convIdRef.current
-      if (cid) void refreshLastAssistant(cid)
+      const cid = Number(key)
+      if (Number.isFinite(cid) && key !== DRAFT) void refreshLastAssistant(cid)
     } catch (e) {
-      patch((msg) => ({ ...msg, streaming: false }))
+      patchAt(key, idx, (m) => ({ ...m, streaming: false }))
       message.error(errMsg(e))
     }
   }
@@ -315,8 +370,13 @@ export default function ChatPage() {
     setInput('')
     const atts = pendingAtts
     setPendingAtts([])
-    setMsgs((m) => [...m, { role: 'user', content: text, attachments: atts },
-      { role: 'assistant', content: '', streaming: true }])
+    const startKey = curKey  // 快照发起时的会话键：后续切换对话不影响本条流的写入目标
+    setConvMsgs((p) => ({
+      ...p,
+      [startKey]: [...(p[startKey] || []),
+        { role: 'user' as const, content: text, attachments: atts },
+        { role: 'assistant' as const, content: '', streaming: true }],
+    }))
     await runStream(
       {
         conversation_id: convId,
@@ -330,88 +390,56 @@ export default function ChatPage() {
         allow_auto_write: autoWrite,
       },
       {
-        onMeta: (d) => { if (!convId) { setConvId(d.conversation_id) } },
-        onDelta: (t) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], content: c[last].content + t }; return c
-        }),
-        onReasoning: (t) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], reasoning: (c[last].reasoning || '') + t }; return c
-        }),
-        onToolCall: (evt: any) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], steps: [...(c[last].steps || []), { call: evt }] }; return c
-        }),
-        onToolResult: (evt: any) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          const steps = [...(c[last].steps || [])]
+        // 草稿态收到后端分配的真实 id → 原子迁移
+        onMeta: (d) => { if (startKey === DRAFT) adoptDraft(d.conversation_id) },
+        onDelta: (t) => patchLast(startKey, (m) => ({ ...m, content: m.content + t })),
+        onReasoning: (t) => patchLast(startKey, (m) => ({ ...m, reasoning: (m.reasoning || '') + t })),
+        onToolCall: (evt: any) => patchLast(startKey, (m) => ({ ...m, steps: [...(m.steps || []), { call: evt }] })),
+        onToolResult: (evt: any) => patchLast(startKey, (m) => {
+          const steps = [...(m.steps || [])]
           const i = steps.findIndex((s) => s.call.id === evt.id && !s.result)
           if (i >= 0) steps[i] = { ...steps[i], result: evt }
           else steps.push({ call: { id: evt.id, name: evt.name, arguments: '' }, result: evt })
-          c[last] = { ...c[last], steps }; return c
+          return { ...m, steps }
         }),
-        onPendingAction: (evt: any) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], pending: evt, streaming: false }; return c
-        }),
-        onCitations: (cit) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], citations: cit }; return c
-        }),
+        onPendingAction: (evt: any) => patchLast(startKey, (m) => ({ ...m, pending: evt, streaming: false })),
+        onCitations: (cit) => patchLast(startKey, (m) => ({ ...m, citations: cit })),
         onCitationCheck: (evt) => { if (evt.has_fake_cite) message.warning(evt.warning) },
-        onUsage: (u) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], usage: u }; return c
-        }),
-        onDone: (mid) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], id: mid, streaming: false }; return c
-        }),
+        onUsage: (u) => patchLast(startKey, (m) => ({ ...m, usage: u })),
+        onDone: (mid) => patchLast(startKey, (m) => ({ ...m, id: mid, streaming: false })),
         onError: (msg) => message.error(msg),
       },
+      undefined,
+      startKey,
     )
     loadConvs()
   }
 
-  const stop = () => { abortRef.current?.abort(); setStreaming(false) }
+  const stop = () => { abortMap.current.get(curKey)?.abort(); setStreamingKey(curKey, false) }
 
   const regenerate = async () => {
     if (!convId) return
+    const startKey = curKey  // 快照
     // 本地删掉最后一条 assistant，再请求重生成
-    setMsgs((m) => {
-      const c = [...m]
+    setConvMsgs((p) => {
+      const c = [...(p[startKey] || [])]
       if (c.length && c[c.length - 1].role === 'assistant') c.pop()
       c.push({ role: 'assistant', content: '', streaming: true })
-      return c
+      return { ...p, [startKey]: c }
     })
     await runStream(
       {}, // 后端从会话取最后一条 user
       {
-        onDelta: (t) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], content: c[last].content + t }; return c
-        }),
-        onReasoning: (t) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], reasoning: (c[last].reasoning || '') + t }; return c
-        }),
-        onCitations: (cit) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], citations: cit }; return c
-        }),
+        onDelta: (t) => patchLast(startKey, (m) => ({ ...m, content: m.content + t })),
+        onReasoning: (t) => patchLast(startKey, (m) => ({ ...m, reasoning: (m.reasoning || '') + t })),
+        onCitations: (cit) => patchLast(startKey, (m) => ({ ...m, citations: cit })),
         onCitationCheck: (evt) => { if (evt.has_fake_cite) message.warning(evt.warning) },
-        onUsage: (u) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], usage: u }; return c
-        }),
-        onDone: (mid) => setMsgs((m) => {
-          const c = [...m]; const last = c.length - 1
-          c[last] = { ...c[last], id: mid, streaming: false }; return c
-        }),
+        onUsage: (u) => patchLast(startKey, (m) => ({ ...m, usage: u })),
+        onDone: (mid) => patchLast(startKey, (m) => ({ ...m, id: mid, streaming: false })),
         onError: (msg) => message.error(msg),
       },
       chatApi.regenerateUrl(convId),
+      startKey,
     )
   }
 
@@ -423,16 +451,7 @@ export default function ChatPage() {
       const ms = await chatApi.messages(cid)
       const last = [...ms].reverse().find((x) => x.role === 'assistant')
       if (!last) return
-      setMsgs((arr) => {
-        const c = [...arr]
-        for (let k = c.length - 1; k >= 0; k--) {
-          if (c[k].role === 'assistant') {
-            c[k] = { ...c[k], artifacts: last.artifacts, usage: last.usage || c[k].usage, model: last.model || c[k].model }
-            break
-          }
-        }
-        return c
-      })
+      patchLast(String(cid), (m) => ({ ...m, artifacts: last.artifacts, usage: last.usage || m.usage, model: last.model || m.model }))
     } catch { /* ignore */ }
   }
 
@@ -442,7 +461,7 @@ export default function ChatPage() {
     const next = m.feedback === val ? 0 : val
     try {
       await chatApi.feedback(m.id, next)
-      setMsgs((arr) => { const c = [...arr]; c[idx] = { ...c[idx], feedback: next }; return c })
+      patchAt(curKey, idx, (msg) => ({ ...msg, feedback: next }))
     } catch (e) { message.error(errMsg(e)) }
   }
 
@@ -517,6 +536,7 @@ export default function ChatPage() {
                 ]}
               >
                 <Typography.Text ellipsis style={{ fontSize: 13 }}>
+                  {streamingKeys.has(String(c.id)) && <LoadingOutlined style={{ color: '#1677ff', marginRight: 4 }} />}
                   {c.title || '未命名'}{viewUser && c.owner_name ? ` · ${c.owner_name}` : ''}
                 </Typography.Text>
               </List.Item>
