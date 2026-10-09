@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Collapse, Empty, Input, List, message, Popconfirm, Select, Space, Tag, Tooltip, Typography,
+  Button, Card, Collapse, Dropdown, Empty, Input, List, message, Modal, Select, Space, Tag, Tooltip, Typography,
 } from 'antd'
 import {
   SendOutlined, UserOutlined, RobotOutlined, ClearOutlined, ToolOutlined,
-  StopOutlined, CopyOutlined, PlusOutlined, DeleteOutlined, LikeOutlined, DislikeOutlined,
+  StopOutlined, CopyOutlined, PlusOutlined, DeleteOutlined, EditOutlined, MoreOutlined, LikeOutlined, DislikeOutlined,
   UnorderedListOutlined, ArrowDownOutlined,
 } from '@ant-design/icons'
 import { errMsg } from '../../api/http'
@@ -135,6 +135,29 @@ export default function AgentChatPage() {
     catch (e) { message.error(errMsg(e)) }
   }
 
+  const confirmDel = (c: any) => {
+    Modal.confirm({
+      title: '删除该对话？', content: '对话记录与消息将一并删除，不可恢复。',
+      okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
+      onOk: () => delConv(c.id),
+    })
+  }
+
+  const renameConv = (c: any) => {
+    let t = c.title || ''
+    Modal.confirm({
+      title: '重命名对话', icon: null,
+      content: <Input autoFocus defaultValue={c.title || ''} maxLength={60}
+        onChange={(e) => { t = e.target.value }} />,
+      okText: '保存', cancelText: '取消',
+      onOk: async () => {
+        const name = (t || '').trim()
+        if (!name) { message.warning('名称不能为空'); throw new Error('empty') }
+        await chatApi.rename(c.id, name); loadConvs()
+      },
+    })
+  }
+
   const doFeedback = async (idx: number, val: number) => {
     const m = msgs[idx]
     if (!m.id) { message.info('请等回答完成后再评价'); return }
@@ -251,11 +274,20 @@ export default function AgentChatPage() {
               <List.Item style={{ cursor: 'pointer', background: c.id === convId ? '#e6f4ff' : undefined, padding: '6px 10px' }}
                 onClick={() => openConversation(c.id)}
                 actions={[
-                  <Popconfirm key="d" title="删除该对话？" description="对话记录与消息将一并删除，不可恢复。"
-                    okText="删除" okButtonProps={{ danger: true }} cancelText="取消"
-                    onConfirm={() => delConv(c.id)}>
-                    <DeleteOutlined onClick={(e) => e.stopPropagation()} />
-                  </Popconfirm>,
+                  <Dropdown key="more" trigger={['click']} menu={{
+                    items: [
+                      { key: 'rename', label: '重命名', icon: <EditOutlined /> },
+                      { type: 'divider' },
+                      { key: 'delete', label: '删除对话', icon: <DeleteOutlined />, danger: true },
+                    ],
+                    onClick: ({ key, domEvent }) => {
+                      domEvent.stopPropagation()
+                      if (key === 'rename') renameConv(c)
+                      else if (key === 'delete') confirmDel(c)
+                    },
+                  }}>
+                    <MoreOutlined onClick={(e) => e.stopPropagation()} />
+                  </Dropdown>,
                 ]}>
                 <Typography.Text ellipsis style={{ fontSize: 13 }}>{c.title || '未命名'}</Typography.Text>
               </List.Item>

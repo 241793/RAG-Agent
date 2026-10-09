@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Collapse, Divider, Drawer, Dropdown, Empty, Input, List, message, Modal, Popconfirm, Select, Slider,
+  Button, Card, Collapse, Divider, Drawer, Dropdown, Empty, Input, List, message, Modal, Select, Slider,
   Space, Switch, Tag, Tooltip, Typography, Upload,
 } from 'antd'
 import {
@@ -231,6 +231,15 @@ export default function ChatPage() {
   const delConversation = async (id: number) => {
     try { await chatApi.remove(id); loadConvs(); if (convId === id) newConversation() }
     catch (e) { message.error(errMsg(e)) }
+  }
+
+  const confirmDelete = (c: Conversation) => {
+    Modal.confirm({
+      title: '删除该对话？',
+      content: '对话记录与消息将一并删除，不可恢复。',
+      okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
+      onOk: () => delConversation(c.id),
+    })
   }
 
   const renameConversation = (c: Conversation) => {
@@ -538,26 +547,25 @@ export default function ChatPage() {
                 actions={viewUser ? [] : [
                   <Dropdown key="more" trigger={['click']} menu={{
                     items: [
+                      { key: 'rename', label: '重命名', icon: <EditOutlined /> },
+                      { type: 'divider' },
                       { key: 'md', label: '导出 Markdown' },
                       { key: 'pdf', label: '导出 PDF' },
                       { key: 'docx', label: '导出 Word' },
-                      { type: 'divider' },
                       { key: 'share', label: '生成分享链接' },
+                      { type: 'divider' },
+                      { key: 'delete', label: '删除对话', icon: <DeleteOutlined />, danger: true },
                     ],
                     onClick: ({ key, domEvent }) => {
                       domEvent.stopPropagation()
-                      if (key === 'share') shareConversation(c)
+                      if (key === 'rename') renameConversation(c)
+                      else if (key === 'share') shareConversation(c)
+                      else if (key === 'delete') confirmDelete(c)
                       else exportConversation(c, key as 'md' | 'pdf' | 'docx')
                     },
                   }}>
                     <MoreOutlined onClick={(e) => e.stopPropagation()} />
                   </Dropdown>,
-                  <EditOutlined key="r" onClick={(e) => { e.stopPropagation(); renameConversation(c) }} />,
-                  <Popconfirm key="d" title="删除该对话？" description="对话记录与消息将一并删除，不可恢复。"
-                    okText="删除" okButtonProps={{ danger: true }} cancelText="取消"
-                    onConfirm={() => delConversation(c.id)}>
-                    <DeleteOutlined onClick={(e) => e.stopPropagation()} />
-                  </Popconfirm>,
                 ]}
               >
                 <Typography.Text ellipsis style={{ fontSize: 13 }}>
