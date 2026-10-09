@@ -38,10 +38,11 @@ export default function DashboardPage() {
   useEffect(() => {
     (async () => {
       try {
+        // 每项各自兜底：即便某项无权限（403）也不影响整页渲染
         const [k, p, c, u, a] = await Promise.all([
-          kbApi.list(),
-          canModel ? providerApi.list() : Promise.resolve([] as Provider[]),
-          chatApi.conversations(),
+          kbApi.list().catch(() => [] as KB[]),
+          canModel ? providerApi.list().catch(() => [] as Provider[]) : Promise.resolve([] as Provider[]),
+          chatApi.conversations().catch(() => [] as Conversation[]),
           usageApi.summary(30).catch(() => null),
           auditApi.list({ page: 1, page_size: 8 }).catch(() => ({ items: [] })),
         ])

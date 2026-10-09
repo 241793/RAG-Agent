@@ -360,3 +360,82 @@ def test_registration_sends_admin_notification():
     import asyncio
 
     asyncio.new_event_loop().run_until_complete(_run_registration_notify())
+
+
+# ==================== 审核通过授予基础角色 ====================
+def test_approve_grants_default_role():
+    """审核通过注册申请时须授予基础角色，否则新用户权限为空、全站 403。"""
+    import inspect
+
+    from app.api.v1 import rbac
+
+    src = inspect.getsource(rbac.approve_user)
+    assert "_grant_default_viewer_role" in src
+    assert 'if not u.is_admin' in src
+
+
+def test_grant_default_role_is_idempotent():
+    """管理员建号与审核通过共用同一幂等辅助函数。"""
+    import inspect
+
+    from app.api.v1 import rbac
+
+    helper = inspect.getsource(rbac._grant_default_viewer_role)
+    assert "exists" in helper, "应检查是否已授予，避免重复"
+    assert "_grant_default_viewer_role" in inspect.getsource(rbac.create_user)
+
+
+async def _run_approve_grants_role():
+    from sqlalchemy import select
+
+    from app.core.db import AsyncSessionLocal, init_models
+    from app.core.security import hash_password
+    from app.models import Role, Tenant, User, UserRole
+
+    await init_models()
+    async with AsyncSessionLocal() as db:
+        t = (await db.execute(select(Tenant).order_by(Tenant.id))).scalars().first()
+        if not t:
+            t = Tenant(name="RG", slug="rg"); db.add(t); await db.flush()
+        # 确保内置 viewer 角色存在（测试库未必跑过 seed）
+        viewer = (await db.execute(select(Role).where(
+            Role.tenant_id.is_(None), Role.code == "viewer"))).scalar_one_or_none()
+        if not viewer:
+            db.add(Role(tenant_id=None, code="viewer", name="普通用户", is_system=True, scope="tenant"))
+            await db.flush()
+        admin = (await db.execute(select(User).where(
+            User.tenant_id == t.id, User.is_admin.is_(True)))).scalars().first()
+        if not admin:
+            admin = User(tenant_id=t.id, username="rg_admin", password_hash=hash_password("x"),
+                         is_admin=True, status="active")
+            db.add(admin); await db.flush()
+        # 建一个待审核用户
+        u = User(tenant_id=t.id, username=f"rg_{admin.id}_{t.id}", password_hash=hash_password("x"),
+                 is_admin=False, status="active", approval_status="pending")
+        db.add(u); await db.flush()
+        uid, tid = u.id, t.id
+        await db.commit()
+
+    from app.api.v1.rbac import approve_user
+
+    async with AsyncSessionLocal() as db:
+        adm = await db.get(User, admin.id)
+        await approve_user(uid, user=adm, db=db)
+        await db.commit()
+
+    async with AsyncSessionLocal() as db:
+        viewer = (await db.execute(select(Role).where(
+            Role.tenant_id.is_(None), Role.code == "viewer"))).scalar_one_or_none()
+        link = (await db.execute(select(UserRole).where(
+            UserRole.user_id == uid, UserRole.role_id == viewer.id))).scalar_one_or_none()
+        assert link is not None, "审核通过后应授予普通用户角色"
+        # 清理
+        u = await db.get(User, uid)
+        await db.delete(u)
+        await db.commit()
+
+
+def test_approve_actually_grants_role():
+    import asyncio
+
+    asyncio.new_event_loop().run_until_complete(_run_approve_grants_role())

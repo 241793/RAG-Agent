@@ -243,6 +243,34 @@ async def list_pending_users(
     return out
 
 
+async def _grant_default_viewer_role(db: AsyncSession, *, tenant_id: int, user_id: int) -> bool:
+    """给用户授予内置「普通用户」角色（幂等）。
+
+    避免新用户权限集为空导致全站 403——管理员建号、审核通过注册申请都需调用。
+    返回是否实际新增。
+    """
+    viewer = (
+        await db.execute(select(Role).where(Role.tenant_id.is_(None), Role.code == "viewer"))
+    ).scalar_one_or_none()
+    if not viewer:
+        return False
+    exists = (
+        await db.execute(
+            select(UserRole).where(UserRole.user_id == user_id, UserRole.role_id == viewer.id)
+        )
+    ).scalar_one_or_none()
+    if exists:
+        return False
+    db.add(
+        UserRole(
+            tenant_id=tenant_id, user_id=user_id, role_id=viewer.id,
+            scope_type="tenant", scope_id=0,
+        )
+    )
+    await db.flush()
+    return True
+
+
 @router.post("/users/{user_id}/approve")
 @audited("user.approve", "user", id_arg="user_id")
 async def approve_user(
@@ -250,7 +278,7 @@ async def approve_user(
     user: User = Depends(require_permission("user:manage")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """审核通过：允许该用户登录。"""
+    """审核通过：允许该用户登录，并授予基础权限（普通用户角色）。"""
     from app.models.base import utcnow
 
     u = await db.get(User, user_id)
@@ -260,6 +288,9 @@ async def approve_user(
     u.reviewed_by = user.id
     u.reviewed_at = utcnow()
     await db.flush()
+    # 授予基础角色，否则新用户权限集为空会全站 403
+    if not u.is_admin:
+        await _grant_default_viewer_role(db, tenant_id=u.tenant_id, user_id=u.id)
     # 通知申请人审核结果（站内，随本事务提交）
     from app.services.user_notify import notify_user_review_result
 
@@ -325,22 +356,7 @@ async def create_user(
     await db.flush()
     # 自动授予内置「普通用户」角色，避免新用户权限集为空而全站 403
     if not u.is_admin:
-        viewer = (
-            await db.execute(
-                select(Role).where(Role.tenant_id.is_(None), Role.code == "viewer")
-            )
-        ).scalar_one_or_none()
-        if viewer:
-            db.add(
-                UserRole(
-                    tenant_id=user.tenant_id,
-                    user_id=u.id,
-                    role_id=viewer.id,
-                    scope_type="tenant",
-                    scope_id=0,
-                )
-            )
-            await db.flush()
+        await _grant_default_viewer_role(db, tenant_id=user.tenant_id, user_id=u.id)
     return u
 
 
