@@ -281,7 +281,9 @@ export const docApi = {
   setTags: (id: number, tags: string[]) => http.put<Doc>(`/documents/${id}/tags`, { tags }).then((r) => r.data),
   setVisibility: (id: number, visibility: string) =>
     http.patch<Doc>(`/documents/${id}/visibility`, { visibility }).then((r) => r.data),
-  acl: (id: number) => http.get(`/documents/${id}/acl`).then((r) => r.data),
+  acl: (id: number) =>
+    http.get<{ visibility: string; items: { id: number; principal_id: number; effect: string; principal_name?: string | null }[] }>(
+      `/documents/${id}/acl`).then((r) => r.data),
   addAcl: (id: number, data: { principal_type: string; principal_id: number; effect: string }) =>
     http.post(`/documents/${id}/acl`, data).then((r) => r.data),
   removeAcl: (id: number, aclId: number) =>

@@ -1,7 +1,8 @@
 """BM25 索引的进程内缓存：避免每次检索全库重新分词/重建 idf。
 
-key = (tenant_id, 代次, kb 集合或 None)。文档增删时 bump 代次使缓存失效。
-用简单的容量上限淘汰，防多租户累积。
+key = (tenant_id, 代次, kb 集合, bypass_kb, 主体集合)。文档增删时 bump 代次使缓存失效。
+关键：缓存的是「已按 ACL 过滤后的 rows + 索引」，因此键必须包含 principals——
+不同权限主体可见的 chunk 集合不同，漏掉 principals 会串权限。用容量上限淘汰防累积。
 """
 from __future__ import annotations
 
@@ -23,21 +24,28 @@ def invalidate_tenant(tenant_id: int) -> None:
     _GEN[tenant_id] = _gen(tenant_id) + 1
 
 
-def make_key(tenant_id: int, kb_ids: list[int] | None, bypass_kb: bool) -> tuple:
+def make_key(
+    tenant_id: int, kb_ids: list[int] | None, bypass_kb: bool, principals: list[int] | None = None
+) -> tuple:
     kb_key = None if bypass_kb else frozenset(kb_ids or [])
-    return (tenant_id, _gen(tenant_id), kb_key, bypass_kb)
+    # principals 参与键：管理员/不同部门可见行不同，避免跨主体串缓存
+    p_key = frozenset(principals or [])
+    return (tenant_id, _gen(tenant_id), kb_key, bypass_kb, p_key)
 
 
-def get(tenant_id: int, kb_ids: list[int] | None, bypass_kb: bool):
-    key = make_key(tenant_id, kb_ids, bypass_kb)
+def get(tenant_id: int, kb_ids: list[int] | None, bypass_kb: bool, principals: list[int] | None = None):
+    key = make_key(tenant_id, kb_ids, bypass_kb, principals)
     if key in _CACHE:
         _CACHE.move_to_end(key)
         return _CACHE[key]
     return None
 
 
-def put(tenant_id: int, kb_ids: list[int] | None, bypass_kb: bool, rows: list) -> tuple[BM25, list]:
-    key = make_key(tenant_id, kb_ids, bypass_kb)
+def put(
+    tenant_id: int, kb_ids: list[int] | None, bypass_kb: bool, rows: list,
+    principals: list[int] | None = None,
+) -> tuple[BM25, list]:
+    key = make_key(tenant_id, kb_ids, bypass_kb, principals)
     index = build_index(rows)
     _CACHE[key] = (index, rows)
     _CACHE.move_to_end(key)

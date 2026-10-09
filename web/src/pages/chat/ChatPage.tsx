@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Collapse, Drawer, Dropdown, Empty, Input, List, message, Modal, Select, Slider,
+  Button, Card, Collapse, Divider, Drawer, Dropdown, Empty, Input, List, message, Modal, Popconfirm, Select, Slider,
   Space, Switch, Tag, Tooltip, Typography, Upload,
 } from 'antd'
 import {
@@ -61,7 +61,7 @@ export default function ChatPage() {
   const [showParams, setShowParams] = useState(false)
   const [pendingAtts, setPendingAtts] = useState<Attachment[]>([])
   const [docKb, setDocKb] = useState<number | undefined>()
-  const [docPreview, setDocPreview] = useState<{ title: string; content: string } | null>(null)
+  const [docPreview, setDocPreview] = useState<{ title: string; content: string; page?: number | null; snippet?: string | null; highlightFrom?: number | null; highlightLen?: number } | null>(null)
   // 用量统计
   const [todayUsage, setTodayUsage] = useState<UsageTotals | null>(null)
   const [convUsage, setConvUsage] = useState<UsageTotals | null>(null)
@@ -233,10 +233,20 @@ export default function ChatPage() {
     catch (e) { message.error(errMsg(e)) }
   }
 
-  const renameConversation = async (c: Conversation) => {
-    const t = window.prompt('重命名会话', c.title)
-    if (!t) return
-    try { await chatApi.rename(c.id, t); loadConvs() } catch (e) { message.error(errMsg(e)) }
+  const renameConversation = (c: Conversation) => {
+    let t = c.title || ''
+    Modal.confirm({
+      title: '重命名对话',
+      icon: null,
+      content: <Input autoFocus defaultValue={c.title || ''} maxLength={60}
+        onChange={(e) => { t = e.target.value }} onPressEnter={(e) => { t = (e.target as HTMLInputElement).value }} />,
+      okText: '保存', cancelText: '取消',
+      onOk: async () => {
+        const name = (t || '').trim()
+        if (!name) { message.warning('名称不能为空'); throw new Error('empty') }
+        await chatApi.rename(c.id, name); loadConvs()
+      },
+    })
   }
 
   const exportConversation = (c: any, fmt: 'md' | 'pdf' | 'docx') => {
@@ -468,7 +478,18 @@ export default function ChatPage() {
   const openCitation = async (c: Citation) => {
     try {
       const r = await docApi.content(c.doc_id)
-      setDocPreview({ title: r.title, content: r.content })
+      // 优先滚动到引用片段的位置（分块内容通常就在正文里）
+      const full = r.content || ''
+      const snip = (c.snippet || '').trim()
+      const idx = snip ? full.indexOf(snip.slice(0, 60)) : -1
+      setDocPreview({
+        title: r.title,
+        content: full,
+        page: c.page ?? null,
+        snippet: snip || null,
+        highlightFrom: idx >= 0 ? idx : null,
+        highlightLen: idx >= 0 ? snip.length : 0,
+      })
     } catch (e) { message.error(errMsg(e)) }
   }
 
@@ -532,7 +553,11 @@ export default function ChatPage() {
                     <MoreOutlined onClick={(e) => e.stopPropagation()} />
                   </Dropdown>,
                   <EditOutlined key="r" onClick={(e) => { e.stopPropagation(); renameConversation(c) }} />,
-                  <DeleteOutlined key="d" onClick={(e) => { e.stopPropagation(); delConversation(c.id) }} />,
+                  <Popconfirm key="d" title="删除该对话？" description="对话记录与消息将一并删除，不可恢复。"
+                    okText="删除" okButtonProps={{ danger: true }} cancelText="取消"
+                    onConfirm={() => delConversation(c.id)}>
+                    <DeleteOutlined onClick={(e) => e.stopPropagation()} />
+                  </Popconfirm>,
                 ]}
               >
                 <Typography.Text ellipsis style={{ fontSize: 13 }}>
@@ -776,9 +801,34 @@ export default function ChatPage() {
 
       {/* 引用原文预览 */}
       <Drawer title={docPreview?.title || '文档预览'} width={640} open={!!docPreview} onClose={() => setDocPreview(null)}>
-        <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
-          {docPreview?.content || '(无内容)'}
-        </Typography.Paragraph>
+        {docPreview?.page != null && (
+          <Tag color="blue" style={{ marginBottom: 8 }}>第 {docPreview.page} 页</Tag>
+        )}
+        {docPreview?.snippet && (
+          <>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>引用的原文片段：</Typography.Text>
+            <div style={{
+              background: '#fffbe6', borderLeft: '3px solid #faad14', padding: '8px 12px',
+              margin: '6px 0 12px', borderRadius: 4, whiteSpace: 'pre-wrap', fontSize: 13,
+            }}>{docPreview.snippet}</div>
+            <Divider style={{ margin: '8px 0' }} />
+          </>
+        )}
+        {docPreview && (() => {
+          const full = docPreview.content || ''
+          const from = docPreview.highlightFrom
+          const len = docPreview.highlightLen || 0
+          if (from == null || from < 0 || !len) {
+            return <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>{full || '(无内容)'}</Typography.Paragraph>
+          }
+          return (
+            <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
+              {full.slice(0, from)}
+              <mark style={{ background: '#ffe58f', padding: '1px 0' }}>{full.slice(from, from + len)}</mark>
+              {full.slice(from + len)}
+            </Typography.Paragraph>
+          )
+        })()}
       </Drawer>
 
       <MessageOutline

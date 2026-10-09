@@ -35,6 +35,58 @@ def group_principal(group_id: int) -> int:
     return GROUP_BASE + group_id
 
 
+def decode_principal(pid: int) -> tuple[str, int]:
+    """把 principal 编码还原为 (类型, 原始 id)。类型：public/user/dept/role/group。"""
+    if pid == PUBLIC:
+        return "public", 0
+    if pid >= GROUP_BASE:
+        return "group", pid - GROUP_BASE
+    if pid >= ROLE_BASE:
+        return "role", pid - ROLE_BASE
+    if pid >= DEPT_BASE:
+        return "dept", pid - DEPT_BASE
+    if pid >= USER_BASE:
+        return "user", pid - USER_BASE
+    return "unknown", pid
+
+
+async def describe_principals(db, principal_ids: list[int]) -> dict[int, str]:
+    """批量把 principal_id 解析成可读名称（用户/部门/角色/组），供前端展示。
+
+    查不到的（已删除对象）回落为「类型 #id」，保证不丢行。
+    """
+    from sqlalchemy import select
+
+    from app.models import Department, Role, User, UserGroup
+
+    out: dict[int, str] = {}
+    buckets: dict[str, list[int]] = {"user": [], "dept": [], "role": [], "group": []}
+    for pid in principal_ids:
+        kind, rid = decode_principal(pid)
+        if kind in buckets:
+            buckets[kind].append(rid)
+        else:
+            out[pid] = "公开"
+
+    label = {"user": "用户", "dept": "部门", "role": "角色", "group": "用户组"}
+    model_of = {"user": User, "dept": Department, "role": Role, "group": UserGroup}
+    enc_of = {
+        "user": user_principal, "dept": dept_principal,
+        "role": role_principal, "group": group_principal,
+    }
+    for kind, ids in buckets.items():
+        if not ids:
+            continue
+        rows = (await db.execute(select(model_of[kind]).where(model_of[kind].id.in_(ids)))).scalars().all()
+        found: dict[int, str] = {}
+        for r in rows:
+            nm = getattr(r, "display_name", None) or getattr(r, "name", None) or getattr(r, "username", None)
+            found[r.id] = nm or f"{label[kind]} #{r.id}"
+        for rid in ids:
+            out[enc_of[kind](rid)] = found.get(rid) or f"{label[kind]} #{rid}"
+    return out
+
+
 @dataclass
 class PrincipalSet:
     """某次请求的主体集合（查询期解析，可缓存）。"""

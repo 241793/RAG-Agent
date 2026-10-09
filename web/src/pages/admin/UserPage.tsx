@@ -3,7 +3,7 @@ import {
   Button, Card, Divider, Form, Input, message, Modal, Popconfirm, Select, Space, Table, Tag,
 } from 'antd'
 import { PlusOutlined, DeleteOutlined, UserAddOutlined, KeyOutlined } from '@ant-design/icons'
-import { rbacApi, type Role, type UserListItem, type UserRoleItem, type DeptNode } from '../../api'
+import { rbacApi, kbApi, type Role, type UserListItem, type UserRoleItem, type DeptNode } from '../../api'
 import { errMsg } from '../../api/http'
 import PageContainer from '../../components/PageContainer'
 import { useAuth } from '../../stores/auth'
@@ -28,6 +28,8 @@ export default function UserPage() {
   const [search, setSearch] = useState('')
   const [roles, setRoles] = useState<Role[]>([])
   const [depts, setDepts] = useState<{ value: number; label: string }[]>([])
+  const [kbs, setKbs] = useState<{ value: number; label: string }[]>([])
+  const [scopeType, setScopeType] = useState<string>('tenant')
   const [open, setOpen] = useState(false)
   const [editUser, setEditUser] = useState<UserListItem | null>(null)
   const [form] = Form.useForm()
@@ -46,6 +48,7 @@ export default function UserPage() {
       setRoles(await rbacApi.roles())
       const tree = await rbacApi.deptTree()
       setDepts(flattenDepts(tree))
+      kbApi.list().then((ks) => setKbs(ks.map((k) => ({ value: k.id, label: k.name })))).catch(() => {})
     } catch (e) { message.error(errMsg(e)) }
   }
   useEffect(() => { load() }, [page, search])
@@ -186,15 +189,26 @@ export default function UserPage() {
             <Select placeholder="选择角色" style={{ width: 160 }} options={roles.map((r) => ({ value: r.id, label: `${r.name}（${r.scope}）` }))} />
           </Form.Item>
           <Form.Item name="scope_type">
-            <Select style={{ width: 120 }} options={[
+            <Select style={{ width: 120 }} onChange={(v) => {
+              setScopeType(v)
+              // 切换范围类型时重置 scope_id，避免残留上一个类型的 id
+              grantForm.setFieldValue('scope_id', v === 'department' ? undefined : 0)
+            }} options={[
               { value: 'tenant', label: '租户' },
               { value: 'department', label: '部门' },
               { value: 'kb', label: '知识库' },
               { value: 'platform', label: '平台' },
             ]} />
           </Form.Item>
-          <Form.Item name="scope_id">
-            <Input type="number" style={{ width: 100 }} placeholder="scope_id" />
+          <Form.Item name="scope_id" rules={[{ required: scopeType === 'department' || scopeType === 'kb', message: '请选择范围' }]}>
+            {scopeType === 'department' ? (
+              <Select placeholder="选择部门" style={{ width: 180 }} options={depts} showSearch optionFilterProp="label" />
+            ) : scopeType === 'kb' ? (
+              <Select placeholder="选择知识库" style={{ width: 180 }} options={kbs} showSearch optionFilterProp="label" />
+            ) : (
+              <Input type="number" style={{ width: 100 }} placeholder="scope_id"
+                disabled={scopeType === 'tenant' || scopeType === 'platform'} />
+            )}
           </Form.Item>
           <Button type="primary" icon={<UserAddOutlined />} onClick={grant}>授予</Button>
         </Form>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Collapse, Empty, Input, List, message, Select, Space, Tag, Tooltip, Typography,
+  Button, Card, Collapse, Empty, Input, List, message, Popconfirm, Select, Space, Tag, Tooltip, Typography,
 } from 'antd'
 import {
   SendOutlined, UserOutlined, RobotOutlined, ClearOutlined, ToolOutlined,
@@ -250,7 +250,13 @@ export default function AgentChatPage() {
             renderItem={(c: any) => (
               <List.Item style={{ cursor: 'pointer', background: c.id === convId ? '#e6f4ff' : undefined, padding: '6px 10px' }}
                 onClick={() => openConversation(c.id)}
-                actions={[<DeleteOutlined key="d" onClick={(e) => { e.stopPropagation(); delConv(c.id) }} />]}>
+                actions={[
+                  <Popconfirm key="d" title="删除该对话？" description="对话记录与消息将一并删除，不可恢复。"
+                    okText="删除" okButtonProps={{ danger: true }} cancelText="取消"
+                    onConfirm={() => delConv(c.id)}>
+                    <DeleteOutlined onClick={(e) => e.stopPropagation()} />
+                  </Popconfirm>,
+                ]}>
                 <Typography.Text ellipsis style={{ fontSize: 13 }}>{c.title || '未命名'}</Typography.Text>
               </List.Item>
             )}

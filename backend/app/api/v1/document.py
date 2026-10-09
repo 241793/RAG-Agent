@@ -983,10 +983,17 @@ async def get_doc_acl(
     rows = (
         await db.execute(select(DocumentACL).where(DocumentACL.document_id == doc_id))
     ).scalars().all()
+    from app.services.permission import describe_principals
+
+    names = await describe_principals(db, [r.principal_id for r in rows])
     return {
         "visibility": doc.visibility,
         "items": [
-            {"id": r.id, "principal_id": r.principal_id, "effect": r.effect} for r in rows
+            {
+                "id": r.id, "principal_id": r.principal_id, "effect": r.effect,
+                "principal_name": names.get(r.principal_id),
+            }
+            for r in rows
         ],
     }
 

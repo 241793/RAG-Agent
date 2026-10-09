@@ -119,6 +119,13 @@ class NodeContext:
 
 
 # ==================== 节点执行器 ====================
+# LLM 节点的系统提示兜底：节点与 agent 都未配置 system 时使用，保证引用规约不缺位
+_LLM_FALLBACK_SYSTEM = (
+    "你是企业知识助手。若上下文中带有【参考资料】或带编号的检索片段，请依据资料作答并在句末标注 [n] 引用，"
+    "且不得编造引用；资料未覆盖时明确说明，并区分「知识库内容」与「模型自身知识」。用简体中文作答。"
+)
+
+
 async def _exec_start(node: dict, data: dict, ctx: NodeContext) -> dict:
     out = {}
     for inp in node.get("data", {}).get("inputs", []):
@@ -132,8 +139,9 @@ async def _exec_llm(node: dict, data: dict, ctx: NodeContext) -> dict:
     from app.providers.registry import get_llm
 
     d = node.get("data", {})
-    # 节点未配置时回退到 agent 默认
-    system = d.get("system") or ctx.default_system or ""
+    # 节点未配置时回退到 agent 默认；两者都空时用「引用规约」兜底，
+    # 保证工作流里的 AI 与问答页一样会区分【参考资料】与自身知识、标注 [n] 引用。
+    system = d.get("system") or ctx.default_system or _LLM_FALLBACK_SYSTEM
     prompt = data.get("prompt") or d.get("prompt", "")
     model_config_id = d.get("model_config_id") or ctx.default_model_config_id
     llm, rm = await get_llm(ctx.db, tenant_id=ctx.tenant_id, config_id=model_config_id)
@@ -165,7 +173,15 @@ async def _exec_retrieval(node: dict, data: dict, ctx: NodeContext) -> dict:
             src += f" 第{c.page}页"
         lines.append(f"[{i}] {src}\n{c.content}")
         cites.append({"chunk_id": c.chunk_id, "doc_id": c.doc_id, "doc_title": c.doc_title, "page": c.page, "score": c.score})
-    return {"output": "\n\n".join(lines), "citations": cites, "count": len(resp.chunks)}
+    body = "\n\n".join(lines)
+    # 与对话路径一致：给检索内容加边界标记，降低间接注入（工作流里的 LLM 节点同样受益）
+    from app.core.config import settings
+
+    if body and settings.security_guard_enabled and settings.security_guard_wrap_context:
+        from app.services.security_guard import wrap_untrusted
+
+        body = wrap_untrusted(body)
+    return {"output": body, "citations": cites, "count": len(resp.chunks)}
 
 
 async def _exec_condition(node: dict, data: dict, ctx: NodeContext) -> dict:

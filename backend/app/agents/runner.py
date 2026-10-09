@@ -29,6 +29,12 @@ DEFAULT_MAX_TURNS = 6
 LLM_TIMEOUT = 120
 TOOL_TIMEOUT = 60
 
+# 引用纪律（智能体侧）：与问答页 SYSTEM_PROMPT 的引用规则对齐，避免两入口行为不一致
+_CITATION_RULE = (
+    "若你使用了检索到的知识库资料作答，请在相应句子后标注 [n] 引用编号（与资料条目一致），"
+    "且不得编造引用编号或给自身知识标注编号；资料未覆盖时明确说明「知识库中未找到相关信息」。"
+)
+
 
 @dataclass
 class EffectiveConfig:
@@ -180,6 +186,8 @@ class AgentRunner:
         self.model_override = model_override
         # 本轮随消息上传的图片（供视觉模型）
         self.images = images or None
+        # 本次运行使用的行为模式 id（HITL 续跑时用它还原 mode 级配置，避免丢失）
+        self.mode_id: int | None = None
 
     def _inject_caps(self, eff) -> bool:
         """是否注入平台能力摘要：agent.config 显式关则关，否则用全局默认。"""
@@ -200,6 +208,8 @@ class AgentRunner:
             mode = await self.db.get(AgentMode, mode_id)
         elif self.agent.default_mode_id:
             mode = await self.db.get(AgentMode, self.agent.default_mode_id)
+        # 记住本次所用模式，供 HITL 续跑还原（_create_pending_action 会落到 raw_tool_call）
+        self.mode_id = mode.id if mode else None
 
         eff = await build_effective(self.db, self.agent, mode)
         yield {"type": "meta", "agent_id": self.agent.id, "mode_id": mode.id if mode else None}
@@ -248,6 +258,9 @@ class AgentRunner:
         messages: list[ChatMessage] = []
         if eff.system_prompt:
             messages.append(ChatMessage(role="system", content=eff.system_prompt))
+        # 引用纪律（与问答页对齐）：用到检索资料时标注 [n]，不得编造引用编号
+        if self._inject_caps(eff):
+            messages.append(ChatMessage(role="system", content=_CITATION_RULE))
         # 平台能力感知：让 AI 知道平台功能 + 当前账号权限 + 可用工具
         if self._inject_caps(eff):
             try:
@@ -365,6 +378,15 @@ class AgentRunner:
         self._maybe_schedule_compress()
 
         yield {"type": "citations", "citations": citations_json}
+        # 引用真实性校验（与问答页一致）：答案若出现不存在的 [n] 编号则告警
+        try:
+            from app.services.citation_check import check as _cite_check
+
+            cc = _cite_check(collected_text, citations_json)
+            if not cc.get("ok", True):
+                yield {"type": "citation_check", "warning": "答案包含可能不实的引用编号", **cc}
+        except Exception:  # noqa: BLE001
+            pass
         yield {"type": "usage", "usage": norm, "latency_ms": latency, "turns": turns}
         yield {"type": "done", "message_id": asst_id}
 
@@ -428,7 +450,10 @@ class AgentRunner:
             tool_name=tool.name,
             tool_kind="write",
             arguments=args,
-            raw_tool_call={"id": tc.id, "name": tc.name, "arguments": tc.arguments},
+            raw_tool_call={
+                "id": tc.id, "name": tc.name, "arguments": tc.arguments,
+                "mode_id": self.mode_id,  # 续跑时还原 mode 级配置
+            },
             summary=summary,
             status="pending",
             idempotency_key=uuid.uuid4().hex,
@@ -442,8 +467,18 @@ class AgentRunner:
         """管理员确认后：把工具结果回灌 LLM，续跑剩余轮次。
 
         messages 跨 SSE 需重建：[system] + history + [assistant(tool_calls)] + [tool(result)]。
+        mode 还原：从 action.raw_tool_call.mode_id 取回本次运行所用的行为模式，
+        否则续跑会丢失 mode 级的 system_prompt / kb 范围 / tool_config 覆盖。
         """
-        eff = await build_effective(self.db, self.agent, None)
+        raw = action.raw_tool_call or {}
+        restore_mode_id = raw.get("mode_id") or self.mode_id
+        mode = None
+        if restore_mode_id:
+            mode = await self.db.get(AgentMode, restore_mode_id)
+        elif self.agent.default_mode_id:
+            mode = await self.db.get(AgentMode, self.agent.default_mode_id)
+        self.mode_id = mode.id if mode else None
+        eff = await build_effective(self.db, self.agent, mode)
         tools = await resolve_tools(
             self.db, tool_config=eff.tool_config, skill_ids=eff.skill_ids,
             tenant_id=self.ps.tenant_id, perms=self.perms,
@@ -455,10 +490,11 @@ class AgentRunner:
         messages: list[ChatMessage] = []
         if eff.system_prompt:
             messages.append(ChatMessage(role="system", content=eff.system_prompt))
+        if self._inject_caps(eff):
+            messages.append(ChatMessage(role="system", content=_CITATION_RULE))
         if self.summary:
             messages.append(ChatMessage(role="system", content=f"[历史对话摘要]\n{self.summary}"))
         messages.extend(self.history)
-        raw = action.raw_tool_call or {}
         messages.append(
             ChatMessage(
                 role="assistant",

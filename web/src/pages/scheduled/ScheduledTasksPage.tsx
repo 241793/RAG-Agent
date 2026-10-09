@@ -132,9 +132,15 @@ export default function ScheduledTasksPage() {
               render: (_: any, r: ScheduledTask) => r.trigger_kind === 'event'
                 ? <Tag color="gold" icon={<ThunderboltOutlined />}>事件</Tag>
                 : <Tag color="blue">定时</Tag> },
-            { title: '目标', dataIndex: 'target_type', width: 110,
-              render: (v: string, r: ScheduledTask) => <Tag color={v === 'workflow' ? 'purple' : 'blue'}>
-                {v === 'workflow' ? '工作流' : '提示词'} #{r.agent_id}</Tag> },
+            { title: '目标', dataIndex: 'target_type', width: 150,
+              render: (v: string, r: ScheduledTask) => {
+                const ag = agents.find((a) => a.id === r.agent_id)
+                return <Tooltip title={ag?.name || `智能体 #${r.agent_id}`}>
+                  <Tag color={v === 'workflow' ? 'purple' : 'blue'}>
+                    {v === 'workflow' ? '工作流' : '提示词'}·{ag?.name || `#${r.agent_id}`}
+                  </Tag>
+                </Tooltip>
+              } },
             { title: '频率', width: 220, ellipsis: true, render: (_: any, r: ScheduledTask) => <code>{describe(r)}</code> },
             { title: '下次运行', dataIndex: 'next_run_at', width: 170, render: fmtTime },
             { title: '上次', width: 170,

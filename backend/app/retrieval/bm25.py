@@ -76,8 +76,12 @@ def build_index(rows: list[tuple]) -> BM25:
 async def keyword_search(
     db: AsyncSession, *, query: str, pf: PermissionFilter, top_k: int,
     index: BM25 | None = None, rows: list[tuple] | None = None,
+    on_build: "callable | None" = None,
 ) -> list[VectorHit]:
-    """关键词检索。传入预构建的 index+rows（缓存）可避免每次全库重分词。"""
+    """关键词检索。传入预构建的 index+rows（缓存）可避免每次全库重分词。
+
+    on_build(index, rows)：本次**新建**了索引时回调，供调用方写入缓存。
+    """
     if index is None or rows is None:
         dialect = _dialect_of(db)
         stmt = select(
@@ -93,6 +97,11 @@ async def keyword_search(
         pset = set(pf.principals)
         rows = [r for r in rows if chunk_visible_py(pset, r[7], r[8], r[9])]
         index = build_index(rows)
+        if on_build is not None:
+            try:
+                on_build(index, rows)
+            except Exception:  # noqa: BLE001
+                pass
 
     if not rows:
         return []

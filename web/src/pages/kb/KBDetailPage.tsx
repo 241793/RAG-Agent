@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, Button, Card, Descriptions, Divider, Drawer, Dropdown, Empty, Form, Input, List, message, Modal, Popconfirm, Progress,
-  Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Tooltip, Typography, Upload,
+  Segmented, Select, Slider, Space, Spin, Switch, Table, Tabs, Tag, Tooltip, Typography, Upload,
 } from 'antd'
 import {
   UploadOutlined, ReloadOutlined, DeleteOutlined, ArrowLeftOutlined,
@@ -92,6 +92,7 @@ export default function KBDetailPage() {
   const [preview, setPreview] = useState<Doc | null>(null)
   const [chunks, setChunks] = useState<{ doc: Doc; total: number; items: any[] } | null>(null)
   const [chunkEdit, setChunkEdit] = useState<{ id: number; text: string } | null>(null)
+  const [splitCtx, setSplitCtx] = useState<{ chunkId: number; content: string; offset: number } | null>(null)
   const [members, setMembers] = useState<KBMember[]>([])
   const [users, setUsers] = useState<any[]>([])
   const [roles, setRoles] = useState<any[]>([])
@@ -102,8 +103,9 @@ export default function KBDetailPage() {
   const [folders, setFolders] = useState<{ id: number; name: string; parent_id: number | null }[]>([])
   const [folderFilter, setFolderFilter] = useState<number | 'all' | 'root'>('all')
   const [selectedDocIds, setSelectedDocIds] = useState<number[]>([])
+  const [batchBusy, setBatchBusy] = useState(false)
   const [aclDoc, setAclDoc] = useState<Doc | null>(null)
-  const [aclList, setAclList] = useState<{ id: number; principal_id: number; effect: string }[]>([])
+  const [aclList, setAclList] = useState<{ id: number; principal_id: number; effect: string; principal_name?: string | null }[]>([])
   const [entryOpen, setEntryOpen] = useState(false)
   const [entryEdit, setEntryEdit] = useState<Doc | null>(null)
   const [entryTitle, setEntryTitle] = useState('')
@@ -358,18 +360,29 @@ export default function KBDetailPage() {
 
   const batchMove = async (folderId: number | null) => {
     if (!selectedDocIds.length) return
+    setBatchBusy(true)
     try {
       const r = await docApi.batchMove(selectedDocIds, folderId)
       message.success(r.message || '已移动'); setSelectedDocIds([]); loadDocs()
-    } catch (e) { message.error(errMsg(e)) }
+    } catch (e) { message.error(errMsg(e)) } finally { setBatchBusy(false) }
   }
 
-  const batchVisibility = async (visibility: string) => {
+  const batchVisibility = (visibility: string) => {
     if (!selectedDocIds.length) return
-    try {
-      const r = await docApi.batchVisibility(selectedDocIds, visibility)
-      message.success(r.message || '已更新'); setSelectedDocIds([]); loadDocs()
-    } catch (e) { message.error(errMsg(e)) }
+    const label = { inherit: '继承知识库', public: '公开', restricted: '受限' }[visibility] || visibility
+    // 可见性影响访问权限，属敏感操作：二次确认后再提交
+    Modal.confirm({
+      title: `将 ${selectedDocIds.length} 个文档可见性改为「${label}」？`,
+      content: '改「公开」会让本租户全员可检索到这些文档；「受限」则仅命中下方授权的主体可检索。',
+      okText: '确认修改', cancelText: '取消',
+      onOk: async () => {
+        setBatchBusy(true)
+        try {
+          const r = await docApi.batchVisibility(selectedDocIds, visibility)
+          message.success(r.message || '已更新'); setSelectedDocIds([]); loadDocs()
+        } catch (e) { message.error(errMsg(e)) } finally { setBatchBusy(false) }
+      },
+    })
   }
 
   const batchReprocess = async () => {
@@ -417,13 +430,17 @@ export default function KBDetailPage() {
 
   const splitChunk = async (chunkId: number, content: string) => {
     if (!chunks) return
-    const mid = Math.floor(content.length / 2)
-    const off = window.prompt('在该分块内的第几个字符处切分？', String(mid))
-    if (off == null) return
-    const n = Number(off)
-    if (!Number.isFinite(n)) return
-    try { await docApi.splitChunk(chunks.doc.id, chunkId, n); message.success('已拆分'); reloadChunks() }
-    catch (e) { message.error(errMsg(e)) }
+    setSplitCtx({ chunkId, content, offset: Math.floor(content.length / 2) })
+  }
+
+  const doSplitChunk = async () => {
+    if (!chunks || !splitCtx) return
+    const n = splitCtx.offset
+    if (n <= 0 || n >= splitCtx.content.length) { message.warning('切分点需在文本中间'); return }
+    try {
+      await docApi.splitChunk(chunks.doc.id, splitCtx.chunkId, n)
+      message.success('已拆分'); setSplitCtx(null); reloadChunks()
+    } catch (e) { message.error(errMsg(e)) }
   }
 
   const setVisibility = async (d: Doc, v: string) => {
@@ -581,6 +598,13 @@ export default function KBDetailPage() {
       )}
 
       <Tabs
+        onChange={(k) => {
+          // 切到巡检 Tab 时自动加载（含未命中查询），免去手动点「扫描/加载」
+          if (k === 'audit') {
+            if (!audit && !auditLoading) loadAudit()
+            if (!misses && !missLoading) loadMisses()
+          }
+        }}
         items={[
           ...(isExternal ? [{
             key: 'connector', label: <Space><ApiOutlined />连接信息</Space>,
@@ -1079,6 +1103,30 @@ export default function KBDetailPage() {
         />
       </Modal>
 
+      {/* 拆分分块（可视化选切分点） */}
+      <Modal title="拆分分块" open={!!splitCtx} onOk={doSplitChunk} onCancel={() => setSplitCtx(null)} width={720} destroyOnClose>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          拖动滑块选择切分位置（共 {splitCtx?.content.length || 0} 字）。滑块左侧为前一块，右侧为后一块。
+        </Typography.Paragraph>
+        {splitCtx && (
+          <>
+            <Slider min={1} max={Math.max(1, splitCtx.content.length - 1)} value={splitCtx.offset}
+              onChange={(v) => setSplitCtx((c) => (c ? { ...c, offset: v as number } : c))} />
+            <Typography.Text style={{ fontSize: 12, color: '#888' }}>
+              切分点：第 <b>{splitCtx.offset}</b> 字
+            </Typography.Text>
+            <div style={{
+              fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 13, marginTop: 8,
+              background: '#fafafa', borderRadius: 6, padding: 8, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap',
+            }}>
+              {splitCtx.content.slice(0, splitCtx.offset)}
+              <span style={{ background: '#1677ff', color: '#fff', padding: '0 1px' }}>|</span>
+              {splitCtx.content.slice(splitCtx.offset)}
+            </div>
+          </>
+        )}
+      </Modal>
+
       {/* 文档级权限（ACL） */}
       <Drawer title={`文档权限：${aclDoc?.title || ''}`} width={600}
         open={!!aclDoc} onClose={() => setAclDoc(null)}>
@@ -1105,7 +1153,7 @@ export default function KBDetailPage() {
             ]}>
               <Space>
                 <Tag color={a.effect === 'allow' ? 'green' : 'red'}>{a.effect === 'allow' ? '允许' : '拒绝'}</Tag>
-                <span style={{ fontFamily: 'monospace', fontSize: 12 }}>principal #{a.principal_id}</span>
+                <span style={{ fontSize: 13 }}>{a.principal_name || `主体 #${a.principal_id}`}</span>
               </Space>
             </List.Item>
           )}

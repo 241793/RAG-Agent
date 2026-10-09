@@ -84,12 +84,14 @@ def guard_check(text: str):
 
 
 async def get_or_create_conversation(
-    db: AsyncSession, *, user_id: int, tenant_id: int, conversation_id: int | None, kb_ids: list[int], title: str | None
+    db: AsyncSession, *, user_id: int, tenant_id: int, conversation_id: int | None,
+    kb_ids: list[int] | None, title: str | None,
 ) -> Conversation:
+    """kb_ids 三态：None=未指定（沿用会话绑定）/ []=显式全库（清空绑定）/ [id..]=限定范围。"""
     if conversation_id:
         conv = await db.get(Conversation, conversation_id)
         if conv and conv.user_id == user_id:
-            if kb_ids:
+            if kb_ids is not None:
                 conv.kb_ids = kb_ids
             return conv
     conv = Conversation(
@@ -122,7 +124,7 @@ async def prepare(
     ps: PrincipalSet,
     body_kb_ids: list[int],
     query: str,
-    top_k: int,
+    top_k: int | None = None,
     images: list[dict] | None = None,
     use_retrieval: bool = True,
     score_threshold: float = 0.0,
@@ -206,7 +208,7 @@ async def stream_answer(
     ps: PrincipalSet,
     conversation: Conversation,
     query: str,
-    top_k: int,
+    top_k: int | None = None,
     model_config_id: int | None = None,
     temperature: float | None = None,
     images: list[dict] | None = None,
@@ -636,7 +638,7 @@ async def regenerate_meta(db: AsyncSession, conversation_id: int, user_id: int) 
 
 async def complete_once(
     db: AsyncSession, *, ps: PrincipalSet, query: str, kb_ids: list[int] | None = None,
-    top_k: int = 5, use_retrieval: bool = True
+    top_k: int | None = None, use_retrieval: bool = True
 ) -> tuple[str, dict, list[Citation]]:
     """非流式生成（供 OpenAI 兼容端点复用）。返回 (answer, usage, citations)。"""
     # 内容安全：输入侧检测

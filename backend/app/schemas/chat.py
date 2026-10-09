@@ -59,10 +59,12 @@ class ConversationOut(BaseModel):
 
 class ChatRequest(BaseModel):
     conversation_id: int | None = None
-    kb_ids: list[int] = Field(default_factory=list)  # 空 = 自动检索全部有权知识库
+    # 语义：None=未指定（沿用会话原有绑定）；[]=显式全库检索（清空绑定）；[id,...]=限定范围
+    kb_ids: list[int] | None = None
     message: str
     stream: bool = True
-    top_k: int = 5
+    # 默认值取自系统设置（可在「系统设置→检索与重排」热改）；显式传入则覆盖
+    top_k: int | None = None
     model_config_id: int | None = None  # 指定对话模型，空=默认
     temperature: float | None = None
     use_retrieval: bool = True  # False = 纯聊天，不检索知识库（用模型自身知识回答）

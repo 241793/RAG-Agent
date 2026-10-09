@@ -280,13 +280,19 @@ async def retrieve(
     ps: PrincipalSet,
     query: str,
     kb_ids: list[int] | None = None,
-    top_k: int = 5,
+    top_k: int | None = None,
     use_hybrid: bool = True,
-    candidate_k: int = 20,
+    candidate_k: int | None = None,
     score_threshold: float = 0.0,
     use_rerank: bool | None = None,
 ) -> RetrievalResponse:
     from app.core.config import settings
+
+    # 默认条数取自系统设置（可热改），调用方显式传入则覆盖
+    if top_k is None:
+        top_k = settings.retrieval_top_k
+    if candidate_k is None:
+        candidate_k = settings.retrieval_candidate_k
 
     t0 = time.time()
     pf = await build_filter(db, ps, kb_ids)
@@ -336,16 +342,24 @@ async def retrieve(
             degraded = True
             warnings.append("vector_unavailable")
 
-    # 关键词召回（BM25，带索引缓存）
+    # 关键词召回（BM25，带索引缓存：避免每次全库重分词）
     if use_hybrid:
         from app.retrieval import bm25_cache
 
-        cached = bm25_cache.get(ps.tenant_id, pf.accessible_kb_ids, pf.bypass_kb)
+        principals = list(pf.principals)
+        cached = bm25_cache.get(ps.tenant_id, pf.accessible_kb_ids, pf.bypass_kb, principals)
         if cached:
             index, rows = cached
             kw_hits = await keyword_search(db, query=query, pf=pf, top_k=candidate_k, index=index, rows=rows)
         else:
-            kw_hits = await keyword_search(db, query=query, pf=pf, top_k=candidate_k)
+            # 本次新建索引时写入缓存（键含 principals，防跨权限串缓存）
+            def _cache_put(idx, rws, _t=ps.tenant_id, _k=pf.accessible_kb_ids,
+                           _b=pf.bypass_kb, _p=principals):
+                bm25_cache.put(_t, _k, _b, rws, _p)
+
+            kw_hits = await keyword_search(
+                db, query=query, pf=pf, top_k=candidate_k, on_build=_cache_put
+            )
         if settings.retrieval_bm25_min > 0:
             kw_hits = [h for h in kw_hits if h.score >= settings.retrieval_bm25_min]
         rankings.append(("bm25", kw_hits))

@@ -258,9 +258,8 @@ async def chat_completions(
     # 图片附件 → 转 data URL（视觉模型用）
     images = _to_image_payloads(db, body.attachments)
     attachments = body.attachments or None
-    # 若本次 kb_ids 为空且会话已绑定，沿用会话绑定
-    if not body.kb_ids and conv.kb_ids:
-        conv.kb_ids = None  # 显式清空 → 全库模式；如需保留绑定可注释此行
+    # kb 绑定已由 get_or_create_conversation 按三态处理（None=沿用/[]=全库/[..]=限定），
+    # 此处不再清空，避免「切模型/追问」时静默扩大到全库、造成检索范围漂移。
 
     async def event_gen():
         # 用独立 session 保证流式期间连接可用
@@ -493,7 +492,8 @@ async def regenerate(
     if not query:
         raise NotFoundError("无可重新生成的消息")
     images = _to_image_payloads(db, attachments)
-    top_k = 5
+    from app.core.config import settings as _settings
+    top_k = _settings.retrieval_top_k
     model_config_id = conv.model_config_id or None
 
     async def event_gen():
