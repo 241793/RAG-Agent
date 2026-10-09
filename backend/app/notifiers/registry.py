@@ -58,11 +58,13 @@ def _matches_events(channel, kind: str) -> bool:
 
 
 async def dispatch(
-    db: AsyncSession, *, tenant_id: int, msg: NotificationMessage, user_id: int | None = None
+    db: AsyncSession, *, tenant_id: int, msg: NotificationMessage, user_id: int | None = None,
+    skip_inapp: bool = False,
 ) -> dict:
     """把通知派发到该租户所有启用且匹配事件的渠道。返回 {渠道kind: 成功与否}。
 
     user_id：站内消息的默认收件人（msg.user_id 优先）。
+    skip_inapp：跳过站内消息写入（调用方已自行写入站内消息时用，避免重复/锁等待）。
     """
     import asyncio
 
@@ -85,13 +87,15 @@ async def dispatch(
 
     targets: list[tuple[str, Any]] = []
     for r in rows:
+        if skip_inapp and r.kind == "inapp":
+            continue
         if _matches_events(r, msg.kind):
             try:
                 targets.append((r.kind, build_notifier(r.kind, tenant_id=tenant_id, config=r.config)))
             except Exception as e:  # noqa: BLE001
                 log.warning("notifier_build_failed", kind=r.kind, err=str(e)[:200])
 
-    if not has_inapp and msg.user_id:
+    if not has_inapp and msg.user_id and not skip_inapp:
         from app.notifiers.drivers.inapp import InAppNotifier
 
         targets.append(("inapp", InAppNotifier(tenant_id=tenant_id, config={"user_id": msg.user_id})))

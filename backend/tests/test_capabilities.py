@@ -74,11 +74,13 @@ def test_check_my_capabilities_tool_registered():
 
 
 def test_notifications_permission_fixed():
-    """notifications 不应再用不存在的 chat:read 权限码。"""
+    """notifications 只依赖登录认证：通知是每个登录用户都该能看的，
+    不应绑定 chat:use 等业务权限——否则无该权限的普通用户看不到自己的通知。"""
     import inspect
 
     from app.api.v1 import notifications
 
     src = inspect.getsource(notifications)
     assert 'require_permission("chat:read")' not in src
-    assert 'require_permission("chat:use")' in src
+    assert 'require_permission("chat:use")' not in src
+    assert "get_current_user" in src

@@ -199,7 +199,11 @@ async def register(body: RegisterRequest, request: Request, db: AsyncSession = D
         actor_name=body.username, result="success",
         error=None if pending == "approved" else "待审核",
     )
+    # 通知管理员有新的注册申请（待审核时）；失败不影响注册
     if pending == "pending":
+        from app.services.user_notify import notify_admins_registration
+
+        await notify_admins_registration(db, tenant_id=tenant.id, user=u, reason=body.reason)
         return {"message": "注册成功，请等待管理员审核通过后登录", "pending": True}
     return {"message": "注册成功，请登录", "pending": False}
 

@@ -6,7 +6,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.middleware.auth_dep import require_permission
+from app.middleware.auth_dep import get_current_user
 from app.models import Notification, User
 
 router = APIRouter(prefix="/notifications", tags=["notification"])
@@ -17,7 +17,7 @@ async def list_notifications(
     page: int = 1,
     page_size: int = 20,
     unread_only: bool = False,
-    user: User = Depends(require_permission("chat:use")),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     base = select(Notification).where(Notification.user_id == user.id, Notification.tenant_id == user.tenant_id)
@@ -53,7 +53,7 @@ async def list_notifications(
 
 @router.get("/unread-count")
 async def unread_count(
-    user: User = Depends(require_permission("chat:use")),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     n = (
@@ -69,7 +69,7 @@ async def unread_count(
 @router.post("/read")
 async def mark_read(
     body: dict,
-    user: User = Depends(require_permission("chat:use")),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     ids = body.get("ids") or []
@@ -86,7 +86,7 @@ async def mark_read(
 
 @router.post("/read-all")
 async def mark_all_read(
-    user: User = Depends(require_permission("chat:use")),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await db.execute(
@@ -99,7 +99,7 @@ async def mark_all_read(
 @router.delete("/{notif_id}")
 async def delete_notification(
     notif_id: int,
-    user: User = Depends(require_permission("chat:use")),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     n = await db.get(Notification, notif_id)

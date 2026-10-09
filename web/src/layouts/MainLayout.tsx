@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Layout, Menu, Avatar, Dropdown, Spin, Breadcrumb, Drawer, Grid, Button, Tooltip } from 'antd'
+import { Layout, Menu, Avatar, Badge, Dropdown, Spin, Breadcrumb, Drawer, Grid, Button, Tooltip } from 'antd'
 import {
   DashboardOutlined, DatabaseOutlined, CommentOutlined, SettingOutlined, LogoutOutlined,
   UserOutlined, ExperimentOutlined, RobotOutlined, AppstoreOutlined,
@@ -13,6 +13,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../stores/auth'
 import { ROUTE_PERMS } from '../router/routeMeta'
 import NotificationBell from '../components/NotificationBell'
+import { rbacApi } from '../api'
 
 const { Header, Sider, Content } = Layout
 
@@ -23,6 +24,8 @@ interface NavItem {
   perm?: string
   /** 悬停提示：向新用户解释该项用途，避免与相邻项混淆 */
   tip?: string
+  /** 需要显示角标的项（如待审核用户数）标识 */
+  badgeKey?: string
 }
 interface NavGroup {
   key: string
@@ -36,6 +39,7 @@ export default function MainLayout() {
   const [collapsed, setCollapsed] = useState(false)
   const [openKeys, setOpenKeys] = useState<string[]>([])
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [pendingUsers, setPendingUsers] = useState(0)
   const screens = Grid.useBreakpoint()
   const isMobile = !screens.lg
   const nav = useNavigate()
@@ -44,6 +48,15 @@ export default function MainLayout() {
   useEffect(() => {
     if (!user && loading) fetchMe()
   }, [])
+
+  // 待审核用户数角标：仅对可查看用户的账号拉取（30s 轮询，失败静默）
+  useEffect(() => {
+    if (!user || !(user.is_admin || (user.permissions || []).includes('user:read'))) return
+    const load = () => rbacApi.pendingUsers().then((r) => setPendingUsers(r.length)).catch(() => {})
+    load()
+    const t = setInterval(load, 30000)
+    return () => clearInterval(t)
+  }, [user])
 
   const groups: (NavItem | NavGroup)[] = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '工作台', tip: '概览、趋势与快捷入口' },
@@ -81,7 +94,7 @@ export default function MainLayout() {
       icon: <TeamOutlined />,
       label: '组织权限',
       children: [
-        { key: '/admin/users', icon: <UserOutlined />, label: '用户', perm: 'user:read' },
+        { key: '/admin/users', icon: <UserOutlined />, label: '用户', perm: 'user:read', badgeKey: 'pendingUsers' },
         { key: '/admin/roles', icon: <TeamOutlined />, label: '角色', perm: 'role:read' },
         { key: '/admin/depts', icon: <ClusterOutlined />, label: '部门', perm: 'dept:read' },
         { key: '/admin/groups', icon: <UsergroupAddOutlined />, label: '用户组', perm: 'group:read' },
@@ -126,8 +139,16 @@ export default function MainLayout() {
   }
 
   // 生成 antd 菜单项（过滤无权限项；组内为空则隐藏）
-  const wrapLabel = (label: string, tip?: string) =>
-    tip ? <Tooltip title={tip} placement="right"><span>{label}</span></Tooltip> : label
+  const wrapLabel = (item: NavItem) => {
+    let node: ReactNode = item.label
+    if (item.tip) node = <Tooltip title={item.tip} placement="right"><span>{node}</span></Tooltip>
+    if (item.badgeKey === 'pendingUsers' && pendingUsers > 0) {
+      node = <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        {node}<Badge count={pendingUsers} size="small" />
+      </span>
+    }
+    return node
+  }
   const menuItems: any[] = []
   for (const g of groups) {
     if ('children' in g) {
@@ -135,11 +156,11 @@ export default function MainLayout() {
       if (kids.length) {
         menuItems.push({
           key: g.key, icon: g.icon, label: g.label,
-          children: kids.map((k) => ({ key: k.key, icon: k.icon, label: wrapLabel(k.label, k.tip) })),
+          children: kids.map((k) => ({ key: k.key, icon: k.icon, label: wrapLabel(k) })),
         })
       }
     } else if (canSee(g as NavItem)) {
-      menuItems.push({ key: g.key, icon: g.icon, label: wrapLabel(g.label, (g as NavItem).tip) })
+      menuItems.push({ key: g.key, icon: g.icon, label: wrapLabel(g as NavItem) })
     }
   }
 

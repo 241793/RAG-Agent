@@ -260,6 +260,10 @@ async def approve_user(
     u.reviewed_by = user.id
     u.reviewed_at = utcnow()
     await db.flush()
+    # 通知申请人审核结果（站内，随本事务提交）
+    from app.services.user_notify import notify_user_review_result
+
+    await notify_user_review_result(db, tenant_id=u.tenant_id, user=u, approved=True)
     return {"message": f"已通过「{u.display_name or u.username}」的注册申请",
             "approval_status": u.approval_status}
 
@@ -281,6 +285,9 @@ async def reject_user(
     u.reviewed_by = user.id
     u.reviewed_at = utcnow()
     await db.flush()
+    from app.services.user_notify import notify_user_review_result
+
+    await notify_user_review_result(db, tenant_id=u.tenant_id, user=u, approved=False)
     return {"message": f"已拒绝「{u.display_name or u.username}」的注册申请",
             "approval_status": u.approval_status}
 

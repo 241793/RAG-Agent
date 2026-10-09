@@ -246,3 +246,117 @@ def test_pending_list_includes_department():
 
     src = inspect.getsource(rbac.list_pending_users)
     assert "department_name" in src
+
+
+# ==================== 注册申请通知管理员 ====================
+def test_user_notify_service_exists():
+    from app.services import user_notify as U
+
+    assert hasattr(U, "notify_admins_registration")
+    assert hasattr(U, "notify_user_review_result")
+
+
+def test_register_notifies_admins():
+    import inspect
+
+    from app.api.v1 import auth
+
+    src = inspect.getsource(auth.register)
+    assert "notify_admins_registration" in src
+
+
+def test_approve_reject_notify_applicant():
+    import inspect
+
+    from app.api.v1 import rbac
+
+    assert "notify_user_review_result" in inspect.getsource(rbac.approve_user)
+    assert "notify_user_review_result" in inspect.getsource(rbac.reject_user)
+
+
+def test_notify_targets_tenant_admins():
+    """通知应发给本租户管理员（is_admin + active）。"""
+    import inspect
+
+    from app.services import user_notify
+
+    src = inspect.getsource(user_notify._admin_ids)
+    assert "is_admin" in src and "status" in src
+
+
+def test_review_notification_uses_inapp():
+    """审核结果用站内消息通知申请人。"""
+    import inspect
+
+    from app.services import user_notify
+
+    src = inspect.getsource(user_notify.notify_user_review_result)
+    assert "create_inapp" in src
+
+
+def test_dispatch_supports_skip_inapp():
+    """dispatch 支持跳过站内写入（调用方已自行写入时避免重复/锁等待）。"""
+    import inspect
+
+    from app.notifiers.registry import dispatch
+
+    assert "skip_inapp" in inspect.signature(dispatch).parameters
+
+
+async def _run_registration_notify():
+    from sqlalchemy import select
+
+    from app.core.db import AsyncSessionLocal, init_models
+    from app.models import Notification, Role, Tenant, User, UserRole
+    from app.core.security import hash_password
+
+    await init_models()
+    async with AsyncSessionLocal() as db:
+        t = (await db.execute(select(Tenant).order_by(Tenant.id))).scalars().first()
+        if not t:
+            t = Tenant(name="NT", slug="nt"); db.add(t); await db.flush()
+        # 确保有管理员
+        admin = (await db.execute(select(User).where(
+            User.tenant_id == t.id, User.is_admin.is_(True)))).scalars().first()
+        if not admin:
+            admin = User(tenant_id=t.id, username="nt_admin", password_hash=hash_password("x"),
+                         is_admin=True, status="active")
+            db.add(admin); await db.flush()
+        await db.commit()
+        tid, aid = t.id, admin.id
+
+    # 调注册（走 API 函数，触发通知）
+    from app.api.v1.auth import register
+    from app.schemas.auth import RegisterRequest
+    import time as _t
+
+    uname = f"nt_user_{int(_t.time() * 1000) % 10**8}"
+    async with AsyncSessionLocal() as db:
+        class _Req:  # 模拟 Request 只需 headers/client
+            headers = {}
+            client = None
+        await register(RegisterRequest(username=uname, password="Notify@2026x",
+                                       display_name="通知测试", reason="测试通知"), _Req(), db)
+        await db.commit()
+
+    async with AsyncSessionLocal() as db:
+        notes = (await db.execute(select(Notification).where(
+            Notification.tenant_id == tid, Notification.user_id == aid,
+            Notification.ref_type == "user",
+        ).order_by(Notification.id.desc()))).scalars().all()
+        assert notes, "管理员应收到注册申请通知"
+        n = notes[0]
+        assert "注册申请" in n.title
+        assert n.link == "/admin/users"
+        assert uname in (n.body or "")
+        # 清理
+        u = (await db.execute(select(User).where(User.username == uname))).scalar_one_or_none()
+        if u:
+            await db.delete(u)
+        await db.commit()
+
+
+def test_registration_sends_admin_notification():
+    import asyncio
+
+    asyncio.new_event_loop().run_until_complete(_run_registration_notify())
