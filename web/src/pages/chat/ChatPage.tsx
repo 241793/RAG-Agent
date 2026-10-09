@@ -82,34 +82,42 @@ export default function ChatPage() {
   // 草稿态（新对话，尚无真实 id）用固定 key 占位，收到 meta 后迁移到真实 id
   const DRAFT = 'draft'
   const curKey = convId != null ? String(convId) : DRAFT
+  // 草稿迁移映射：draft → 真实会话 id 的字符串。流式回调在发起时快照了 'draft' 键，
+  // 而 meta 到达后消息已被搬走；写入时经此映射转发到真实键，避免「内容丢进已删除的 draft」。
+  const draftMovedTo = useRef<string | null>(null)
+  const resolveKey = (key: string) => (key === DRAFT && draftMovedTo.current ? draftMovedTo.current : key)
   // 派生：当前显示对话的消息与流式标志（JSX 沿用 msgs / streaming）
   const msgs = convMsgs[curKey] || []
   const streaming = streamingKeys.has(curKey)
 
   // 按 key 更新某会话最后一条 assistant（供流式回调使用，与当前显示解耦）
   const patchLast = (key: string, fn: (m: Msg) => Msg) => setConvMsgs((prev) => {
-    const arr = prev[key]
+    const k = resolveKey(key)
+    const arr = prev[k]
     if (!arr?.length) return prev
     const c = arr.slice()
     c[c.length - 1] = fn(c[c.length - 1])
-    return { ...prev, [key]: c }
+    return { ...prev, [k]: c }
   })
   // 按 key 更新第 idx 条（HITL 用）
   const patchAt = (key: string, idx: number, fn: (m: Msg) => Msg) => setConvMsgs((prev) => {
-    const arr = prev[key]
+    const k = resolveKey(key)
+    const arr = prev[k]
     if (!arr) return prev
     const c = arr.slice()
     c[idx] = fn(c[idx])
-    return { ...prev, [key]: c }
+    return { ...prev, [k]: c }
   })
   const setStreamingKey = (key: string, on: boolean) => setStreamingKeys((s) => {
+    const k = resolveKey(key)
     const n = new Set(s)
-    if (on) n.add(key); else n.delete(key)
+    if (on) n.add(k); else n.delete(k)
     return n
   })
   // 草稿 → 真实 id 的原子迁移（消息/流式标志/控制器一并搬，避免按钮闪回「发送」）
   const adoptDraft = (realId: number) => {
     const k = String(realId)
+    draftMovedTo.current = k  // 记录映射，后续以 'draft' 为键的流回调会转发到 k
     setConvMsgs((p) => {
       const draftMsgs = p[DRAFT] || []
       const next = { ...p }
@@ -231,6 +239,7 @@ export default function ChatPage() {
 
   const newConversation = () => {
     setConvId(undefined)  // curKey → 'draft'
+    draftMovedTo.current = null  // 新一轮草稿，重置迁移映射
     setConvMsgs((p) => ({ ...p, [DRAFT]: [] }))
     setPendingAtts([]); setConvUsage(null); setDocKb(undefined)
   }
