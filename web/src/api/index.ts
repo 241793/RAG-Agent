@@ -191,8 +191,11 @@ export const authApi = {
   login: (username: string, password: string) =>
     http.post('/auth/login', { username, password }).then((r) => r.data),
   me: () => http.get<User>('/auth/me').then((r) => r.data),
-  register: (data: { username: string; password: string; display_name?: string; email?: string; reason?: string }) =>
+  register: (data: { username: string; password: string; display_name?: string; email?: string; department_id?: number; reason?: string }) =>
     http.post<{ message: string; pending: boolean }>('/auth/register', data).then((r) => r.data),
+  registerDepartments: () =>
+    http.get<{ id: number; name: string; parent_id: number | null; depth: number }[]>(
+      '/auth/register/departments').then((r) => r.data),
   changePassword: (oldPassword: string, newPassword: string) =>
     http.post('/auth/password', { old_password: oldPassword, new_password: newPassword }).then((r) => r.data),
 }

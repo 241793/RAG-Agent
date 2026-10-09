@@ -107,6 +107,36 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+@router.get("/register/departments")
+async def public_departments(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    """注册用：返回可选部门（扁平列表，含层级缩进）。
+
+    公开端点（未登录可访问），仅暴露部门 id/名称/层级，不含任何敏感信息，
+    供注册表单选择归属部门。
+    """
+    from app.core.errors import AuthError
+    from app.models import Department, Tenant
+
+    if not settings.registration_enabled:
+        return []
+    tenant = (await db.execute(select(Tenant).order_by(Tenant.id))).scalars().first()
+    if not tenant:
+        return []
+    rows = (
+        await db.execute(
+            select(Department).where(
+                Department.tenant_id == tenant.id,
+                Department.is_deleted.is_(False),
+                Department.status == "active",
+            ).order_by(Department.sort, Department.id)
+        )
+    ).scalars().all()
+    return [
+        {"id": d.id, "name": d.name, "parent_id": d.parent_id, "depth": d.depth}
+        for d in rows
+    ]
+
+
 @router.post("/register")
 async def register(body: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)) -> dict:
     """自助注册：创建待审核账号，需管理员通过后才能登录。
@@ -138,6 +168,15 @@ async def register(body: RegisterRequest, request: Request, db: AsyncSession = D
     if exists:
         raise ConflictError("用户名已被占用")
 
+    # 校验所选部门归属该租户且有效（防越权指定他租户部门）
+    dept_id = None
+    if body.department_id:
+        from app.models import Department
+
+        dept = await db.get(Department, body.department_id)
+        if dept and dept.tenant_id == tenant.id and not dept.is_deleted and dept.status == "active":
+            dept_id = dept.id
+
     pending = "pending" if settings.require_admin_approval else "approved"
     u = User(
         tenant_id=tenant.id,
@@ -145,6 +184,7 @@ async def register(body: RegisterRequest, request: Request, db: AsyncSession = D
         password_hash=hash_password(body.password),
         display_name=body.display_name or body.username,
         email=body.email,
+        department_id=dept_id,
         user_type="internal",
         is_admin=False,
         status="active",

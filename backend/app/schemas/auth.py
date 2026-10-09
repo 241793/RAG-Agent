@@ -15,6 +15,7 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
     display_name: str | None = Field(default=None, max_length=64)
     email: str | None = Field(default=None, max_length=128)
+    department_id: int | None = None  # 申请归属部门（注册表单可选）
     reason: str | None = Field(default=None, max_length=256)  # 申请理由（供管理员审核参考）
 
 

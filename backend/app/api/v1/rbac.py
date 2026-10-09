@@ -216,6 +216,16 @@ async def list_pending_users(
             ).order_by(User.id.desc())
         )
     ).scalars().all()
+    # 解析部门名（供管理员审核时确认）
+    from app.models import Department
+
+    dept_ids = [u.department_id for u in rows if u.department_id]
+    dept_map: dict[int, str] = {}
+    if dept_ids:
+        dept_map = {
+            d.id: d.name
+            for d in (await db.execute(select(Department).where(Department.id.in_(dept_ids)))).scalars().all()
+        }
     out = []
     for u in rows:
         reason = None
@@ -226,6 +236,8 @@ async def list_pending_users(
         out.append({
             "id": u.id, "username": u.username, "display_name": u.display_name,
             "email": u.email, "reason": reason,
+            "department_id": u.department_id,
+            "department_name": dept_map.get(u.department_id) if u.department_id else None,
             "registered_at": u.registered_at.isoformat() if u.registered_at else None,
         })
     return out

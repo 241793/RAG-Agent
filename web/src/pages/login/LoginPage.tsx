@@ -1,10 +1,21 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, Card, Divider, Form, Input, message, Modal, Space, Typography } from 'antd'
+import { Alert, Button, Card, Checkbox, Divider, Form, Input, message, Modal, Select, Space, Typography } from 'antd'
 import { UserOutlined, LockOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { authApi, ssoApi, type SsoProvider } from '../../api'
 import { errMsg } from '../../api/http'
 import { useAuth } from '../../stores/auth'
+
+// 记住密码：仅存用户名 + 一个混淆后的密码串（非明文，避免直接可读）
+const RK_USER = 'rag_remember_user'
+const RK_PASS = 'rag_remember_pass'
+const RK_FLAG = 'rag_remember_flag'
+function encodePass(p: string): string {
+  try { return btoa(unescape(encodeURIComponent(p))) } catch { return '' }
+}
+function decodePass(s: string): string {
+  try { return decodeURIComponent(escape(atob(s))) } catch { return '' }
+}
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false)
@@ -12,6 +23,8 @@ export default function LoginPage() {
   const [regOpen, setRegOpen] = useState(false)
   const [regLoading, setRegLoading] = useState(false)
   const [regForm] = Form.useForm()
+  const [depts, setDepts] = useState<{ id: number; name: string; depth: number }[]>([])
+  const [remember, setRemember] = useState(false)
   const nav = useNavigate()
   const setUser = useAuth((s) => s.setUser)
 
@@ -45,12 +58,27 @@ export default function LoginPage() {
     setLoading(true)
     try {
       const data = await authApi.login(v.username, v.password)
+      // 记住密码：勾选则保存，取消则清除
+      if (remember) {
+        localStorage.setItem(RK_FLAG, '1')
+        localStorage.setItem(RK_USER, v.username)
+        localStorage.setItem(RK_PASS, encodePass(v.password))
+      } else {
+        localStorage.removeItem(RK_FLAG)
+        localStorage.removeItem(RK_USER)
+        localStorage.removeItem(RK_PASS)
+      }
       await finishLogin(data.access_token, data.refresh_token)
     } catch (e) {
       message.error(errMsg(e))
     } finally {
       setLoading(false)
     }
+  }
+
+  const openRegister = () => {
+    setRegOpen(true)
+    authApi.registerDepartments().then(setDepts).catch(() => setDepts([]))
   }
 
   const doRegister = async () => {
@@ -73,12 +101,19 @@ export default function LoginPage() {
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg,#001529,#003a70)' }}>
       <Card style={{ width: 380 }} title="企业 RAG 知识库" bordered={false}>
         {/* 不预填任何账号密码：避免生产环境保留默认管理员凭据 */}
-        <Form onFinish={onFinish} layout="vertical">
+        <Form onFinish={onFinish} layout="vertical"
+          initialValues={{
+            username: localStorage.getItem(RK_USER) || '',
+            password: localStorage.getItem(RK_FLAG) ? decodePass(localStorage.getItem(RK_PASS) || '') : '',
+          }}>
           <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
             <Input prefix={<UserOutlined />} placeholder="用户名" size="large" autoComplete="username" />
           </Form.Item>
           <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
             <Input.Password prefix={<LockOutlined />} placeholder="密码" size="large" autoComplete="current-password" />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 12 }}>
+            <Checkbox checked={remember} onChange={(e) => setRemember(e.target.checked)}>记住密码</Checkbox>
           </Form.Item>
           <Button type="primary" htmlType="submit" block size="large" loading={loading}>
             登录
@@ -86,7 +121,7 @@ export default function LoginPage() {
         </Form>
 
         <div style={{ textAlign: 'center', marginTop: 12 }}>
-          <Typography.Link onClick={() => setRegOpen(true)}>还没有账号？注册</Typography.Link>
+          <Typography.Link onClick={openRegister}>还没有账号？注册</Typography.Link>
         </div>
 
         {providers.length > 0 && (
@@ -121,6 +156,12 @@ export default function LoginPage() {
             rules={[{ type: 'email', message: '邮箱格式不正确' }]}>
             <Input placeholder="可选" autoComplete="off" />
           </Form.Item>
+          {depts.length > 0 && (
+            <Form.Item name="department_id" label="所属部门" extra="可选，管理员已在系统中配置的部门">
+              <Select allowClear showSearch optionFilterProp="label" placeholder="请选择部门（可选）"
+                options={depts.map((d) => ({ value: d.id, label: '　'.repeat(d.depth || 0) + d.name }))} />
+            </Form.Item>
+          )}
           <Form.Item name="password" label="密码"
             rules={[{ required: true, message: '请输入密码' }, { min: 8, message: '至少 8 位' }]}
             extra="至少 8 位，需含大写字母、小写字母、数字、符号中的至少三类">

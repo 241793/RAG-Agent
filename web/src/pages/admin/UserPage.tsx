@@ -41,7 +41,7 @@ export default function UserPage() {
   const [userRoles, setUserRoles] = useState<UserRoleItem[]>([])
   const [grantForm] = Form.useForm()
   const [loading, setLoading] = useState(false)
-  const [pending, setPending] = useState<{ id: number; username: string; display_name: string; email: string | null; reason: string | null; registered_at: string | null }[]>([])
+  const [pending, setPending] = useState<{ id: number; username: string; display_name: string; email: string | null; department_id?: number | null; department_name?: string | null; reason: string | null; registered_at: string | null }[]>([])
 
   const loadPending = async () => {
     try { setPending(await rbacApi.pendingUsers()) } catch { /* 无权或忽略 */ }
@@ -141,6 +141,7 @@ export default function UserPage() {
                   <b>{p.display_name || p.username}</b>
                   <span style={{ color: 'var(--color-text-2)' }}>@{p.username}</span>
                   {p.email && <span style={{ color: 'var(--color-text-3)' }}>{p.email}</span>}
+                  {p.department_name && <Tag color="blue">部门：{p.department_name}</Tag>}
                   {p.reason && <Tag>理由：{p.reason}</Tag>}
                   {canManage && (
                     <Space>

@@ -204,3 +204,39 @@ def test_secret_key_not_placeholder():
 
     assert settings.secret_key and settings.secret_key != _SECRET_PLACEHOLDER, \
         "运行时密钥不得为占位默认值"
+
+
+# ==================== 注册可选部门 + 记住密码（前端）====================
+def test_register_accepts_department():
+    from app.schemas.auth import RegisterRequest
+
+    assert "department_id" in RegisterRequest.model_fields
+    # 可选
+    r = RegisterRequest(username="u1", password="Passw0rd@1")
+    assert r.department_id is None
+
+
+def test_public_departments_endpoint_exists():
+    from app.api.v1 import auth as A
+
+    methods = {(r.path, m) for r in A.router.routes for m in getattr(r, "methods", set())}
+    assert ("/auth/register/departments", "GET") in methods
+
+
+def test_register_validates_department_tenant():
+    """注册时部门归属需校验（防指定他租户部门）。"""
+    import inspect
+
+    from app.api.v1 import auth
+
+    src = inspect.getsource(auth.register)
+    assert "department_id" in src and "tenant_id == tenant.id" in src
+
+
+def test_pending_list_includes_department():
+    import inspect
+
+    from app.api.v1 import rbac
+
+    src = inspect.getsource(rbac.list_pending_users)
+    assert "department_name" in src
