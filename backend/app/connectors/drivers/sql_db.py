@@ -27,14 +27,38 @@ from app.providers.base import ProviderHealth
 _FORBIDDEN = ("insert", "update", "delete", "drop", "alter", "create", "truncate", "grant", "revoke")
 
 
+def _strip_sql_comments(sql: str) -> str:
+    """去掉 SQL 注释，防止用注释绕过关键字检查（如 /*insert*/、-- insert）。"""
+    import re
+
+    s = re.sub(r"/\*.*?\*/", " ", sql, flags=re.S)  # 块注释
+    s = re.sub(r"--[^\n]*", " ", s)                   # 行注释
+    return s
+
+
 def _check_readonly(sql: str) -> None:
-    low = sql.strip().lower().lstrip("(").strip()
+    """只读校验：必须单条 SELECT/WITH，且不含写关键字。
+
+    加固点：先去注释再判前缀与关键字，避免 `/*x*/insert` 之类绕过；
+    并要求整条语句只有一个分号结尾（防多语句堆叠）。
+    """
+    cleaned = _strip_sql_comments(sql).strip()
+    low = cleaned.lower().lstrip("(").strip()
     if not (low.startswith("select") or low.startswith("with")):
         raise ValidationError("SQL 连接器只允许 SELECT/WITH 查询")
-    flat = sql.lower()
+    # 防多语句：去掉末尾分号后不应再有分号
+    body = cleaned.rstrip().rstrip(";").strip()
+    if ";" in body:
+        raise ValidationError("只允许单条查询语句（禁止多语句）")
+    flat = f" {body.lower()} "
     for kw in _FORBIDDEN:
-        if f" {kw} " in f" {flat} ":
+        if f" {kw} " in flat or f"({kw} " in flat:
             raise ValidationError(f"查询包含被禁止的关键字：{kw}")
+
+
+def _escape_like(s: str) -> str:
+    """转义 LIKE 通配符，避免检索词里的 % / _ 被当作通配（不改变参数绑定语义）。"""
+    return (s or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class SqlConnector:
@@ -48,13 +72,23 @@ class SqlConnector:
         self.query_sql = (self.cfg.get("query_sql") or "").strip()
         if not self.query_sql:
             raise ValidationError("SQL 连接器缺少 query_sql")
+        # 禁止 {query} 字符串拼接占位符（注入面）：检索词必须用 :query 参数绑定
+        if "{query}" in self.query_sql:
+            raise ValidationError(
+                "query_sql 不允许使用 {query} 占位符（存在 SQL 注入风险）；"
+                "请改用参数绑定 :query，例如 WHERE name LIKE :query"
+            )
         _check_readonly(self.query_sql)
         self.columns = [c.strip() for c in (self.cfg.get("columns") or "").split(",") if c.strip()]
         self.title_col = (self.cfg.get("title_col") or "").strip() or None
         self.url_col = (self.cfg.get("url_col") or "").strip() or None
 
     def _run(self, query: str, top_k: int, *, sql_override: str | None = None) -> list[ConnectorDoc]:
-        """同步执行查询（在线程中调用）。sql_override 用于批量列举。"""
+        """同步执行查询（在线程中调用）。sql_override 用于批量列举。
+
+        安全：检索词一律经参数绑定（:query），绝不字符串拼接进 SQL——
+        避免知识库管理员误用 `{query}` 占位导致的注入面。
+        """
         from sqlalchemy import create_engine, text
 
         if sql_override is not None:
@@ -63,10 +97,9 @@ class SqlConnector:
         else:
             sql = self.query_sql.replace("{top_k}", str(int(top_k)))
             params = {}
+            # 检索词只走 :query 参数绑定；{query} 拼接占位符已在 __init__ 拒绝
             if ":query" in sql:
-                params["query"] = f"%{query}%"  # 供 LIKE :query 使用
-            else:
-                sql = sql.replace("{query}", query)
+                params["query"] = f"%{_escape_like(query)}%"  # 供 LIKE :query 使用
         engine = create_engine(self.dsn, pool_pre_ping=True)
         try:
             out: list[ConnectorDoc] = []

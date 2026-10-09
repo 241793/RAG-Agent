@@ -48,13 +48,15 @@ def _create_token(payload: dict[str, Any], expires_minutes: int, token_type: str
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
 
-def create_access_token(user_id: int, tenant_id: int, extra: dict | None = None) -> str:
-    payload = {"sub": str(user_id), "tenant_id": tenant_id, **(extra or {})}
+def create_access_token(
+    user_id: int, tenant_id: int, extra: dict | None = None, token_version: int = 0
+) -> str:
+    payload = {"sub": str(user_id), "tenant_id": tenant_id, "tv": token_version, **(extra or {})}
     return _create_token(payload, settings.access_token_expire_minutes, "access")
 
 
-def create_refresh_token(user_id: int, tenant_id: int) -> str:
-    payload = {"sub": str(user_id), "tenant_id": tenant_id}
+def create_refresh_token(user_id: int, tenant_id: int, token_version: int = 0) -> str:
+    payload = {"sub": str(user_id), "tenant_id": tenant_id, "tv": token_version}
     return _create_token(payload, settings.refresh_token_expire_minutes, "refresh")
 
 
@@ -83,3 +85,46 @@ def create_file_token(
 def decode_token(token: str) -> dict[str, Any]:
     """解码并校验 JWT，失败抛 jwt.PyJWTError。"""
     return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+
+
+# 常见弱密码（含默认种子密码），不区分大小写
+_WEAK_PASSWORDS = {
+    "password", "passw0rd", "123456", "12345678", "123456789", "1234567890",
+    "qwerty", "qwerty123", "abc123", "111111", "000000", "admin", "admin123",
+    "root", "letmein", "iloveyou", "welcome", "monkey", "dragon", "sunshine",
+    "princess", "football", "baseball", "master", "666666", "888888", "123123",
+    "admin888", "administrator", "test123", "a123456", "p@ssw0rd", "1qaz2wsx",
+}
+_MIN_PASSWORD_LEN = 8
+
+
+def check_password_strength(password: str) -> tuple[bool, str]:
+    """密码强度校验：长度 + 字符种类 + 弱密码黑名单。返回 (是否通过, 原因)。"""
+    p = password or ""
+    if len(p) < _MIN_PASSWORD_LEN:
+        return False, f"密码至少 {_MIN_PASSWORD_LEN} 位"
+    if len(p) > 128:
+        return False, "密码不能超过 128 位"
+    if p.lower() in _WEAK_PASSWORDS:
+        return False, "密码过于常见，请更换更复杂的密码"
+    kinds = 0
+    if any(c.islower() for c in p):
+        kinds += 1
+    if any(c.isupper() for c in p):
+        kinds += 1
+    if any(c.isdigit() for c in p):
+        kinds += 1
+    if any(not c.isalnum() for c in p):
+        kinds += 1
+    if kinds < 3:
+        return False, "密码需包含大写字母、小写字母、数字、符号中的至少三类"
+    return True, ""
+
+
+def validate_password_or_raise(password: str) -> None:
+    """校验失败抛 ValidationError（供 API 层复用）。"""
+    from app.core.errors import ValidationError
+
+    ok, reason = check_password_strength(password)
+    if not ok:
+        raise ValidationError(reason)

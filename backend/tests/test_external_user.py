@@ -123,7 +123,7 @@ def test_external_user_hidden_from_list():
             ext = (await db.execute(select(User).where(User.username == "wework_ext1"))).scalar_one_or_none()
             assert ext is not None and ext.user_type == "external"
             admin = await db.get(User, d["user_id"])
-            result = await list_users(page=1, page_size=100, search=None, user=admin, db=db)
+            result = await list_users(page=1, page_size=100, search=None, status=None, user=admin, db=db)
             usernames = [it.username for it in result["items"]]
             assert "wework_ext1" not in usernames, "外部用户不应出现在用户列表"
             assert all(getattr(it, "username", "") != "wework_ext1" for it in result["items"])

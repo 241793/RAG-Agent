@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  Button, Card, Divider, Form, Input, message, Modal, Popconfirm, Select, Space, Table, Tag,
+  Alert, Button, Card, Divider, Form, Input, message, Modal, Popconfirm, Select, Space, Table, Tag,
 } from 'antd'
 import { PlusOutlined, DeleteOutlined, UserAddOutlined, KeyOutlined } from '@ant-design/icons'
 import { rbacApi, kbApi, type Role, type UserListItem, type UserRoleItem, type DeptNode } from '../../api'
@@ -40,8 +40,24 @@ export default function UserPage() {
   const [curUser, setCurUser] = useState<UserListItem | null>(null)
   const [userRoles, setUserRoles] = useState<UserRoleItem[]>([])
   const [grantForm] = Form.useForm()
+  const [loading, setLoading] = useState(false)
+  const [pending, setPending] = useState<{ id: number; username: string; display_name: string; email: string | null; reason: string | null; registered_at: string | null }[]>([])
+
+  const loadPending = async () => {
+    try { setPending(await rbacApi.pendingUsers()) } catch { /* 无权或忽略 */ }
+  }
+
+  const reviewUser = async (id: number, approve: boolean, name: string) => {
+    try {
+      if (approve) await rbacApi.approveUser(id)
+      else await rbacApi.rejectUser(id)
+      message.success(`${approve ? '已通过' : '已拒绝'}「${name}」的注册申请`)
+      load(); loadPending()
+    } catch (e) { message.error(errMsg(e)) }
+  }
 
   const load = async () => {
+    setLoading(true)
     try {
       const r = await rbacApi.users(page, 20, search || undefined)
       setUsers(r.items); setTotal(r.total)
@@ -49,9 +65,10 @@ export default function UserPage() {
       const tree = await rbacApi.deptTree()
       setDepts(flattenDepts(tree))
       kbApi.list().then((ks) => setKbs(ks.map((k) => ({ value: k.id, label: k.name })))).catch(() => {})
-    } catch (e) { message.error(errMsg(e)) }
+    } catch (e) { message.error(errMsg(e)) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [page, search])
+  useEffect(() => { loadPending() }, [])
 
   const openCreate = () => {
     setEditUser(null); form.resetFields(); setOpen(true)
@@ -114,21 +131,56 @@ export default function UserPage() {
       }
     >
       <Card bordered={false}>
+      {pending.length > 0 && (
+        <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+          message={`有 ${pending.length} 个注册申请待审核`}
+          description={
+            <Space direction="vertical" style={{ width: '100%' }} size={8}>
+              {pending.map((p) => (
+                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <b>{p.display_name || p.username}</b>
+                  <span style={{ color: 'var(--color-text-2)' }}>@{p.username}</span>
+                  {p.email && <span style={{ color: 'var(--color-text-3)' }}>{p.email}</span>}
+                  {p.reason && <Tag>理由：{p.reason}</Tag>}
+                  {canManage && (
+                    <Space>
+                      <Button size="small" type="primary" onClick={() => reviewUser(p.id, true, p.display_name || p.username)}>通过</Button>
+                      <Popconfirm title="拒绝该申请？" onConfirm={() => reviewUser(p.id, false, p.display_name || p.username)}>
+                        <Button size="small" danger>拒绝</Button>
+                      </Popconfirm>
+                    </Space>
+                  )}
+                </div>
+              ))}
+            </Space>
+          } />
+      )}
       <Table
-        rowKey="id" dataSource={users}
+        rowKey="id" dataSource={users} loading={loading}
         pagination={{ current: page, pageSize: 20, total, onChange: setPage }}
         columns={[
           { title: '用户名', dataIndex: 'username' },
           { title: '姓名', dataIndex: 'display_name' },
           { title: '邮箱', dataIndex: 'email' },
           { title: '状态', dataIndex: 'status', width: 90, render: (v: string) => <Tag color={v === 'active' ? 'green' : 'red'}>{v}</Tag> },
+          { title: '审核', dataIndex: 'approval_status', width: 90,
+            render: (v: string) => v === 'pending' ? <Tag color="orange">待审核</Tag>
+              : v === 'rejected' ? <Tag color="red">已拒绝</Tag> : <Tag color="green">已通过</Tag> },
           { title: '管理员', dataIndex: 'is_admin', width: 90, render: (v: boolean) => v ? <Tag color="gold">是</Tag> : '-' },
           {
-            title: '操作', width: 220,
+            title: '操作', width: 260,
             render: (_: any, u: UserListItem) => (
               <Space>
                 {canManage && (
                   <>
+                    {u.approval_status === 'pending' && (
+                      <>
+                        <Button size="small" type="primary" onClick={() => reviewUser(u.id, true, u.display_name || u.username)}>通过</Button>
+                        <Popconfirm title="拒绝该申请？" onConfirm={() => reviewUser(u.id, false, u.display_name || u.username)}>
+                          <Button size="small" danger>拒绝</Button>
+                        </Popconfirm>
+                      </>
+                    )}
                     <Button size="small" onClick={() => openEdit(u)}>编辑</Button>
                     <Button size="small" icon={<KeyOutlined />} onClick={() => openRoles(u)}>角色</Button>
                     <Popconfirm title="停用该用户？" onConfirm={async () => {

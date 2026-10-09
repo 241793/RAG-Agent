@@ -209,7 +209,7 @@ async def _create_user_grants_viewer():
     async with AsyncSessionLocal() as db:
         admin = await db.get(User, d["owner"])
         created = await create_user(
-            UserCreate(username="na_newbie", password="secret123", display_name="新人"),
+            UserCreate(username="na_newbie", password="Newbie@2026", display_name="新人"),
             user=admin, db=db,
         )
         await db.commit()
@@ -236,16 +236,16 @@ async def _password_change():
         user = await db.get(User, d["outsider"])
         # 旧密码错 → 拒绝
         try:
-            await change_password(PasswordChangeRequest(old_password="wrong", new_password="newpass1"), user=user, db=db)
+            await change_password(PasswordChangeRequest(old_password="wrong", new_password="Newpass@2026"), user=user, db=db)
             raise AssertionError("旧密码错误应被拒")
         except ValidationError:
             pass
         # 正确 → 生效
-        await change_password(PasswordChangeRequest(old_password="x", new_password="newpass1"), user=user, db=db)
+        await change_password(PasswordChangeRequest(old_password="x", new_password="Newpass@2026"), user=user, db=db)
         await db.commit()
     async with AsyncSessionLocal() as db:
         user = await db.get(User, d["outsider"])
-        assert verify_password("newpass1", user.password_hash)
+        assert verify_password("Newpass@2026", user.password_hash)
     print("OK password_change")
 
 

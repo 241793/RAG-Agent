@@ -41,6 +41,13 @@ class ConflictError(AppError):
     code = "conflict"
 
 
+class RateLimitError(AppError):
+    """请求过于频繁 / 账号被锁定（防爆破）。"""
+
+    status_code = 429
+    code = "rate_limited"
+
+
 class ValidationError(AppError):
     status_code = 422
     code = "validation_error"

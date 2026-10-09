@@ -1,8 +1,10 @@
 """RBAC 接口：角色/权限矩阵、用户、用户-角色授予、部门树、用户组。"""
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
@@ -170,6 +172,7 @@ async def list_users(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=500),
     search: str | None = None,
+    status: str | None = Query(None, description="按审核状态过滤：pending/approved/rejected"),
     user: User = Depends(require_permission("user:read")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -182,6 +185,8 @@ async def list_users(
     if search:
         like = f"%{search}%"
         stmt = stmt.where((User.username.like(like)) | (User.display_name.like(like)))
+    if status:
+        stmt = stmt.where(User.approval_status == status)
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
     rows = (
         await db.execute(
@@ -194,6 +199,79 @@ async def list_users(
         "page": page,
         "page_size": page_size,
     }
+
+
+@router.get("/users/pending")
+async def list_pending_users(
+    user: User = Depends(require_permission("user:read")),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """待审核的注册用户列表（供管理员审批）。"""
+    rows = (
+        await db.execute(
+            select(User).where(
+                User.tenant_id == user.tenant_id,
+                User.approval_status == "pending",
+                or_(User.user_type.is_(None), User.user_type != "external"),
+            ).order_by(User.id.desc())
+        )
+    ).scalars().all()
+    out = []
+    for u in rows:
+        reason = None
+        try:
+            reason = (json.loads(u.settings or "{}") or {}).get("register_reason")
+        except Exception:  # noqa: BLE001
+            pass
+        out.append({
+            "id": u.id, "username": u.username, "display_name": u.display_name,
+            "email": u.email, "reason": reason,
+            "registered_at": u.registered_at.isoformat() if u.registered_at else None,
+        })
+    return out
+
+
+@router.post("/users/{user_id}/approve")
+@audited("user.approve", "user", id_arg="user_id")
+async def approve_user(
+    user_id: int,
+    user: User = Depends(require_permission("user:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """审核通过：允许该用户登录。"""
+    from app.models.base import utcnow
+
+    u = await db.get(User, user_id)
+    if not u or u.tenant_id != user.tenant_id:
+        raise NotFoundError("用户不存在")
+    u.approval_status = "approved"
+    u.reviewed_by = user.id
+    u.reviewed_at = utcnow()
+    await db.flush()
+    return {"message": f"已通过「{u.display_name or u.username}」的注册申请",
+            "approval_status": u.approval_status}
+
+
+@router.post("/users/{user_id}/reject")
+@audited("user.reject", "user", id_arg="user_id")
+async def reject_user(
+    user_id: int,
+    user: User = Depends(require_permission("user:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """审核拒绝：该用户无法登录（保留记录，可后续再改）。"""
+    from app.models.base import utcnow
+
+    u = await db.get(User, user_id)
+    if not u or u.tenant_id != user.tenant_id:
+        raise NotFoundError("用户不存在")
+    u.approval_status = "rejected"
+    u.reviewed_by = user.id
+    u.reviewed_at = utcnow()
+    await db.flush()
+    return {"message": f"已拒绝「{u.display_name or u.username}」的注册申请",
+            "approval_status": u.approval_status}
+
 
 
 @router.post("/users", response_model=UserListItem)
@@ -210,6 +288,10 @@ async def create_user(
     ).scalar_one_or_none()
     if exists:
         raise ConflictError("用户名已存在")
+    # 管理员建号：直接生效（approved），无需再审核；密码需满足强度要求
+    from app.core.security import validate_password_or_raise
+
+    validate_password_or_raise(body.password)
     u = User(
         tenant_id=user.tenant_id,
         username=body.username,
@@ -218,6 +300,7 @@ async def create_user(
         email=body.email,
         department_id=body.department_id,
         is_admin=body.is_admin,
+        approval_status="approved",
     )
     db.add(u)
     await db.flush()
@@ -253,8 +336,20 @@ async def update_user(
     u = await db.get(User, user_id)
     if not u or u.tenant_id != user.tenant_id:
         raise NotFoundError("用户不存在")
-    for k, v in body.model_dump(exclude_unset=True).items():
+    patch = body.model_dump(exclude_unset=True)
+    # 停用账号 / 重置密码时递增强制下线：旧 token 立即失效
+    force_logout = ("status" in patch and patch["status"] != "active") or ("password" in patch)
+    if "password" in patch and patch["password"]:
+        from app.core.security import hash_password as _hp, validate_password_or_raise
+
+        validate_password_or_raise(patch["password"])
+        patch["password_hash"] = _hp(patch.pop("password"))
+    else:
+        patch.pop("password", None)
+    for k, v in patch.items():
         setattr(u, k, v)
+    if force_logout:
+        u.token_version = int(getattr(u, "token_version", 0) or 0) + 1
     await db.flush()
     return u
 

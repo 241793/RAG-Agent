@@ -34,6 +34,13 @@ class User(Base, IdMixin, TimestampMixin, TenantMixin):
     sso_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     settings: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # token 版本：改密码/停用/强制下线时 +1，使已签发的旧 token 立即失效（无需黑名单）
+    token_version: Mapped[int] = mapped_column(default=0)
+    # 注册审核：pending=待审核 / approved=已通过（默认，存量与管理员建号均为此）
+    approval_status: Mapped[str] = mapped_column(String(16), default="approved")
+    registered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 # ===== 以下为下轮 RBAC 预留，本轮不写业务逻辑 =====

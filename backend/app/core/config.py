@@ -56,6 +56,40 @@ DATA_DIR = BASE_DIR / "data"
 # 确保数据目录存在（SQLite 需目录已存在，冻结态尤其关键）
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+_SECRET_PLACEHOLDER = "change-me-to-a-long-random-string-in-production"
+_SECRET_FILE = DATA_DIR / ".secret_key"
+
+
+def _load_or_create_secret() -> str:
+    """获取 JWT 签名密钥。
+
+    优先用环境/配置里的非占位值；否则在 DATA_DIR 生成一个随机密钥并持久化。
+    绝不允许用占位默认值签名（否则任何人都能伪造任意用户的 JWT）。
+    首次生成后一致持久化，重启不会导致已签发 token 失效。
+    """
+    env_val = os.environ.get("SECRET_KEY") or os.environ.get("secret_key")
+    if env_val and env_val.strip() and env_val.strip() != _SECRET_PLACEHOLDER:
+        return env_val.strip()
+    try:
+        if _SECRET_FILE.exists():
+            v = _SECRET_FILE.read_text(encoding="utf-8").strip()
+            if v and v != _SECRET_PLACEHOLDER:
+                return v
+        import secrets as _secrets
+
+        v = _secrets.token_urlsafe(48)
+        _SECRET_FILE.write_text(v, encoding="utf-8")
+        try:
+            os.chmod(_SECRET_FILE, 0o600)
+        except OSError:
+            pass
+        return v
+    except OSError:
+        # 极端只读环境：退化为进程内随机（重启后 token 失效，但绝不使用占位密钥）
+        import secrets as _secrets
+
+        return _secrets.token_urlsafe(48)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -64,7 +98,6 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
-
     # 应用
     app_name: str = "RAG Knowledge Base"
     app_env: str = "prod" if _is_frozen() else "dev"
@@ -118,11 +151,18 @@ class Settings(BaseSettings):
     email_poll_interval_seconds: int = 300  # 邮件源轮询周期（秒，0=关闭）
 
     # 安全
-    secret_key: str = "change-me-to-a-long-random-string-in-production"
+    # 默认占位值 → 启动时自动生成随机密钥并持久化到 data/.secret_key（见 _load_or_create_secret）
+    secret_key: str = _load_or_create_secret()
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440
     refresh_token_expire_minutes: int = 10080
     file_token_expire_minutes: int = 30  # 文件访问签名 URL 有效期
+    # 登录防爆破
+    login_rate_per_min: int = 10             # 单 IP 每分钟登录尝试上限（0=关闭）
+    login_max_failures: int = 5              # 连续失败多少次锁定账号
+    login_lock_minutes: int = 15             # 锁定时长（分钟）
+    registration_enabled: bool = True        # 是否允许自助注册（注册后待审核）
+    require_admin_approval: bool = True      # 注册用户是否必须管理员审核后才能登录
 
     # 存储
     storage_backend: str = "local"
@@ -161,6 +201,14 @@ class Settings(BaseSettings):
 
     # CORS
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    def model_post_init(self, __context) -> None:
+        """兜底：若 .env / 环境仍带入占位密钥（或空），替换为生成/持久化的随机密钥。
+
+        这样无论配置来源如何，运行时都不会用可预测的默认值签名 JWT。
+        """
+        if not self.secret_key or self.secret_key == _SECRET_PLACEHOLDER:
+            object.__setattr__(self, "secret_key", _load_or_create_secret())
 
     @property
     def cors_origin_list(self) -> list[str]:

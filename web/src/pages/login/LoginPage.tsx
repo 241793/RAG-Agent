@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, Card, Divider, Form, Input, message, Space } from 'antd'
+import { Alert, Button, Card, Divider, Form, Input, message, Modal, Space, Typography } from 'antd'
 import { UserOutlined, LockOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { authApi, ssoApi, type SsoProvider } from '../../api'
@@ -9,6 +9,9 @@ import { useAuth } from '../../stores/auth'
 export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [providers, setProviders] = useState<SsoProvider[]>([])
+  const [regOpen, setRegOpen] = useState(false)
+  const [regLoading, setRegLoading] = useState(false)
+  const [regForm] = Form.useForm()
   const nav = useNavigate()
   const setUser = useAuth((s) => s.setUser)
 
@@ -50,20 +53,41 @@ export default function LoginPage() {
     }
   }
 
+  const doRegister = async () => {
+    const v = await regForm.validateFields().catch(() => null)
+    if (!v) return
+    setRegLoading(true)
+    try {
+      const r = await authApi.register(v)
+      setRegOpen(false); regForm.resetFields()
+      Modal.success({
+        title: '注册成功',
+        content: r.pending
+          ? '账号已创建，需管理员审核通过后才能登录。请等待管理员处理。'
+          : '账号已创建，现在可以直接登录。',
+      })
+    } catch (e) { message.error(errMsg(e)) } finally { setRegLoading(false) }
+  }
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg,#001529,#003a70)' }}>
       <Card style={{ width: 380 }} title="企业 RAG 知识库" bordered={false}>
-        <Form onFinish={onFinish} layout="vertical" initialValues={{ username: 'admin', password: 'admin123' }}>
+        {/* 不预填任何账号密码：避免生产环境保留默认管理员凭据 */}
+        <Form onFinish={onFinish} layout="vertical">
           <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input prefix={<UserOutlined />} placeholder="用户名" size="large" />
+            <Input prefix={<UserOutlined />} placeholder="用户名" size="large" autoComplete="username" />
           </Form.Item>
           <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password prefix={<LockOutlined />} placeholder="密码" size="large" />
+            <Input.Password prefix={<LockOutlined />} placeholder="密码" size="large" autoComplete="current-password" />
           </Form.Item>
           <Button type="primary" htmlType="submit" block size="large" loading={loading}>
             登录
           </Button>
         </Form>
+
+        <div style={{ textAlign: 'center', marginTop: 12 }}>
+          <Typography.Link onClick={() => setRegOpen(true)}>还没有账号？注册</Typography.Link>
+        </div>
 
         {providers.length > 0 && (
           <>
@@ -79,6 +103,34 @@ export default function LoginPage() {
           </>
         )}
       </Card>
+
+      <Modal title="注册账号" open={regOpen} onOk={doRegister} confirmLoading={regLoading}
+        onCancel={() => setRegOpen(false)} destroyOnClose okText="提交注册">
+        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+          message="注册后需管理员审核通过才能登录" />
+        <Form form={regForm} layout="vertical">
+          <Form.Item name="username" label="用户名"
+            rules={[{ required: true, message: '请输入用户名' }, { min: 2, max: 64, message: '2-64 个字符' },
+              { pattern: /^[A-Za-z0-9_.@-]+$/, message: '仅允许字母、数字及 _ . @ -' }]}>
+            <Input placeholder="登录用用户名" autoComplete="off" />
+          </Form.Item>
+          <Form.Item name="display_name" label="姓名/昵称">
+            <Input placeholder="可选，展示用" />
+          </Form.Item>
+          <Form.Item name="email" label="邮箱"
+            rules={[{ type: 'email', message: '邮箱格式不正确' }]}>
+            <Input placeholder="可选" autoComplete="off" />
+          </Form.Item>
+          <Form.Item name="password" label="密码"
+            rules={[{ required: true, message: '请输入密码' }, { min: 8, message: '至少 8 位' }]}
+            extra="至少 8 位，需含大写字母、小写字母、数字、符号中的至少三类">
+            <Input.Password placeholder="设置密码" autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item name="reason" label="申请理由">
+            <Input.TextArea rows={2} placeholder="可选，供管理员审核参考，如：所属部门 / 用途" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

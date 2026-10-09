@@ -191,6 +191,8 @@ export const authApi = {
   login: (username: string, password: string) =>
     http.post('/auth/login', { username, password }).then((r) => r.data),
   me: () => http.get<User>('/auth/me').then((r) => r.data),
+  register: (data: { username: string; password: string; display_name?: string; email?: string; reason?: string }) =>
+    http.post<{ message: string; pending: boolean }>('/auth/register', data).then((r) => r.data),
   changePassword: (oldPassword: string, newPassword: string) =>
     http.post('/auth/password', { old_password: oldPassword, new_password: newPassword }).then((r) => r.data),
 }
@@ -509,6 +511,7 @@ export interface UserListItem {
   display_name: string
   email?: string
   status: string
+  approval_status?: 'pending' | 'approved' | 'rejected'
   is_admin: boolean
   department_id?: number
   created_at: string
@@ -546,10 +549,15 @@ export const rbacApi = {
   setRolePermissions: (id: number, permissionIds: number[]) =>
     http.put(`/admin/roles/${id}/permissions`, { permission_ids: permissionIds }).then((r) => r.data),
   // 用户
-  users: (page = 1, pageSize = 20, search?: string) =>
+  users: (page = 1, pageSize = 20, search?: string, status?: string) =>
     http
-      .get('/admin/users', { params: { page, page_size: pageSize, search } })
+      .get('/admin/users', { params: { page, page_size: pageSize, search, status } })
       .then((r) => r.data as { items: UserListItem[]; total: number }),
+  pendingUsers: () =>
+    http.get<{ id: number; username: string; display_name: string; email: string | null; reason: string | null; registered_at: string | null }[]>(
+      '/admin/users/pending').then((r) => r.data),
+  approveUser: (id: number) => http.post(`/admin/users/${id}/approve`).then((r) => r.data),
+  rejectUser: (id: number) => http.post(`/admin/users/${id}/reject`).then((r) => r.data),
   createUser: (data: Record<string, any>) =>
     http.post<UserListItem>('/admin/users', data).then((r) => r.data),
   updateUser: (id: number, data: Record<string, any>) =>

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---- 角色 ----
@@ -59,6 +59,7 @@ class UserUpdate(BaseModel):
     email: str | None = None
     department_id: int | None = None
     status: str | None = None
+    password: str | None = None  # 管理员重置密码（会强制该用户下线）
 
 
 class UserListItem(BaseModel):
@@ -67,11 +68,18 @@ class UserListItem(BaseModel):
     display_name: str
     email: str | None = None
     status: str
+    approval_status: str = "approved"
     is_admin: bool
     department_id: int | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("approval_status", mode="before")
+    @classmethod
+    def _default_approval(cls, v):
+        # 存量行该列可能为 NULL（后加列），兜底为 approved，避免响应校验 500
+        return v if isinstance(v, str) and v else "approved"
 
 
 class UserRoleGrant(BaseModel):

@@ -524,21 +524,22 @@ async def reset_admin_password(
     user: User = Depends(require_permission("system:manage")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """重置某个账号的密码。"""
+    """重置某个账号的密码（并使该用户旧 token 立即失效）。"""
     from sqlalchemy import select
 
-    from app.core.security import hash_password
+    from app.core.security import hash_password, validate_password_or_raise
 
-    if len(body.new_password or "") < 6:
-        raise ValidationError("密码至少 6 位")
+    validate_password_or_raise(body.new_password or "")
     target = (await db.execute(
         select(User).where(User.tenant_id == user.tenant_id, User.username == body.username)
     )).scalar_one_or_none()
     if not target:
         raise NotFoundError(f"账号不存在：{body.username}")
     target.password_hash = hash_password(body.new_password)
+    # 强制下线：重置密码后旧 token 立即失效
+    target.token_version = int(getattr(target, "token_version", 0) or 0) + 1
     await db.flush()
-    return {"ok": True, "message": f"已重置「{body.username}」的密码"}
+    return {"ok": True, "message": f"已重置「{body.username}」的密码（该用户需重新登录）"}
 
 
 # ==================== 清理 ====================

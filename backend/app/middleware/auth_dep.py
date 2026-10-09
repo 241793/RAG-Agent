@@ -33,6 +33,12 @@ async def get_current_user(
     user = await db.get(User, user_id)
     if not user or user.status != "active":
         raise AuthError("用户不存在或已停用")
+    # token 版本校验：改密码/停用/强制下线后旧 token 立即失效
+    if int(payload.get("tv", 0)) != int(getattr(user, "token_version", 0) or 0):
+        raise AuthError("凭证已失效，请重新登录")
+    # 审核状态：待审核/被拒用户不得使用系统
+    if getattr(user, "approval_status", "approved") != "approved":
+        raise AuthError("账号尚未通过审核")
     user_id_ctx.set(user.id)
     tenant_id_ctx.set(user.tenant_id)
     return user
