@@ -55,6 +55,7 @@ async def create_kb(
         embedding_model_id=body.embedding_model_id,
         chunk_strategy=body.chunk_strategy,
         source_type=body.source_type,
+        index_mode=(body.index_mode if body.source_type == "local" else "vector"),
         connector_kind=body.connector_kind if body.source_type == "external" else None,
         connector_config=_encrypt_connector(body.connector_config) if body.source_type == "external" else None,
         owner_id=user.id,

@@ -23,6 +23,7 @@ def rrf_fuse(
     scores: dict[str, float] = {}
     best: dict[str, VectorHit] = {}
     best_raw: dict[str, float] = {}
+    best_sources: dict[str, set] = {}
     for i, ranking in enumerate(rankings):
         w = 1.0
         if weights and i < len(weights):
@@ -37,6 +38,11 @@ def rrf_fuse(
             raw = hit.raw_score if hit.raw_score is not None else hit.score
             if raw is not None:
                 best_raw[key] = max(best_raw.get(key, float("-inf")), float(raw))
+            # 记录命中来自哪几路（vector/bm25/external），供按来源分别处理
+            src = hit.source or "vector"
+            if src == "fused":
+                src = "vector"
+            best_sources.setdefault(key, set()).add(src)
 
     ordered = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     if top_n:
@@ -48,5 +54,6 @@ def rrf_fuse(
         hit.raw_score = best_raw.get(key, sc)  # 原始相似度（可比，供 score_threshold）
         hit.score = sc                          # RRF 融合分（仅用于排序）
         hit.source = "fused"
+        hit.sources = best_sources.get(key, set())
         result.append(hit)
     return result

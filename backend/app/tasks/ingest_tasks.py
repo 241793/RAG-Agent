@@ -175,32 +175,41 @@ async def process_document(document_id: int) -> None:
             await db.commit()
 
             # 3. embed（仅子块/扁平块）
-            # 图文知识库（source_type=entry）不做向量嵌入：条目短、靠关键词（BM25）即可命中，无需 embedding 模型。
+            # 跳过向量化的两类库：
+            # - 图文知识库（source_type=entry）：条目短，靠关键词（BM25）即可命中
+            # - 纯关键词库（index_mode=keyword）：用户明确选择不配 embedding，全靠 BM25
             stage = "embedding"
             doc.status = "embedding"
             embeddable = [c for c in new_chunks if c.chunk_type != "parent"]
             is_entry_kb = bool(kb and getattr(kb, "source_type", "local") == "entry")
-            if embeddable and not is_entry_kb:
+            is_keyword_kb = bool(kb and getattr(kb, "index_mode", "vector") == "keyword")
+            if embeddable and not is_entry_kb and not is_keyword_kb:
                 from app.core.config import settings
 
                 # KB 级向量模型：该库若指定了 embedding_model_id，用它而非租户默认，
                 # 保证与检索时的 query 向量同源（否则跨模型算 cosine 无意义）。
                 kb_model_id = getattr(kb, "embedding_model_id", None) if kb else None
-                emb_driver, rm = await get_embedding(db, tenant_id=tenant_id, config_id=kb_model_id)
                 texts = [c.content for c in embeddable]
                 degraded_note = None
+                rm = None
                 try:
+                    # 注意：get_embedding 必须在 try 内——「完全没配 embedding 模型」时
+                    # 它抛的 ValidationError 也要能被下面的本地降级分支兜住。
+                    emb_driver, rm = await get_embedding(db, tenant_id=tenant_id, config_id=kb_model_id)
                     vecs = await emb_driver.embed(texts, model=rm.model_name)
                 except Exception as e:  # noqa: BLE001
-                    # 本地兜底降级：上游不可用时改用确定性哈希向量，保证文档能入库
+                    # 本地兜底降级：无模型或上游不可用时改用确定性哈希向量，保证文档能入库
                     if settings.embedding_fallback_local:
                         from app.providers.drivers.local_hash import LocalHashDriver
 
                         emb_driver = LocalHashDriver(dim=settings.embedding_dim)
                         vecs = await emb_driver.embed(texts)
+                        cause = getattr(rm, "model_name", None)
                         degraded_note = (
-                            f"（已降级为本地向量模型 local_hash：上游「{rm.model_name}」调用失败，"
-                            f"语义检索质量下降，修复后在「模型管理」重配 embedding 并「重新处理」本文件可恢复）"
+                            "（已降级为本地向量模型 local_hash："
+                            + (f"上游「{cause}」调用失败" if cause else "未配置可用的 embedding 模型")
+                            + "，语义检索质量下降；修复后在「模型管理」重配 embedding 并「重新处理」本文件，"
+                            "或把该知识库索引方式改为「纯关键词」可彻底免去向量模型）"
                         )
                         logger.warning("embed_degraded_to_local", document_id=doc.id, err=str(e)[:200])
                     else:

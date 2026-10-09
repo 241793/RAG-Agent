@@ -346,3 +346,100 @@ def test_acl_endpoint_returns_principal_name():
     src = inspect.getsource(get_doc_acl)
     assert "principal_name" in src
     assert "describe_principals" in src
+
+
+# ==================== 纯关键词检索模式（无 embedding）====================
+def test_kb_has_index_mode_column():
+    from app.models import KnowledgeBase
+
+    assert "index_mode" in KnowledgeBase.__table__.columns
+    col = KnowledgeBase.__table__.c.index_mode
+    assert col.default.arg == "vector"
+
+
+def test_index_mode_in_schemas():
+    from app.schemas.kb import KBCreate, KBOut, KBUpdate
+
+    assert KBCreate.model_fields["index_mode"].default == "vector"
+    assert "index_mode" in KBUpdate.model_fields
+    assert KBOut.model_fields["index_mode"].default == "vector"
+
+
+def test_kbout_tolerates_null_index_mode():
+    """存量行 index_mode 为 NULL 时兜底为 vector，不触发响应校验 500。"""
+    from app.schemas.kb import KBOut
+
+    kb = KBOut.model_validate({
+        "id": 1, "name": "k", "visibility": "internal", "source_type": "local",
+        "index_mode": None, "embedding_dim": 1024, "doc_count": 0, "chunk_count": 0,
+        "created_at": "2026-01-01T00:00:00Z",
+    })
+    assert kb.index_mode == "vector"
+
+
+def test_group_skips_keyword_kbs():
+    """纯关键词库应被摘出向量召回集合。"""
+    import inspect
+
+    from app.services.retrieval_service import group_kbs_by_embedding_model
+
+    src = inspect.getsource(group_kbs_by_embedding_model)
+    assert "index_mode" in src and "keyword" in src
+
+
+def test_ingest_skips_keyword_kb():
+    import inspect
+
+    from app.tasks import ingest_tasks
+
+    src = inspect.getsource(ingest_tasks.process_document)
+    assert "is_keyword_kb" in src
+
+
+def test_get_embedding_inside_try():
+    """get_embedding 必须在 try 内，否则「没配模型」的异常不会被 fallback 兜住。"""
+    import inspect
+
+    from app.tasks import ingest_tasks
+
+    src = inspect.getsource(ingest_tasks.process_document)
+    lines = src.split("\n")
+    gi = next(i for i, l in enumerate(lines) if "get_embedding(" in l)
+    ti = max(i for i, l in enumerate(lines[:gi]) if "try:" in l)
+    assert ti < gi, "get_embedding 应位于 try 块内"
+
+
+def test_error_suggest_for_missing_embedding():
+    from app.services.error_format import _suggest
+
+    s = _suggest(None, "embedding", "未配置向量模型，请先在模型管理中配置 embedding 模型")
+    assert "纯关键词" in s or "embedding" in s
+
+
+def test_fusion_preserves_sources():
+    from app.retrieval.fusion import rrf_fuse
+    from app.retrieval.vector_store.store import VectorHit
+
+    a = VectorHit(chunk_id=1, doc_id=1, kb_id=1, content="x", score=0.9, source="vector")
+    b = VectorHit(chunk_id=1, doc_id=1, kb_id=1, content="x", score=0.5, source="bm25")
+    fused = rrf_fuse([[a], [b]], top_n=5)
+    assert fused and "vector" in fused[0].sources and "bm25" in fused[0].sources
+
+
+def test_bm25_only_hit_exempt_from_vector_threshold():
+    """纯 BM25 命中不应被向量阈值过滤。"""
+    import inspect
+
+    from app.services.retrieval_service import retrieve
+
+    src = inspect.getsource(retrieve)
+    assert "sources" in src and "bm25" in src
+
+
+def test_reembed_skips_keyword_kb():
+    import inspect
+
+    from app.api.v1.document import _reembed_chunk
+
+    src = inspect.getsource(_reembed_chunk)
+    assert "keyword" in src

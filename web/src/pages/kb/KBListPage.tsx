@@ -101,6 +101,7 @@ export default function KBListPage() {
   const [embedModels, setEmbedModels] = useState<ModelConfig[]>([])
   const [strategy, setStrategy] = useState<string>('recursive')
   const [sourceType, setSourceType] = useState<string>('local')
+  const [indexMode, setIndexMode] = useState<string>('vector')
   const [connKind, setConnKind] = useState<string>('generic_http')
   const [connTesting, setConnTesting] = useState(false)
   const [connResult, setConnResult] = useState<{ count: number; items: any[] } | null>(null)
@@ -131,6 +132,7 @@ export default function KBListPage() {
       form.setFieldsValue(kb)
       setStrategy(kb.chunk_strategy?.type || 'parent_child')
       setSourceType(kb.source_type || 'local')
+      setIndexMode(kb.index_mode || 'vector')
       setConnKind(kb.connector_kind || 'generic_http')
       if (kb.source_type === 'external') {
         // 拉取脱敏配置回填（api_key 为掩码，未改动则后端沿用旧值）
@@ -143,6 +145,7 @@ export default function KBListPage() {
       form.setFieldsValue({ chunk_strategy: { type: 'parent_child', child_size: 400, parent_size: 1500, overlap: 50 } })
       setStrategy('parent_child')
       setSourceType('local')
+      setIndexMode('vector')
       setConnKind('generic_http')
     }
     setOpen(true)
@@ -180,6 +183,9 @@ export default function KBListPage() {
         delete payload.embedding_model_id
       } else {
         payload.source_type = 'local'
+        payload.index_mode = indexMode
+        // 纯关键词模式不需要向量模型
+        if (indexMode === 'keyword') delete payload.embedding_model_id
       }
       if (editKb) await kbApi.update(editKb.id, payload)
       else await kbApi.create(payload)
@@ -229,6 +235,9 @@ export default function KBListPage() {
                   <Space className="kb-card-actions" onClick={(e) => e.stopPropagation()}>
                     {kb.source_type === 'external' && <Tag color="purple">外部</Tag>}
                     {kb.source_type === 'entry' && <Tag color="cyan">图文</Tag>}
+                    {kb.source_type !== 'external' && kb.source_type !== 'entry' && kb.index_mode === 'keyword' && (
+                      <Tag color="orange">关键词</Tag>
+                    )}
                     <Tag color={visColor[kb.visibility]}>{visLabel[kb.visibility]}</Tag>
                     <Can perm="kb:update">
                       <Tooltip title="编辑">
@@ -326,10 +335,24 @@ export default function KBListPage() {
               description="创建后进入详情页「添加图文条目」：填写一段文字并上传配套图片/附件。当有人问到与这段文字相关的问题、被检索命中时，配套图片/附件会自动发送给提问者（渠道用户）。" />
           ) : (
             <>
-              <Form.Item name="embedding_model_id" label="向量模型（Embedding）" extra="为空则用系统默认向量模型">
-                <Select allowClear placeholder="默认向量模型"
-                  options={embedModels.map((m) => ({ value: m.id, label: `${m.display_name || m.model_name}${m.embedding_dim ? `（${m.embedding_dim}维）` : ''}` }))} />
+              <Form.Item label="索引方式" style={{ marginBottom: 12 }}>
+                <Segmented block value={indexMode} onChange={(v) => setIndexMode(v as string)}
+                  options={[
+                    { value: 'vector', label: '向量 + 关键词（推荐）' },
+                    { value: 'keyword', label: '纯关键词' },
+                  ]} />
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {indexMode === 'keyword'
+                    ? '纯关键词（BM25）：不需要任何向量模型即可使用，适合术语 / 编号 / 短条目 / 问答话术；口语化长问的语义召回弱于向量。'
+                    : '向量 + 关键词混合检索：语义理解更强，需要配置 embedding 向量模型。'}
+                </Typography.Text>
               </Form.Item>
+              {indexMode !== 'keyword' && (
+                <Form.Item name="embedding_model_id" label="向量模型（Embedding）" extra="为空则用系统默认向量模型">
+                  <Select allowClear placeholder="默认向量模型"
+                    options={embedModels.map((m) => ({ value: m.id, label: `${m.display_name || m.model_name}${m.embedding_dim ? `（${m.embedding_dim}维）` : ''}` }))} />
+                </Form.Item>
+              )}
               <Form.Item name={['chunk_strategy', 'type']} label="分块策略" style={{ marginBottom: 12 }}>
                 <Select options={STRATEGY_OPTIONS} onChange={(v) => setStrategy(v)} />
               </Form.Item>

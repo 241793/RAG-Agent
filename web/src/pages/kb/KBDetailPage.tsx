@@ -181,6 +181,7 @@ export default function KBDetailPage() {
 
   const isExternal = (kb?.source_type || 'local') === 'external'
   const isEntry = (kb?.source_type || 'local') === 'entry'
+  const isKeyword = (kb?.index_mode || 'vector') === 'keyword'
   // 有效能力：owner/manager/editor → 可写；manager/owner → 可管成员
   const canWrite = !!kb && ['owner', 'manager', 'editor'].includes(kb.my_perm || '')
   const canManage = !!kb && ['owner', 'manager'].includes(kb.my_perm || '')
@@ -570,24 +571,29 @@ export default function KBDetailPage() {
               <Descriptions.Item label="检索方式">实时联邦检索</Descriptions.Item>
             </Descriptions>
           ) : (
-            <Descriptions column={5} size="small">
+            <Descriptions column={6} size="small">
               <Descriptions.Item label="可见性">{kb.visibility}</Descriptions.Item>
-              <Descriptions.Item label="向量模型">
-                {canManage ? (
-                  <Select
-                    size="small" style={{ minWidth: 160 }} value={kb.embedding_model_id ?? 0}
-                    onChange={(v) => setKbEmbedding(v === 0 ? null : v)}
-                    options={[
-                      { value: 0, label: '租户默认' },
-                      ...embModels.map((m) => ({ value: m.id, label: m.display_name })),
-                    ]}
-                  />
-                ) : (
-                  kb.embedding_model_id
-                    ? (embModels.find((m) => m.id === kb.embedding_model_id)?.display_name || `#${kb.embedding_model_id}`)
-                    : '默认'
-                )}
+              <Descriptions.Item label="索引方式">
+                {isKeyword ? <Tag color="orange">纯关键词</Tag> : <Tag color="blue">向量 + 关键词</Tag>}
               </Descriptions.Item>
+              {!isKeyword && (
+                <Descriptions.Item label="向量模型">
+                  {canManage ? (
+                    <Select
+                      size="small" style={{ minWidth: 160 }} value={kb.embedding_model_id ?? 0}
+                      onChange={(v) => setKbEmbedding(v === 0 ? null : v)}
+                      options={[
+                        { value: 0, label: '租户默认' },
+                        ...embModels.map((m) => ({ value: m.id, label: m.display_name })),
+                      ]}
+                    />
+                  ) : (
+                    kb.embedding_model_id
+                      ? (embModels.find((m) => m.id === kb.embedding_model_id)?.display_name || `#${kb.embedding_model_id}`)
+                      : '默认'
+                  )}
+                </Descriptions.Item>
+              )}
               <Descriptions.Item label="分块策略">{kb.chunk_strategy?.type || 'parent_child'}</Descriptions.Item>
               <Descriptions.Item label="文档数">{kb.doc_count}</Descriptions.Item>
               <Descriptions.Item label="分块数">{kb.chunk_count}</Descriptions.Item>
@@ -762,6 +768,12 @@ export default function KBDetailPage() {
                   ) : null
                 }
               >
+                {isKeyword && (
+                  <Alert type="info" showIcon style={{ marginBottom: 12 }}
+                    message="本库为「纯关键词」索引"
+                    description="文档以原文分块存入，检索靠 BM25 关键词匹配，不需要向量模型。适合术语/编号/短条目；口语化长问的语义召回弱于向量。如需更强的语义检索，可在「编辑知识库」里改为「向量+关键词」。"
+                  />
+                )}
                 <Table
                   rowKey="id" loading={loading}
                   dataSource={filteredDocs}

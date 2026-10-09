@@ -5,6 +5,11 @@ from app.core.errors import UpstreamError
 
 
 def _suggest(status_code: int | None, purpose: str | None, message: str) -> str:
+    low = (message or "").lower()
+    # 「完全没配 embedding 模型」优先识别（消息来自 registry.get_embedding 的 ValidationError）
+    if purpose == "embedding" and ("未配置向量模型" in message or "no model" in low or "未配置" in message):
+        return ("未配置可用的向量模型。两条路选一：①在「模型管理」配置一个 embedding 模型后「重新处理」；"
+                "②把该知识库的「索引方式」改为『纯关键词』——不需要任何向量模型即可用（适合术语/编号/短条目）。")
     if status_code == 404:
         if purpose == "embedding":
             return ("上游端点返回 404：该地址很可能不提供 /embeddings 接口（常见于把对话模型配成了向量模型）。"
@@ -17,7 +22,6 @@ def _suggest(status_code: int | None, purpose: str | None, message: str) -> str:
         return "上游限流（429）：请降低并发/频率，或稍后重试。"
     if status_code and status_code >= 500:
         return "上游服务错误：请稍后重试，或联系上游服务提供方。"
-    low = message.lower()
     if "timeout" in low or "timed out" in low:
         return "请求超时：请检查网络连通性、上游负载，或调大 Provider 的超时设置。"
     if "connect" in low or "connection" in low:

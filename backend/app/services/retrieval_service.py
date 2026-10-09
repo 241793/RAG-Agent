@@ -90,21 +90,24 @@ async def group_kbs_by_embedding_model(
 ) -> tuple[dict[int | None, list[int]], set[int]]:
     """按各 KB 的 embedding_model_id 分组，返回 (model_id → kb_ids, 非向量库集合)。
 
-    图文库（source_type=entry）不做向量嵌入，单独返回以便跳过向量召回。
-    未配置模型的 KB 归入 None 组，走租户默认 embedding。
+    非向量库（不参与向量召回，只走 BM25/外部）包括：
+    - 图文库（source_type=entry）：条目短，靠关键词即可命中
+    - 纯关键词库（index_mode=keyword）：用户明确选择不用 embedding
+    未配置模型的普通库归入 None 组，走租户默认 embedding。
     """
     if not kb_ids:
         return {}, set()
     rows = (
         await db.execute(
-            select(KnowledgeBase.id, KnowledgeBase.source_type, KnowledgeBase.embedding_model_id)
+            select(KnowledgeBase.id, KnowledgeBase.source_type, KnowledgeBase.embedding_model_id,
+                   KnowledgeBase.index_mode)
             .where(KnowledgeBase.id.in_(kb_ids))
         )
     ).all()
     groups: dict[int | None, list[int]] = {}
     skip: set[int] = set()
-    for kid, source_type, model_id in rows:
-        if (source_type or "local") == "entry":
+    for kid, source_type, model_id, index_mode in rows:
+        if (source_type or "local") == "entry" or (index_mode or "vector") == "keyword":
             skip.add(kid)
             continue
         groups.setdefault(model_id, []).append(kid)
@@ -398,8 +401,17 @@ async def retrieve(
 
     # 相关度阈值过滤：用**原始相似度**（向量余弦/BM25 分）判断，而非 RRF 融合分
     # （RRF 是排名制、跨查询不可比，拿它比阈值会导致阈值形同虚设）。
+    # 注意：score_threshold 是「向量余弦」语义，对纯 BM25 命中不适用——
+    # 纯关键词库的命中只受 retrieval_bm25_min 约束（在 BM25 召回处已过滤），此处豁免。
     if score_threshold > 0:
-        fused = [h for h in fused if (h.raw_score if h.raw_score is not None else h.score) >= score_threshold]
+        def _pass(h) -> bool:
+            srcs = getattr(h, "sources", None) or set()
+            # 仅 BM25 路命中、且无向量/external 参与 → 不由向量阈值裁决
+            if srcs and srcs == {"bm25"}:
+                return True
+            return (h.raw_score if h.raw_score is not None else h.score) >= score_threshold
+
+        fused = [h for h in fused if _pass(h)]
 
     chunks = await _to_chunks(db, fused)
     # 未命中日志（异步、不阻塞）——供知识库运营发现缺口

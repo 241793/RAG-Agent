@@ -14,6 +14,7 @@ class KBCreate(BaseModel):
     embedding_model_id: int | None = None
     chunk_strategy: dict | None = None
     source_type: str = "local"  # local=向量知识库 | entry=图文知识库 | external=外部知识库
+    index_mode: str = "vector"  # vector=向量+关键词 | keyword=纯关键词(不需要 embedding)
     connector_kind: str | None = None
     connector_config: dict | None = None
 
@@ -27,6 +28,7 @@ class KBUpdate(BaseModel):
     chunk_strategy: dict | None = None
     settings: dict | None = None
     source_type: str | None = None
+    index_mode: str | None = None
     connector_kind: str | None = None
     connector_config: dict | None = None
 
@@ -51,6 +53,7 @@ class KBOut(BaseModel):
     icon: str | None = None
     visibility: str
     source_type: str = "local"
+    index_mode: str = "vector"
     connector_kind: str | None = None
     embedding_model_id: int | None = None
     embedding_dim: int
@@ -66,6 +69,12 @@ class KBOut(BaseModel):
     @classmethod
     def _default_source_type(cls, v):
         return v or "local"
+
+    @field_validator("index_mode", mode="before")
+    @classmethod
+    def _default_index_mode(cls, v):
+        # 存量行该列可能为 NULL（后加列），兜底为 vector，避免响应校验 500
+        return v if isinstance(v, str) and v else "vector"
 
 
 class DocumentOut(BaseModel):

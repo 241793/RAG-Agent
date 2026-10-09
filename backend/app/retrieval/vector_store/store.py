@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +28,8 @@ class VectorHit:
     raw_score: float | None = None      # 原始分（RRF 原始/向量相似度，用于阈值判断）
     rerank_score: float | None = None   # 重排分
     source: str = "vector"              # vector | bm25 | fused | rerank | external
+    # 融合后保留的原始来源集合（vector/bm25/external），供按来源分别处理（如阈值豁免）
+    sources: set = field(default_factory=set)
     # 外部知识库命中：有值表示来自外部源（chunk_id/doc_id 为占位，不指向本地表）
     ext_ref: str | None = None
     ext_title: str | None = None

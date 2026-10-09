@@ -28,7 +28,8 @@ export interface KB {
   description?: string
   icon?: string
   visibility: 'public' | 'internal' | 'private'
-  source_type?: 'local' | 'external'
+  source_type?: 'local' | 'external' | 'entry'
+  index_mode?: 'vector' | 'keyword'
   connector_kind?: string | null
   embedding_model_id?: number
   chunk_strategy?: Record<string, any>

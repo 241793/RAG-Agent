@@ -46,7 +46,9 @@ export default function ChatPage() {
   const [searchParams] = useSearchParams()
   const [kbs, setKbs] = useState<KB[]>([])
   const [selectedKbs, setSelectedKbs] = useState<number[]>([])
-  const [retrievalMode, setRetrievalMode] = useState<'auto' | 'custom' | 'off'>('auto') // 检索范围三态
+  const [retrievalMode, setRetrievalMode] = useState<'auto' | 'custom' | 'off'>(
+    () => (localStorage.getItem('chat_retrieval_mode') as 'auto' | 'custom' | 'off') || 'auto'
+  ) // 检索范围三态：初始值读上次选择
   const [aiTools, setAiTools] = useState(true)      // 允许 AI 调用平台工具
   const [autoWrite, setAutoWrite] = useState(false) // 写操作免确认（全自动）
   const [input, setInput] = useState('')
@@ -138,7 +140,18 @@ export default function ChatPage() {
   }
 
   useEffect(() => {
-    kbApi.list().then(setKbs).catch(() => {})
+    kbApi.list().then((ks) => {
+      setKbs(ks)
+      // 恢复上次选的知识库，并与当前可选列表取交集（过滤已删除的库）
+      try {
+        const saved = JSON.parse(localStorage.getItem('chat_selected_kbs') || '[]')
+        if (Array.isArray(saved) && saved.length) {
+          const valid = new Set(ks.map((k) => k.id))
+          const kept = saved.filter((id: number) => valid.has(id))
+          if (kept.length) setSelectedKbs(kept)
+        }
+      } catch { /* 忽略脏数据 */ }
+    }).catch(() => {})
     providerApi.configs().then((cs) => {
       const chatModels = cs.filter((c) => c.purpose === 'chat')
       setModels(chatModels)
@@ -585,7 +598,8 @@ export default function ChatPage() {
           <Select style={{ width: 200 }} value={modelId} onChange={changeModel}
             options={models.map((m) => ({ value: m.id, label: m.display_name || m.model_name }))} />
           <span>检索范围：</span>
-          <Select value={retrievalMode} style={{ width: 200 }} onChange={(v) => setRetrievalMode(v)}
+          <Select value={retrievalMode} style={{ width: 200 }}
+            onChange={(v) => { setRetrievalMode(v); localStorage.setItem('chat_retrieval_mode', v) }}
             options={[
               { value: 'auto', label: '自动（全部有权库）' },
               { value: 'custom', label: '指定知识库' },
@@ -593,7 +607,8 @@ export default function ChatPage() {
             ]} />
           {retrievalMode === 'custom' && (
             <Select mode="multiple" style={{ minWidth: 240 }} placeholder="选择知识库"
-              value={selectedKbs} onChange={setSelectedKbs}
+              value={selectedKbs}
+              onChange={(v) => { setSelectedKbs(v); localStorage.setItem('chat_selected_kbs', JSON.stringify(v)) }}
               options={kbs.map((k) => ({ value: k.id, label: k.name }))} />
           )}
           <Tooltip title="允许 AI 调用平台工具（查用量/建库/传文档等，按你的权限）">

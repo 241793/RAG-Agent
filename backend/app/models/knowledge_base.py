@@ -35,6 +35,8 @@ class KnowledgeBase(Base, IdMixin, TimestampMixin, TenantMixin):
     visibility: Mapped[str] = mapped_column(String(16), default="internal", index=True)
     # 数据来源：local=本地上传入库, external=外部 RAG 系统联邦检索
     source_type: Mapped[str] = mapped_column(String(16), default="local", index=True)
+    # 索引方式：vector=向量+关键词混合（默认）｜ keyword=纯关键词(BM25)，不需要 embedding 模型
+    index_mode: Mapped[str] = mapped_column(String(16), default="vector", index=True)
     connector_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)  # generic_http/dify/ragflow/fastgpt/mcp
     connector_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # base_url/api_key(密文)/...
     embedding_model_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

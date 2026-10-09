@@ -244,6 +244,10 @@ async def _reembed_chunk(db: AsyncSession, chunk) -> None:
     try:
         # 用该块所属 KB 指定的向量模型（若有），与入库/检索保持一致
         kb = await db.get(KnowledgeBase, chunk.kb_id)
+        # 纯关键词库不做向量化：只更新关键词检索文本，避免触碰 embedding
+        if kb and getattr(kb, "index_mode", "vector") == "keyword":
+            chunk.tsv = chunk.content
+            return
         kb_model_id = getattr(kb, "embedding_model_id", None) if kb else None
         emb_driver, rm = await get_embedding(db, tenant_id=chunk.tenant_id, config_id=kb_model_id)
         vecs = await emb_driver.embed([chunk.content], model=rm.model_name)
@@ -837,9 +841,10 @@ async def rollback_document_version(
     await _refresh_kb_counts(db, doc.kb_id)
     await db.commit()
 
-    # 重建向量（异步，失败不影响回滚结果）
+    # 重建向量（异步，失败不影响回滚结果）；纯关键词库跳过向量化
+    is_keyword_kb = bool(kb and getattr(kb, "index_mode", "vector") == "keyword")
     embeddable = [c for c in new_chunks if c.chunk_type != "parent"]
-    if embeddable:
+    if embeddable and not is_keyword_kb:
         try:
             from app.providers.registry import get_embedding
 
