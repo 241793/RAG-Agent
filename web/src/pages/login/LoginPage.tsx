@@ -156,12 +156,16 @@ export default function LoginPage() {
             rules={[{ type: 'email', message: '邮箱格式不正确' }]}>
             <Input placeholder="可选" autoComplete="off" />
           </Form.Item>
-          {depts.length > 0 && (
-            <Form.Item name="department_id" label="所属部门" extra="可选，管理员已在系统中配置的部门">
-              <Select allowClear showSearch optionFilterProp="label" placeholder="请选择部门（可选）"
-                options={depts.map((d) => ({ value: d.id, label: '　'.repeat(d.depth || 0) + d.name }))} />
-            </Form.Item>
-          )}
+          <Form.Item name="department_id" label="所属部门"
+            extra={depts.length > 0
+              ? '可选，管理员在「部门管理」中配置的部门'
+              : '管理员尚未配置部门；可留空，待审核通过后由管理员分配'}>
+            <Select allowClear showSearch optionFilterProp="label"
+              placeholder={depts.length > 0 ? '请选择部门（可选）' : '暂无部门可选'}
+              disabled={depts.length === 0}
+              notFoundContent="暂无部门"
+              options={depts.map((d) => ({ value: d.id, label: '　'.repeat(d.depth || 0) + d.name }))} />
+          </Form.Item>
           <Form.Item name="password" label="密码"
             rules={[{ required: true, message: '请输入密码' }, { min: 8, message: '至少 8 位' }]}
             extra="至少 8 位，需含大写字母、小写字母、数字、符号中的至少三类">
