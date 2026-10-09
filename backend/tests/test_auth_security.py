@@ -439,3 +439,45 @@ def test_approve_actually_grants_role():
     import asyncio
 
     asyncio.new_event_loop().run_until_complete(_run_approve_grants_role())
+
+
+# ==================== 角色/部门列表优化 ====================
+def test_roles_have_descriptions():
+    """内置角色都应有用途描述（列表页展示用）。"""
+    from app.services.permission_seed import ROLES
+
+    for item in ROLES:
+        assert len(item) == 5, f"ROLES 应为 5 元组（含描述），{item[0]} 不符"
+        code, _name, _scope, _perms, desc = item
+        assert desc and len(desc) >= 4, f"角色 {code} 缺少用途描述"
+
+
+def test_role_out_has_counts():
+    from app.schemas.rbac import RoleOut
+
+    fields = RoleOut.model_fields
+    assert "permission_count" in fields and "user_count" in fields
+
+
+def test_dept_tree_node_has_member_count():
+    from app.schemas.rbac import DeptTreeNode
+
+    assert "member_count" in DeptTreeNode.model_fields
+
+
+def test_list_roles_returns_counts():
+    import inspect
+
+    from app.api.v1 import rbac
+
+    src = inspect.getsource(rbac.list_roles)
+    assert "permission_count" in src and "user_count" in src
+
+
+def test_dept_tree_counts_members():
+    import inspect
+
+    from app.api.v1 import rbac
+
+    src = inspect.getsource(rbac.dept_tree)
+    assert "member_count" in src

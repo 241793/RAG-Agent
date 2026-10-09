@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
-  Button, Form, Input, message, Modal, Popconfirm, Select, Space, Table,
+  Button, Form, Input, message, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
 } from 'antd'
-import { PlusOutlined, DeleteOutlined, ApartmentOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, ApartmentOutlined, EditOutlined } from '@ant-design/icons'
 import { rbacApi, type DeptNode } from '../../api'
 import { errMsg } from '../../api/http'
 import PageContainer from '../../components/PageContainer'
@@ -56,6 +56,7 @@ export default function DeptPage() {
   return (
     <PageContainer
       title="部门管理"
+      subtitle="维护组织架构。部门可用于按部门授权知识库、以及注册时选择归属"
       extra={canManage ? <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreate(null)}>
         新建部门
       </Button> : undefined}
@@ -65,21 +66,35 @@ export default function DeptPage() {
         scroll={{ x: 'max-content' }}
         defaultExpandAllRows
         expandable={{ defaultExpandAllRows: true }}
-        locale={{ emptyText: <EmptyState description="暂无部门" /> }}
+        locale={{ emptyText: <EmptyState description="暂无部门，点击右上角新建" /> }}
         columns={[
-          { title: '部门', dataIndex: 'name', render: (v: string) => <Space><ApartmentOutlined />{v}</Space> },
-          { title: '标识', dataIndex: 'code' },
-          { title: 'path', dataIndex: 'path', width: 140 },
-          { title: '层级', dataIndex: 'depth', width: 70 },
           {
-            title: '操作', width: 260,
+            title: '部门', dataIndex: 'name',
+            render: (v: string, r: DeptNode) => (
+              <Space>
+                <ApartmentOutlined style={{ color: 'var(--color-primary)' }} />
+                <span style={{ fontWeight: r.depth === 0 ? 500 : 400 }}>{v}</span>
+                {r.children?.length ? <Tag>{r.children.length} 个子部门</Tag> : null}
+              </Space>
+            ),
+          },
+          {
+            title: '成员', dataIndex: 'member_count', width: 100, align: 'center' as const,
+            render: (v: number) => (v ? <Tag color="blue">{v} 人</Tag> : <Typography.Text type="secondary">0</Typography.Text>),
+          },
+          {
+            title: '标识', dataIndex: 'code', width: 160,
+            render: (v: string) => v || <Typography.Text type="secondary">—</Typography.Text>,
+          },
+          {
+            title: '操作', width: 260, fixed: 'right' as const,
             render: (_: any, r: DeptNode) => (
               <Space>
                 {canManage && (
                   <>
                     <Button size="small" icon={<PlusOutlined />} onClick={() => openCreate(r.id)}>子部门</Button>
-                    <Button size="small" onClick={() => openEdit(r)}>编辑</Button>
-                    <Popconfirm title="删除该部门？" onConfirm={async () => {
+                    <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
+                    <Popconfirm title="删除该部门？其下成员将变为未分配部门" onConfirm={async () => {
                       try { await rbacApi.removeDept(r.id); message.success('已删除'); load() }
                       catch (e) { message.error(errMsg(e)) }
                     }}>

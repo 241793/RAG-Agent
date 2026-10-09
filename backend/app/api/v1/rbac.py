@@ -51,15 +51,31 @@ router = APIRouter(prefix="/admin", tags=["rbac"])
 async def list_roles(
     user: User = Depends(require_permission("role:read")),
     db: AsyncSession = Depends(get_db),
-) -> list[Role]:
+) -> list[RoleOut]:
     rows = (
         await db.execute(
             select(Role).where(
                 (Role.tenant_id == user.tenant_id) | (Role.tenant_id.is_(None))
-            )
+            ).order_by(Role.is_system.desc(), Role.scope, Role.id)
         )
     ).scalars().all()
-    return list(rows)
+    # 权限数 / 已授予用户数（供列表页展示，避免前端逐个请求）
+    pc_rows = (await db.execute(
+        select(RolePermission.role_id, func.count()).group_by(RolePermission.role_id)
+    )).all()
+    uc_rows = (await db.execute(
+        select(UserRole.role_id, func.count()).where(UserRole.tenant_id == user.tenant_id)
+        .group_by(UserRole.role_id)
+    )).all()
+    pc_map = {r[0]: r[1] for r in pc_rows}
+    uc_map = {r[0]: r[1] for r in uc_rows}
+    out: list[RoleOut] = []
+    for r in rows:
+        item = RoleOut.model_validate(r)
+        item.permission_count = int(pc_map.get(r.id, 0))
+        item.user_count = int(uc_map.get(r.id, 0))
+        out.append(item)
+    return out
 
 
 @router.post("/roles", response_model=RoleOut)
@@ -483,6 +499,17 @@ async def dept_tree(
         )
     ).scalars().all()
     nodes = {d.id: DeptTreeNode.model_validate(d) for d in rows}
+    # 直属成员数（供列表展示）
+    cnt_rows = (await db.execute(
+        select(User.department_id, func.count()).where(
+            User.tenant_id == user.tenant_id,
+            User.department_id.is_not(None),
+            or_(User.user_type.is_(None), User.user_type != "external"),
+        ).group_by(User.department_id)
+    )).all()
+    cnt_map = {r[0]: r[1] for r in cnt_rows}
+    for did, node in nodes.items():
+        node.member_count = int(cnt_map.get(did, 0))
     roots: list[DeptTreeNode] = []
     for d in rows:
         node = nodes[d.id]

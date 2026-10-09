@@ -93,6 +93,15 @@ async def _apply_pending_db() -> None:
 async def lifespan(app: FastAPI):
     await _apply_pending_db()
     await init_models()
+    # 同步内置角色的名称/范围/描述（升级后文案变更无需手动 seed；仅更新元数据，不动权限）
+    try:
+        from app.core.db import AsyncSessionLocal
+        from app.services.permission_seed import sync_role_meta
+
+        async with AsyncSessionLocal() as _db:
+            await sync_role_meta(_db)
+    except Exception:  # noqa: BLE001
+        logger.exception("role_meta_sync_failed")
     # 叠加 Web 端「系统设置」的覆盖值（热生效项立即生效；启动期项影响本进程）
     try:
         from app.core.db import AsyncSessionLocal

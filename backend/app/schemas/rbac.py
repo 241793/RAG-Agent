@@ -26,6 +26,8 @@ class RoleOut(BaseModel):
     scope: str
     is_system: bool
     description: str | None = None
+    permission_count: int = 0   # 权限项数（列表页展示用）
+    user_count: int = 0         # 已授予用户数（列表页展示用）
 
     model_config = {"from_attributes": True}
 
@@ -131,6 +133,7 @@ class DeptOut(BaseModel):
 
 class DeptTreeNode(DeptOut):
     children: list["DeptTreeNode"] = []
+    member_count: int = 0  # 直属成员数（供列表页展示）
 
 
 # ---- 用户组 ----

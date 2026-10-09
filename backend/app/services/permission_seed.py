@@ -86,54 +86,85 @@ PERMISSIONS: list[tuple[str, str, str, str]] = [
 _ALL = [p[0] for p in PERMISSIONS]
 
 # ===== 内置角色（tenant_id=None, is_system=True）=====
-# (code, name, scope, 权限 code 列表)
-ROLES: list[tuple[str, str, str, list[str]]] = [
-    ("super_admin", "超级管理员", "platform", _ALL),
-    ("tenant_admin", "租户管理员", "tenant", [c for c in _ALL if c != "tenant:manage"]),
+# (code, name, scope, 权限 code 列表, 用途描述)
+ROLES: list[tuple[str, str, str, list[str], str]] = [
+    ("super_admin", "超级管理员", "platform", _ALL, "平台最高权限，可管理所有租户；一般仅系统所有者使用"),
+    ("tenant_admin", "租户管理员", "tenant",
+     [c for c in _ALL if c != "tenant:manage"], "管理本租户的用户、角色、知识库与全部业务功能"),
     ("kb_admin", "知识库管理员", "tenant", [
         "kb:create", "kb:read", "kb:update", "kb:delete", "kb:member_manage",
         "doc:upload", "doc:read", "doc:update", "doc:delete", "doc:download", "doc:acl_manage",
         "retrieval:query", "chat:use", "audit:read", "eval:read", "eval:manage",
-    ]),
-    ("kb_editor", "知识库编辑者", "kb", [
-        "kb:read", "doc:upload", "doc:read", "doc:update", "doc:delete", "doc:download",
-        "retrieval:query", "chat:use",
-    ]),
-    ("kb_viewer", "知识库查看者", "kb", [
-        "kb:read", "doc:read", "doc:download", "retrieval:query", "chat:use",
-    ]),
+    ], "管理全部知识库（建库/上传/成员/删除），不含用户与系统设置"),
     ("app_admin", "应用管理员", "tenant", [
         "app:read", "app:edit", "app:run",
         "workflow:read", "workflow:edit", "workflow:run",
         "model:read", "retrieval:query", "chat:use",
         "agent:read", "agent:edit", "agent:run", "skill:read", "tool:read",
-    ]),
+    ], "管理应用与工作流编排，可配置模型，不含用户/知识库管理"),
     ("agent_admin", "智能体管理员", "tenant", [
         "agent:read", "agent:edit", "agent:run",
         "skill:read", "skill:edit", "tool:read", "tool:manage",
         "mcp:read", "mcp:invoke",
         "workflow:read", "workflow:edit", "workflow:run",
         "model:read", "retrieval:query", "chat:use",
-    ]),
-    ("viewer", "普通用户", "tenant", ["kb:read", "doc:read", "file:read", "retrieval:query", "chat:use"]),
-    ("guest", "访客", "tenant", ["chat:use"]),
-    # 外部客服客户：能问答、检索、调只读外部工具（查订单/物流），但无法用写/管理工具
+    ], "管理智能体、技能、工具与 MCP 服务"),
+    ("viewer", "普通用户", "tenant", ["kb:read", "doc:read", "file:read", "retrieval:query", "chat:use"],
+     "默认角色：可问答、检索与查看知识库，不能修改任何内容。新用户一般给这个"),
     ("service_agent", "客服客户", "tenant", [
         "chat:use", "retrieval:query", "tool:invoke", "mcp:invoke",
-    ]),
+    ], "外部客服场景：可问答、检索、调用只读工具（查订单/物流），不能管理"),
+    ("guest", "访客", "tenant", ["chat:use"], "最小权限：仅能问答，看不到任何知识库"),
     # ===== 部门级能力档（scope=department，授予到具体部门）=====
     ("dept_viewer", "部门查看者", "department", [
         "kb:read", "doc:read", "doc:download", "file:read", "retrieval:query", "chat:use",
-    ]),
+    ], "授予到某部门：该部门成员可查看知识库（部门级授权，配合部门范围使用）"),
     ("dept_editor", "部门编辑者", "department", [
         "kb:read", "kb:create", "doc:upload", "doc:read", "doc:update", "doc:delete",
         "doc:download", "file:read", "file:write", "retrieval:query", "chat:use",
-    ]),
+    ], "授予到某部门：该部门成员可建库、上传与编辑文档"),
     ("dept_agent_admin", "部门智能体管理员", "department", [
         "agent:read", "agent:edit", "agent:run", "skill:read", "skill:edit",
         "file:read", "file:write", "retrieval:query", "chat:use",
-    ]),
+    ], "授予到某部门：该部门成员可管理智能体与技能"),
+    # ===== 知识库级能力档（scope=kb，授予到具体知识库）=====
+    ("kb_editor", "知识库编辑者", "kb", [
+        "kb:read", "doc:upload", "doc:read", "doc:update", "doc:delete", "doc:download",
+        "retrieval:query", "chat:use",
+    ], "授予到某个知识库：仅对该库可上传/编辑文档（比租户级更精细）"),
+    ("kb_viewer", "知识库查看者", "kb", [
+        "kb:read", "doc:read", "doc:download", "retrieval:query", "chat:use",
+    ], "授予到某个知识库：仅对该库可查看文档"),
 ]
+
+
+async def sync_role_meta(db: AsyncSession) -> int:
+    """仅同步内置角色的名称/范围/描述（不动权限、不新增角色）。启动时调用。
+
+    用于版本升级后文案变更（如补描述、改中文名）自动生效，无需手动 seed。
+    返回更新的角色数。
+    """
+    from sqlalchemy import select as _select
+
+    updated = 0
+    for code, name, scope, _perm_codes, desc in ROLES:
+        role = (
+            await db.execute(_select(Role).where(Role.tenant_id.is_(None), Role.code == code))
+        ).scalar_one_or_none()
+        if not role:
+            continue
+        changed = False
+        if role.name != name:
+            role.name = name; changed = True
+        if role.scope != scope:
+            role.scope = scope; changed = True
+        if desc and role.description != desc:
+            role.description = desc; changed = True
+        if changed:
+            updated += 1
+    if updated:
+        await db.commit()
+    return updated
 
 
 async def seed_permissions_and_roles(db: AsyncSession) -> dict[str, int]:
@@ -154,14 +185,20 @@ async def seed_permissions_and_roles(db: AsyncSession) -> dict[str, int]:
 
     # 2. 角色
     role_ids: dict[str, int] = {}
-    for code, name, scope, perm_codes in ROLES:
+    for code, name, scope, perm_codes, desc in ROLES:
         role = (
             await db.execute(select(Role).where(Role.tenant_id.is_(None), Role.code == code))
         ).scalar_one_or_none()
         if not role:
-            role = Role(tenant_id=None, code=code, name=name, scope=scope, is_system=True)
+            role = Role(tenant_id=None, code=code, name=name, scope=scope, is_system=True, description=desc)
             db.add(role)
             await db.flush()
+        else:
+            # 同步内置角色的名称/范围/描述（便于升级后文案更新）
+            role.name = name
+            role.scope = scope
+            if desc:
+                role.description = desc
         role_ids[code] = role.id
 
         # 3. 角色权限（幂等：先删后建，保证与定义一致）

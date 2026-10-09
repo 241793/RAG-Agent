@@ -500,6 +500,8 @@ export interface Role {
   scope: string
   is_system: boolean
   description?: string
+  permission_count?: number
+  user_count?: number
 }
 export interface PermissionItem {
   id: number
@@ -537,6 +539,7 @@ export interface DeptNode {
   path: string
   depth: number
   sort: number
+  member_count?: number
   children: DeptNode[]
 }
 
