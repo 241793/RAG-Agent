@@ -405,6 +405,60 @@ async def update_user(
     return u
 
 
+@router.delete("/users/{user_id}")
+@audited("user.delete", "user", id_arg="user_id")
+async def delete_user(
+    user_id: int,
+    user: User = Depends(require_permission("user:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """物理删除用户，并清理其角色/通知等关联。
+
+    安全约束：
+    - 不能删自己
+    - 不能删本租户最后一个管理员（避免锁死系统）
+    - 若该用户创建了知识库等资产，拒绝删除并提示（避免产生孤儿数据）
+    """
+    from sqlalchemy import delete as _del, select as _sel
+
+    from app.models import KnowledgeBase, Notification
+
+    u = await db.get(User, user_id)
+    if not u or u.tenant_id != user.tenant_id:
+        raise NotFoundError("用户不存在")
+    if u.id == user.id:
+        raise PermissionDeniedError("不能删除当前登录的账号")
+    # 最后一个管理员保护
+    if u.is_admin:
+        admins = (
+            await db.execute(
+                _sel(func.count()).select_from(User).where(
+                    User.tenant_id == user.tenant_id, User.is_admin.is_(True),
+                    or_(User.status.is_(None), User.status != "disabled"),
+                )
+            )
+        ).scalar_one()
+        if admins <= 1:
+            raise ConflictError("不能删除最后一个管理员，请先指定其他管理员")
+    # 资产检查：拥有知识库则拒绝（保留数据归属）
+    owned = (
+        await db.execute(
+            _sel(func.count()).select_from(KnowledgeBase).where(
+                KnowledgeBase.owner_id == u.id, KnowledgeBase.tenant_id == user.tenant_id
+            )
+        )
+    ).scalar_one()
+    if owned:
+        raise ConflictError(f"该用户是 {owned} 个知识库的拥有者，请先转移或删除这些知识库")
+
+    # 清理关联
+    await db.execute(_del(UserRole).where(UserRole.user_id == u.id))
+    await db.execute(_del(Notification).where(Notification.user_id == u.id))
+    await db.delete(u)
+    await db.flush()
+    return {"message": f"已删除用户「{u.display_name or u.username}」"}
+
+
 @router.get("/users/{user_id}/roles", response_model=list[UserRoleOut])
 async def list_user_roles(
     user_id: int,
@@ -451,6 +505,25 @@ async def grant_user_role(
     if role.scope == "department":
         if body.scope_type != "department" or body.scope_id is None:
             raise PermissionDeniedError("部门级角色必须授予到具体部门")
+        # 关键校验：授予部门必须命中用户所属部门（含祖先），否则该角色不会生效
+        # （权限判定里 department 级角色要求 scope_id ∈ 用户的部门祖先链）
+        from app.middleware.auth_dep import resolve_user_dept_ids
+
+        target_depts = set(await resolve_user_dept_ids(db, target))
+        if not target_depts:
+            raise ConflictError("该用户未分配部门，无法授予部门级角色；请先为用户设置部门")
+        if body.scope_id not in target_depts:
+            raise ConflictError(
+                "该部门级角色不会生效：授予的部门必须是该用户所属部门之一。"
+                "请先将用户分配到该部门，或改授租户级角色（如「普通用户」）"
+            )
+    if role.scope == "kb" and body.scope_id is not None:
+        # 知识库级：校验知识库存在且属于本租户
+        from app.models import KnowledgeBase
+
+        kb = await db.get(KnowledgeBase, body.scope_id)
+        if not kb or kb.tenant_id != user.tenant_id:
+            raise NotFoundError("知识库不存在")
 
     ur = UserRole(
         tenant_id=user.tenant_id,

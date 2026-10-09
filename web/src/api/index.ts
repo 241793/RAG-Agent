@@ -568,6 +568,9 @@ export const rbacApi = {
     http.post<UserListItem>('/admin/users', data).then((r) => r.data),
   updateUser: (id: number, data: Record<string, any>) =>
     http.patch<UserListItem>(`/admin/users/${id}`, data).then((r) => r.data),
+  removeUser: (id: number) => http.delete(`/admin/users/${id}`).then((r) => r.data),
+  resetUserPassword: (id: number, password: string) =>
+    http.patch<UserListItem>(`/admin/users/${id}`, { password }).then((r) => r.data),
   userRoles: (id: number) => http.get<UserRoleItem[]>(`/admin/users/${id}/roles`).then((r) => r.data),
   grantRole: (id: number, data: Record<string, any>) =>
     http.post<UserRoleItem>(`/admin/users/${id}/roles`, data).then((r) => r.data),

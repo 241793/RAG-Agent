@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
-  Alert, Button, Card, Divider, Form, Input, message, Modal, Popconfirm, Select, Space, Table, Tag,
+  Alert, Button, Card, Divider, Form, Input, message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip,
 } from 'antd'
-import { PlusOutlined, DeleteOutlined, UserAddOutlined, KeyOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, UserAddOutlined, KeyOutlined, LockOutlined } from '@ant-design/icons'
 import { rbacApi, kbApi, type Role, type UserListItem, type UserRoleItem, type DeptNode } from '../../api'
 import { errMsg } from '../../api/http'
 import PageContainer from '../../components/PageContainer'
@@ -34,6 +34,7 @@ export default function UserPage() {
   const [editUser, setEditUser] = useState<UserListItem | null>(null)
   const [form] = Form.useForm()
   const hasPermission = useAuth((s) => s.hasPermission)
+  const me = useAuth((s) => s.user)
   const canManage = hasPermission('user:manage')
 
   const [roleOpen, setRoleOpen] = useState(false)
@@ -107,6 +108,50 @@ export default function UserPage() {
     } catch (e) { message.error(errMsg(e)) }
   }
 
+  // 管理员重置用户密码（会强制该用户下线）
+  const resetPwd = (u: UserListItem) => {
+    let pwd = ''
+    Modal.confirm({
+      title: `重置「${u.display_name || u.username}」的密码`,
+      icon: null,
+      content: (
+        <div>
+          <Input.Password autoFocus placeholder="输入新密码（≥8 位，含字母/数字/符号至少两类）"
+            onChange={(e) => { pwd = e.target.value }} />
+          <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 6 }}>
+            重置后该用户会被强制下线，需用新密码重新登录
+          </div>
+        </div>
+      ),
+      okText: '重置', cancelText: '取消',
+      onOk: async () => {
+        if (!pwd || pwd.length < 8) { message.warning('密码至少 8 位'); throw new Error('bad') }
+        try { await rbacApi.resetUserPassword(u.id, pwd); message.success('密码已重置，该用户需重新登录') }
+        catch (e) { message.error(errMsg(e)); throw e }
+      },
+    })
+  }
+
+  // 删除用户（物理删除，带后果说明）
+  const removeUser = (u: UserListItem) => {
+    Modal.confirm({
+      title: `删除用户「${u.display_name || u.username}」？`,
+      okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
+      content: (
+        <div style={{ fontSize: 13 }}>
+          <p style={{ marginTop: 8 }}>该操作<strong>不可恢复</strong>，将同时清除其角色授予与站内通知。</p>
+          <p style={{ marginBottom: 0, color: 'var(--color-text-3)' }}>
+            若只是想临时禁用，请改用「停用」。
+          </p>
+        </div>
+      ),
+      onOk: async () => {
+        try { const r = await rbacApi.removeUser(u.id); message.success(r.message || '已删除'); load(); loadPending() }
+        catch (e) { message.error(errMsg(e)); throw e }
+      },
+    })
+  }
+
   const grant = async () => {
     if (!curUser) return
     const v = await grantForm.validateFields()
@@ -169,7 +214,7 @@ export default function UserPage() {
               : v === 'rejected' ? <Tag color="red">已拒绝</Tag> : <Tag color="green">已通过</Tag> },
           { title: '管理员', dataIndex: 'is_admin', width: 90, render: (v: boolean) => v ? <Tag color="gold">是</Tag> : '-' },
           {
-            title: '操作', width: 260,
+            title: '操作', width: 320, fixed: 'right' as const,
             render: (_: any, u: UserListItem) => (
               <Space>
                 {canManage && (
@@ -184,12 +229,19 @@ export default function UserPage() {
                     )}
                     <Button size="small" onClick={() => openEdit(u)}>编辑</Button>
                     <Button size="small" icon={<KeyOutlined />} onClick={() => openRoles(u)}>角色</Button>
+                    <Tooltip title="重置密码（会强制该用户下线）">
+                      <Button size="small" icon={<LockOutlined />} disabled={u.id === me?.id} onClick={() => resetPwd(u)} />
+                    </Tooltip>
                     <Popconfirm title="停用该用户？" onConfirm={async () => {
                       try { await rbacApi.updateUser(u.id, { status: u.status === 'active' ? 'disabled' : 'active' }); load() }
                       catch (e) { message.error(errMsg(e)) }
                     }}>
                       <Button size="small">{u.status === 'active' ? '停用' : '启用'}</Button>
                     </Popconfirm>
+                    <Tooltip title={u.id === me?.id ? '不能删除自己' : '删除用户（不可恢复）'}>
+                      <Button size="small" danger icon={<DeleteOutlined />} disabled={u.id === me?.id}
+                        onClick={() => removeUser(u)} />
+                    </Tooltip>
                   </>
                 )}
               </Space>
@@ -239,30 +291,39 @@ export default function UserPage() {
         <Divider />
         <Form form={grantForm} layout="inline" initialValues={{ scope_type: 'tenant', scope_id: 0 }}>
           <Form.Item name="role_id" rules={[{ required: true, message: '选角色' }]}>
-            <Select placeholder="选择角色" style={{ width: 160 }} options={roles.map((r) => ({ value: r.id, label: `${r.name}（${r.scope}）` }))} />
+            <Select placeholder="选择角色" style={{ width: 220 }}
+              onChange={(v) => {
+                // 角色决定作用范围：选角色后自动切换 scope_type，避免「角色×范围」错配
+                const r = roles.find((x) => x.id === v)
+                const sc = r?.scope || 'tenant'
+                setScopeType(sc)
+                grantForm.setFieldValue('scope_type', sc)
+                grantForm.setFieldValue('scope_id', sc === 'tenant' || sc === 'platform' ? 0 : undefined)
+              }}
+              options={roles.map((r) => ({
+                value: r.id,
+                label: `${r.name}（${scopeLabel[r.scope] || r.scope}）${r.is_system ? '' : ' · 自定义'}`,
+              }))} />
           </Form.Item>
-          <Form.Item name="scope_type">
-            <Select style={{ width: 120 }} onChange={(v) => {
-              setScopeType(v)
-              // 切换范围类型时重置 scope_id，避免残留上一个类型的 id
-              grantForm.setFieldValue('scope_id', v === 'department' ? undefined : 0)
-            }} options={[
-              { value: 'tenant', label: '租户' },
-              { value: 'department', label: '部门' },
-              { value: 'kb', label: '知识库' },
-              { value: 'platform', label: '平台' },
-            ]} />
-          </Form.Item>
-          <Form.Item name="scope_id" rules={[{ required: scopeType === 'department' || scopeType === 'kb', message: '请选择范围' }]}>
-            {scopeType === 'department' ? (
-              <Select placeholder="选择部门" style={{ width: 180 }} options={depts} showSearch optionFilterProp="label" />
-            ) : scopeType === 'kb' ? (
-              <Select placeholder="选择知识库" style={{ width: 180 }} options={kbs} showSearch optionFilterProp="label" />
-            ) : (
-              <Input type="number" style={{ width: 100 }} placeholder="scope_id"
-                disabled={scopeType === 'tenant' || scopeType === 'platform'} />
-            )}
-          </Form.Item>
+          <Form.Item name="scope_type" hidden><Input /></Form.Item>
+          {scopeType === 'department' && (
+            <Form.Item name="scope_id" rules={[{ required: true, message: '请选择部门' }]}
+              extra="须与用户所属部门一致才生效">
+              <Select placeholder="选择部门" style={{ width: 200 }} options={depts} showSearch optionFilterProp="label" />
+            </Form.Item>
+          )}
+          {scopeType === 'kb' && (
+            <Form.Item name="scope_id" rules={[{ required: true, message: '请选择知识库' }]}>
+              <Select placeholder="选择知识库" style={{ width: 200 }} options={kbs} showSearch optionFilterProp="label" />
+            </Form.Item>
+          )}
+          {(scopeType === 'tenant' || scopeType === 'platform') && (
+            <Form.Item>
+              <span style={{ fontSize: 12, color: 'var(--color-text-3)' }}>
+                该角色作用于{scopeLabel[scopeType] || scopeType}，无需指定具体对象
+              </span>
+            </Form.Item>
+          )}
           <Button type="primary" icon={<UserAddOutlined />} onClick={grant}>授予</Button>
         </Form>
       </Modal>

@@ -481,3 +481,109 @@ def test_dept_tree_counts_members():
 
     src = inspect.getsource(rbac.dept_tree)
     assert "member_count" in src
+
+
+# ==================== 角色精简 + 删除用户 + 授予校验 ====================
+def test_roles_simplified_to_core():
+    """内置角色精简为核心档（≤7 个），覆盖大企业常用场景。"""
+    from app.services.permission_seed import ROLES
+
+    codes = [r[0] for r in ROLES]
+    assert len(codes) <= 7, f"内置角色应精简，实际 {len(codes)} 个: {codes}"
+    # 核心角色必须在
+    for must in ("super_admin", "tenant_admin", "kb_admin", "viewer"):
+        assert must in codes, f"缺少核心角色 {must}"
+    # 已下线的冗余角色不应在 ROLES
+    for gone in ("kb_editor", "kb_viewer", "dept_viewer", "dept_editor", "guest"):
+        assert gone not in codes, f"{gone} 应已下线"
+
+
+def test_retired_roles_listed():
+    from app.services.permission_seed import RETIRED_ROLE_CODES
+
+    assert "dept_viewer" in RETIRED_ROLE_CODES
+    assert "kb_editor" in RETIRED_ROLE_CODES
+
+
+def test_delete_user_endpoint_exists():
+    from app.api.v1 import rbac as R
+
+    methods = {(r.path, m) for r in R.router.routes for m in getattr(r, "methods", set())}
+    assert ("/admin/users/{user_id}", "DELETE") in methods
+
+
+def test_delete_user_protections():
+    """删除用户应有自我/最后管理员/资产保护。"""
+    import inspect
+
+    from app.api.v1.rbac import delete_user
+
+    src = inspect.getsource(delete_user)
+    assert "不能删除当前登录的账号" in src
+    assert "最后一个管理员" in src
+    assert "KnowledgeBase" in src  # 资产检查
+
+
+def test_grant_department_role_validates_scope():
+    """部门级角色授予须校验 scope_id 命中用户所属部门，否则不生效应直接拒绝。"""
+    import inspect
+
+    from app.api.v1.rbac import grant_user_role
+
+    src = inspect.getsource(grant_user_role)
+    assert "resolve_user_dept_ids" in src
+    assert "不会生效" in src or "必须是该用户所属部门" in src
+
+
+async def _run_retire_migrates_grants():
+    """历史角色被下线时，其授予应迁移到 viewer（用户不会变成无权限）。"""
+    from sqlalchemy import select
+
+    from app.core.db import AsyncSessionLocal, init_models
+    from app.core.security import hash_password
+    from app.models import Role, Tenant, User, UserRole
+    from app.services.permission_seed import seed_permissions_and_roles
+
+    await init_models()
+    async with AsyncSessionLocal() as db:
+        t = (await db.execute(select(Tenant).order_by(Tenant.id))).scalars().first()
+        if not t:
+            t = Tenant(name="RT", slug="rt"); db.add(t); await db.flush()
+        # 建一个挂着「已下线角色」的用户（模拟历史数据）
+        viewer = (await db.execute(select(Role).where(Role.tenant_id.is_(None), Role.code == "viewer"))).scalar_one_or_none()
+        retired = (await db.execute(select(Role).where(Role.tenant_id.is_(None), Role.code == "dept_viewer"))).scalar_one_or_none()
+        if not viewer or not retired:
+            # 先 seed 一次确保角色齐（此环境下 dept_viewer 可能已被清）
+            await seed_permissions_and_roles(db)
+            await db.commit()
+            viewer = (await db.execute(select(Role).where(Role.tenant_id.is_(None), Role.code == "viewer"))).scalar_one()
+            retired = (await db.execute(select(Role).where(Role.tenant_id.is_(None), Role.code == "dept_viewer"))).scalar_one_or_none()
+            if not retired:
+                return  # 已下线，跳过（幂等环境）
+        u = User(tenant_id=t.id, username=f"rt_{t.id}", password_hash=hash_password("x"))
+        db.add(u); await db.flush()
+        db.add(UserRole(tenant_id=t.id, user_id=u.id, role_id=retired.id, scope_type="department", scope_id=1))
+        await db.commit()
+        uid = u.id
+    # 再 seed → 应迁移
+    async with AsyncSessionLocal() as db:
+        await seed_permissions_and_roles(db)
+        await db.commit()
+    async with AsyncSessionLocal() as db:
+        v = (await db.execute(select(Role).where(Role.tenant_id.is_(None), Role.code == "viewer"))).scalar_one()
+        links = (await db.execute(select(UserRole).where(
+            UserRole.user_id == uid, UserRole.role_id == v.id))).scalars().all()
+        assert links, "历史角色授予应迁移为 viewer"
+        # 清理
+        for l in (await db.execute(select(UserRole).where(UserRole.user_id == uid))).scalars().all():
+            await db.delete(l)
+        usr = await db.get(User, uid)
+        if usr:
+            await db.delete(usr)
+        await db.commit()
+
+
+def test_retired_role_grants_migrate_to_viewer():
+    import asyncio
+
+    asyncio.new_event_loop().run_until_complete(_run_retire_migrates_grants())

@@ -146,7 +146,15 @@ async def _edit_by_role_principal():
     from app.api.v1.document import _ensure_edit
 
     async with AsyncSessionLocal() as db:
-        role = (await db.execute(select(Role).where(Role.tenant_id.is_(None), Role.code == "kb_editor"))).scalar_one()
+        # 内置 kb_editor 已下线：自建一个 kb 级测试角色用于「按角色主体授权知识库」的验证
+        role = (
+            await db.execute(select(Role).where(Role.tenant_id.is_(None), Role.code == "test_kb_editor"))
+        ).scalar_one_or_none()
+        if not role:
+            role = Role(tenant_id=None, code="test_kb_editor", name="测试知识库编辑者",
+                        scope="kb", is_system=False)
+            db.add(role)
+            await db.flush()
         exist = (
             await db.execute(select(UserRole).where(UserRole.user_id == d["member_u"], UserRole.role_id == role.id))
         ).scalar_one_or_none()

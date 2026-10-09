@@ -202,9 +202,26 @@ async def _dept_scope_violation():
 
         # 清理该用户既有授予，避免重复运行累积
         await db.execute(_del(UserRole).where(UserRole.user_id == d["emp"]))
-        role = (await db.execute(
-            __import__("sqlalchemy").select(Role).where(Role.code == "dept_editor", Role.tenant_id.is_(None))
-        )).scalar_one()
+        # 自建一个部门级测试角色（内置部门级角色已下线，此处独立构造以验证范围隔离逻辑）
+        role = (
+            await db.execute(__import__("sqlalchemy").select(Role).where(
+                Role.code == "test_dept_role", Role.tenant_id.is_(None)))
+        ).scalar_one_or_none()
+        if not role:
+            role = Role(tenant_id=None, code="test_dept_role", name="测试部门角色",
+                        scope="department", is_system=False)
+            db.add(role)
+            await db.flush()
+        # 给测试角色挂一个可区分的权限（kb:create），用于验证「生效/不生效」
+        from app.models import Permission as _Perm, RolePermission as _RP
+        perm = (await db.execute(__import__("sqlalchemy").select(_Perm).where(
+            _Perm.code == "kb:create"))).scalar_one_or_none()
+        if perm:
+            linked = (await db.execute(__import__("sqlalchemy").select(_RP).where(
+                _RP.role_id == role.id, _RP.permission_id == perm.id))).scalar_one_or_none()
+            if not linked:
+                db.add(_RP(role_id=role.id, permission_id=perm.id))
+                await db.flush()
         db.add(UserRole(
             tenant_id=d["tenant_id"], user_id=d["emp"], role_id=role.id,
             scope_type="department", scope_id=d["d1"],  # 非用户所属部门

@@ -86,6 +86,8 @@ PERMISSIONS: list[tuple[str, str, str, str]] = [
 _ALL = [p[0] for p in PERMISSIONS]
 
 # ===== 内置角色（tenant_id=None, is_system=True）=====
+# 精简为 6 个核心角色，覆盖绝大多数企业场景；更细粒度授权走「知识库成员」/「部门」
+# 或由管理员按需自建自定义角色。
 # (code, name, scope, 权限 code 列表, 用途描述)
 ROLES: list[tuple[str, str, str, list[str], str]] = [
     ("super_admin", "超级管理员", "platform", _ALL, "平台最高权限，可管理所有租户；一般仅系统所有者使用"),
@@ -111,31 +113,18 @@ ROLES: list[tuple[str, str, str, list[str], str]] = [
     ], "管理智能体、技能、工具与 MCP 服务"),
     ("viewer", "普通用户", "tenant", ["kb:read", "doc:read", "file:read", "retrieval:query", "chat:use"],
      "默认角色：可问答、检索与查看知识库，不能修改任何内容。新用户一般给这个"),
+    # 外部客服客户：能问答、检索、调只读外部工具（查订单/物流），但无法用写/管理工具
     ("service_agent", "客服客户", "tenant", [
-        "chat:use", "retrieval:query", "tool:invoke", "mcp:invoke",
-    ], "外部客服场景：可问答、检索、调用只读工具（查订单/物流），不能管理"),
-    ("guest", "访客", "tenant", ["chat:use"], "最小权限：仅能问答，看不到任何知识库"),
-    # ===== 部门级能力档（scope=department，授予到具体部门）=====
-    ("dept_viewer", "部门查看者", "department", [
-        "kb:read", "doc:read", "doc:download", "file:read", "retrieval:query", "chat:use",
-    ], "授予到某部门：该部门成员可查看知识库（部门级授权，配合部门范围使用）"),
-    ("dept_editor", "部门编辑者", "department", [
-        "kb:read", "kb:create", "doc:upload", "doc:read", "doc:update", "doc:delete",
-        "doc:download", "file:read", "file:write", "retrieval:query", "chat:use",
-    ], "授予到某部门：该部门成员可建库、上传与编辑文档"),
-    ("dept_agent_admin", "部门智能体管理员", "department", [
-        "agent:read", "agent:edit", "agent:run", "skill:read", "skill:edit",
-        "file:read", "file:write", "retrieval:query", "chat:use",
-    ], "授予到某部门：该部门成员可管理智能体与技能"),
-    # ===== 知识库级能力档（scope=kb，授予到具体知识库）=====
-    ("kb_editor", "知识库编辑者", "kb", [
-        "kb:read", "doc:upload", "doc:read", "doc:update", "doc:delete", "doc:download",
-        "retrieval:query", "chat:use",
-    ], "授予到某个知识库：仅对该库可上传/编辑文档（比租户级更精细）"),
-    ("kb_viewer", "知识库查看者", "kb", [
-        "kb:read", "doc:read", "doc:download", "retrieval:query", "chat:use",
-    ], "授予到某个知识库：仅对该库可查看文档"),
+        "chat:use", "retrieval:query", "service:submit", "tool:invoke", "mcp:invoke",
+    ], "外部客服场景：可问答、检索、提交工单、调用只读工具（查订单/物流），不能管理"),
 ]
+
+# 历史内置角色：已下线。若库中仍存在则由 seed 迁移其授予到 viewer 后删除。
+# （部门级/知识库级的精细授权请改用「知识库成员」页，或自建角色）
+RETIRED_ROLE_CODES = {
+    "kb_editor", "kb_viewer", "guest",
+    "dept_viewer", "dept_editor", "dept_agent_admin",
+}
 
 
 async def sync_role_meta(db: AsyncSession) -> int:
@@ -162,8 +151,12 @@ async def sync_role_meta(db: AsyncSession) -> int:
             role.description = desc; changed = True
         if changed:
             updated += 1
-    if updated:
-        await db.commit()
+    # 一并下线历史角色（幂等）
+    viewer = (
+        await db.execute(select(Role).where(Role.tenant_id.is_(None), Role.code == "viewer"))
+    ).scalar_one_or_none()
+    await _retire_legacy_roles(db, retire_target_code="viewer", viewer_id=viewer.id if viewer else None)
+    await db.commit()
     return updated
 
 
@@ -209,7 +202,53 @@ async def seed_permissions_and_roles(db: AsyncSession) -> dict[str, int]:
             if pc in code_to_perm:
                 db.add(RolePermission(role_id=role.id, permission_id=code_to_perm[pc].id))
     await db.flush()
+
+    # 4. 下线历史内置角色：把授予迁移到 viewer，再删除角色本身（幂等）
+    await _retire_legacy_roles(db, retire_target_code="viewer", viewer_id=role_ids.get("viewer"))
     return role_ids
+
+
+async def _retire_legacy_roles(db: AsyncSession, *, retire_target_code: str, viewer_id: int | None) -> None:
+    """清理 RETIRED_ROLE_CODES 中的历史内置角色。
+
+    - 若有用户仍持有 → 迁移为 viewer（避免这些用户权限为空、全站 403）
+    - 删除其权限关联与角色记录
+    幂等：角色不存在则跳过。
+    """
+    from sqlalchemy import delete
+
+    if not RETIRED_ROLE_CODES:
+        return
+    retired = (
+        await db.execute(
+            select(Role).where(Role.tenant_id.is_(None), Role.is_system.is_(True),
+                               Role.code.in_(list(RETIRED_ROLE_CODES)))
+        )
+    ).scalars().all()
+    for r in retired:
+        if viewer_id and r.id != viewer_id:
+            # 把授予该角色的用户改授为 viewer（同 scope 语义：tenant 级全局生效）
+            grants = (
+                await db.execute(select(UserRole).where(UserRole.role_id == r.id))
+            ).scalars().all()
+            for g in grants:
+                already = (
+                    await db.execute(
+                        select(UserRole).where(
+                            UserRole.user_id == g.user_id, UserRole.role_id == viewer_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if already:
+                    await db.delete(g)
+                else:
+                    g.role_id = viewer_id
+                    g.scope_type = "tenant"
+                    g.scope_id = 0
+        await db.execute(delete(RolePermission).where(RolePermission.role_id == r.id))
+        await db.delete(r)
+    if retired:
+        await db.flush()
 
 
 async def backfill_admin_super(db: AsyncSession, tenant_id: int, role_ids: dict[str, int]) -> None:
