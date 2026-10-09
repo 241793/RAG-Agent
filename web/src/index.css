@@ -189,6 +189,11 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* 系统日志查看器：行悬停高亮（不改变布局，避免滚动位置跳动） */
+.log-view .log-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 /* 思考过程块 */
 .reasoning-block {
   border: 1px solid var(--color-border);
