@@ -18,7 +18,8 @@ export default function LoginPage() {
     const me = await authApi.me()
     setUser(me)
     message.success('登录成功')
-    nav('/kb')
+    // 登录后进工作台（有概览/快捷入口/引导），而非直接落到可能为空的列表页
+    nav('/dashboard')
   }
 
   // 处理 SSO 回调（token 在 URL fragment）

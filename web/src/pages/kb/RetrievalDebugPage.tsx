@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import {
-  Button, Card, Input, List, message, Select, Slider, Space, Statistic, Switch, Tag, Typography,
+  Alert, Button, Card, Empty, Input, List, message, Select, Slider, Space, Statistic, Switch, Tag, Typography,
 } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import { kbApi, retrievalApi, type KB, type RetrievedChunk } from '../../api'
 import { errMsg } from '../../api/http'
+import PageContainer from '../../components/PageContainer'
 
 export default function RetrievalDebugPage() {
   const [kbs, setKbs] = useState<KB[]>([])
@@ -39,8 +40,7 @@ export default function RetrievalDebugPage() {
   }
 
   return (
-    <div>
-      <Typography.Title level={4}>检索调试台</Typography.Title>
+    <PageContainer title="检索调试台" subtitle="输入问题，观察检索命中的分块、分数与来源，用于排查「为什么答得不准」">
       <Card style={{ marginBottom: 16 }}>
         <Space direction="vertical" style={{ width: '100%' }}>
           <Select
@@ -49,8 +49,15 @@ export default function RetrievalDebugPage() {
             placeholder="选择知识库（留空=全部有权库）"
             value={selectedKbs}
             onChange={setSelectedKbs}
-            options={kbs.map((k) => ({ value: k.id, label: k.name }))}
+            options={kbs.map((k) => ({
+              value: k.id,
+              label: `${k.name}${k.index_mode === 'keyword' ? '（纯关键词）' : k.index_mode === 'vector' ? '' : ''}`,
+            }))}
           />
+          {selectedKbs.some((id) => kbs.find((k) => k.id === id)?.index_mode === 'keyword') && (
+            <Alert type="info" showIcon
+              message="所选库中含「纯关键词」库：这类库不参与向量召回，只靠关键词匹配，因此「混合检索」对它的效果有限。" />
+          )}
           <Space.Compact style={{ width: '100%' }}>
             <Input
               value={query}
@@ -77,6 +84,7 @@ export default function RetrievalDebugPage() {
 
       <List
         dataSource={chunks}
+        locale={{ emptyText: <Empty description="输入问题点「检索」，这里会显示命中的知识分块" /> }}
         renderItem={(c, i) => (
           <List.Item key={c.chunk_id}>
             <Card size="small" style={{ width: '100%' }} title={
@@ -94,6 +102,6 @@ export default function RetrievalDebugPage() {
           </List.Item>
         )}
       />
-    </div>
+    </PageContainer>
   )
 }

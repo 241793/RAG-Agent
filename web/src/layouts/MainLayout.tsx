@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Layout, Menu, Avatar, Dropdown, Spin, Breadcrumb, Drawer, Grid, Button } from 'antd'
+import { Layout, Menu, Avatar, Dropdown, Spin, Breadcrumb, Drawer, Grid, Button, Tooltip } from 'antd'
 import {
-  DashboardOutlined, DatabaseOutlined, MessageOutlined, SettingOutlined, LogoutOutlined,
+  DashboardOutlined, DatabaseOutlined, CommentOutlined, SettingOutlined, LogoutOutlined,
   UserOutlined, ExperimentOutlined, RobotOutlined, AppstoreOutlined,
   TeamOutlined, ClusterOutlined, UsergroupAddOutlined, FileSearchOutlined,
   KeyOutlined, SafetyOutlined, BarChartOutlined, SafetyCertificateOutlined,
@@ -21,6 +21,8 @@ interface NavItem {
   icon: ReactNode
   label: string
   perm?: string
+  /** 悬停提示：向新用户解释该项用途，避免与相邻项混淆 */
+  tip?: string
 }
 interface NavGroup {
   key: string
@@ -44,17 +46,17 @@ export default function MainLayout() {
   }, [])
 
   const groups: (NavItem | NavGroup)[] = [
-    { key: '/dashboard', icon: <DashboardOutlined />, label: '工作台' },
-    { key: '/chat', icon: <MessageOutlined />, label: '智能问答' },
-    { key: '/kb', icon: <DatabaseOutlined />, label: '知识库' },
-    { key: '/service-tickets', icon: <CustomerServiceOutlined />, label: '客服工单', perm: 'service:read' },
-    { key: '/records', icon: <FormOutlined />, label: '智能录单', perm: 'record:read' },
+    { key: '/dashboard', icon: <DashboardOutlined />, label: '工作台', tip: '概览、趋势与快捷入口' },
+    { key: '/chat', icon: <CommentOutlined />, label: '智能问答', tip: '直接向知识库提问，支持引用溯源、多模型、图片/文件' },
+    { key: '/kb', icon: <DatabaseOutlined />, label: '知识库', tip: '上传/录入资料，构建可检索的知识' },
+    { key: '/service-tickets', icon: <CustomerServiceOutlined />, label: '客服工单', perm: 'service:read', tip: '处理外部渠道进来的客户会话与工单' },
+    { key: '/records', icon: <FormOutlined />, label: '智能录单', perm: 'record:read', tip: '用 AI 从文本中抽取结构化成表单数据' },
     {
       key: 'g-agent',
       icon: <RobotOutlined />,
       label: '智能体',
       children: [
-        { key: '/agents', icon: <RobotOutlined />, label: '智能体', perm: 'agent:read' },
+        { key: '/agents', icon: <RobotOutlined />, label: '智能体', perm: 'agent:read', tip: '可自定义角色/工具/知识库范围的 AI 助手（比问答更可编排）' },
         { key: '/skills', icon: <AppstoreOutlined />, label: '技能', perm: 'skill:read' },
         { key: '/admin/tools', icon: <ToolOutlined />, label: '工具', perm: 'tool:read' },
         { key: '/admin/mcp', icon: <ApiOutlined />, label: 'MCP 服务器', perm: 'mcp:read' },
@@ -63,10 +65,17 @@ export default function MainLayout() {
         { key: '/admin/channel-users', icon: <UserSwitchOutlined />, label: '渠道身份绑定', perm: 'channel:read' },
       ],
     },
-    { key: '/retrieval', icon: <ExperimentOutlined />, label: '检索调试' },
-    { key: '/todo', icon: <FormOutlined />, label: '待办日程' },
-    { key: '/approvals', icon: <SafetyCertificateOutlined />, label: '审批中心', perm: 'workflow:read' },
-    { key: '/eval', icon: <FileSearchOutlined />, label: '问答评测', perm: 'eval:read' },
+    { key: '/todo', icon: <FormOutlined />, label: '待办日程', tip: '待办事项与日程提醒' },
+    { key: '/approvals', icon: <SafetyCertificateOutlined />, label: '审批中心', perm: 'workflow:read', tip: 'AI 发起写操作时的待人工确认项' },
+    {
+      key: 'g-dev',
+      icon: <ExperimentOutlined />,
+      label: '高级 / 开发者',
+      children: [
+        { key: '/retrieval', icon: <ExperimentOutlined />, label: '检索调试', tip: '查看检索命中的分块与分数，用于排查答得不准' },
+        { key: '/eval', icon: <FileSearchOutlined />, label: '问答评测', perm: 'eval:read', tip: '用测试问题集批量评估回答质量' },
+      ],
+    },
     {
       key: 'g-org',
       icon: <TeamOutlined />,
@@ -117,6 +126,8 @@ export default function MainLayout() {
   }
 
   // 生成 antd 菜单项（过滤无权限项；组内为空则隐藏）
+  const wrapLabel = (label: string, tip?: string) =>
+    tip ? <Tooltip title={tip} placement="right"><span>{label}</span></Tooltip> : label
   const menuItems: any[] = []
   for (const g of groups) {
     if ('children' in g) {
@@ -124,11 +135,11 @@ export default function MainLayout() {
       if (kids.length) {
         menuItems.push({
           key: g.key, icon: g.icon, label: g.label,
-          children: kids.map((k) => ({ key: k.key, icon: k.icon, label: k.label })),
+          children: kids.map((k) => ({ key: k.key, icon: k.icon, label: wrapLabel(k.label, k.tip) })),
         })
       }
     } else if (canSee(g as NavItem)) {
-      menuItems.push({ key: g.key, icon: g.icon, label: g.label })
+      menuItems.push({ key: g.key, icon: g.icon, label: wrapLabel(g.label, (g as NavItem).tip) })
     }
   }
 

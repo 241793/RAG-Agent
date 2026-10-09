@@ -146,10 +146,10 @@ export default function WorkflowEditPage() {
   }
 
   return (
-    <div>
+    <div className="page-container">
       <Space style={{ marginBottom: 12 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => nav('/agents')}>返回</Button>
-        <Typography.Title level={4} style={{ margin: 0 }}>工作流编排：{agent?.name}</Typography.Title>
+        <h2 className="page-title" style={{ margin: 0 }}>工作流编排：{agent?.name}</h2>
         <Tag>v{version}</Tag>
       </Space>
 

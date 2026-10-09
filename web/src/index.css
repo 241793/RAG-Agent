@@ -8,6 +8,12 @@
   --color-border: #eef0f3;
   --color-bg-layout: #f5f7fa;
   --color-bg-card: #ffffff;
+  /* 语义色（供 .md-body / 会话气泡等类使用，改这两行即可整体换肤） */
+  --color-bg-subtle: #f6f8fa;
+  --color-bg-muted: #f0f2f5;
+  --color-border-subtle: #eaecef;
+  --color-warn-soft: #fffbe6;
+  --color-warn: #faad14;
   --radius: 10px;
   --radius-lg: 14px;
   --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
@@ -118,13 +124,13 @@ body {
   margin-bottom: 0;
 }
 .md-body pre {
-  background: #f6f8fa;
+  background: var(--color-bg-subtle);
   padding: 12px;
   border-radius: 8px;
   overflow-x: auto;
 }
 .md-body code {
-  background: #f0f2f5;
+  background: var(--color-bg-muted);
   padding: 1px 5px;
   border-radius: 3px;
   font-family: ui-monospace, Consolas, monospace;
@@ -138,7 +144,7 @@ body {
 }
 .md-body th,
 .md-body td {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--color-border);
   padding: 4px 8px;
 }
 .md-body img {
@@ -154,8 +160,8 @@ body {
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
-  background: #f6f8fa;
-  border: 1px solid #eaecef;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border-subtle);
   border-bottom: 0;
   border-radius: 8px 8px 0 0;
   padding: 2px 6px;
@@ -167,12 +173,12 @@ body {
   font-family: ui-monospace, Consolas, monospace;
 }
 .md-body .code-block > div:last-child {
-  border: 1px solid #eaecef;
+  border: 1px solid var(--color-border-subtle);
   border-radius: 0 0 8px 8px !important;
 }
 /* 行内代码不继承代码块的底色 */
 .md-body .md-inline-code {
-  background: #f0f2f5;
+  background: var(--color-bg-muted);
   padding: 1px 5px;
   border-radius: 3px;
   font-family: ui-monospace, Consolas, monospace;
@@ -185,8 +191,8 @@ body {
 }
 /* 思考过程块 */
 .reasoning-block {
-  border: 1px solid #eee;
-  background: #fafafa;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
   border-radius: 8px;
   margin-bottom: 8px;
   overflow: hidden;
@@ -202,7 +208,7 @@ body {
   user-select: none;
 }
 .reasoning-head:hover {
-  background: #f0f2f5;
+  background: var(--color-bg-muted);
 }
 .reasoning-body {
   white-space: pre-wrap;

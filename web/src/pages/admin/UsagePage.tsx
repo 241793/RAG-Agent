@@ -9,11 +9,13 @@ import Chart from '../../components/Chart'
 
 export default function UsagePage() {
   const [data, setData] = useState<UsageSummary | null>(null)
+  const [loading, setLoading] = useState(false)
   const [days, setDays] = useState(30)
 
   const load = async () => {
+    setLoading(true)
     try { setData(await usageApi.summary(days)) }
-    catch (e) { message.error(errMsg(e)) }
+    catch (e) { message.error(errMsg(e)) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [days])
 
@@ -76,6 +78,7 @@ export default function UsagePage() {
         <Col xs={24} lg={12}>
           <Card title="按模型" bordered={false}>
             <Table rowKey={(r) => String(r.model_config_id)} size="small" pagination={false}
+              loading={loading}
               dataSource={data?.by_model || []}
               columns={[
                 { title: '模型', dataIndex: 'name' },
@@ -88,6 +91,7 @@ export default function UsagePage() {
         <Col xs={24} lg={12}>
           <Card title="按用户" bordered={false}>
             <Table rowKey={(r) => String(r.user_id)} size="small" pagination={false}
+              loading={loading}
               dataSource={data?.by_user || []}
               columns={[
                 { title: '用户', dataIndex: 'name' },

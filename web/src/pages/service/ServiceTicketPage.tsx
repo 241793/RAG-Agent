@@ -41,14 +41,15 @@ function fmtTime(ms?: number | null) {
 
 function slaInfo(t: ServiceTicketItem) {
   if (!t.sla_due_at) return null
-  if (t.sla_breached) return { text: '已超时', color: '#ff4d4f' }
+  // SLA 状态色：沿用 antd 语义色板（error/success/warning/次要），与 Tag 内置色一致
+  if (t.sla_breached) return { text: '已超时', color: 'error' }
   if (['closed', 'resolved'].includes(t.status)) return null
-  if (t.first_response_at) return { text: '已响应', color: '#52c41a' }
+  if (t.first_response_at) return { text: '已响应', color: 'success' }
   const left = t.sla_due_at - Date.now()
-  if (left <= 0) return { text: '已超时', color: '#ff4d4f' }
+  if (left <= 0) return { text: '已超时', color: 'error' }
   const mins = Math.round(left / 60000)
   const txt = mins >= 60 ? `${Math.round(mins / 60)}h` : `${mins}min`
-  return { text: `剩余 ${txt}`, color: mins <= 30 ? '#fa8c16' : '#8c8c8c' }
+  return { text: `剩余 ${txt}`, color: mins <= 30 ? 'warning' : 'default' }
 }
 
 function ChannelTag({ kind }: { kind?: string | null }) {
@@ -366,7 +367,8 @@ export default function ServiceTicketPage() {
                   { title: 'SLA', width: 96,
                     render: (_: any, r) => {
                       const s = slaInfo(r)
-                      return s ? <span style={{ color: s.color, fontSize: 12 }}>{s.text}</span> : <span style={{ color: '#ccc' }}>-</span>
+                      return s ? <Tag color={s.color} style={{ fontSize: 12 }}>{s.text}</Tag>
+                        : <span style={{ color: 'var(--color-text-3)' }}>-</span>
                     } },
                   { title: '最后消息', dataIndex: 'last_message_at', width: 156,
                     render: (v) => <span style={{ fontSize: 12, color: '#8c8c8c' }}>{fmtTime(v)}</span> },

@@ -53,7 +53,7 @@ export default function ToolPage() {
     >
       <Card title="内置工具" bordered={false} style={{ marginBottom: 16 }}>
         <Table
-          rowKey={(r) => `b-${r.id}`} dataSource={builtin} pagination={false} size="small"
+          rowKey={(r) => `b-${r.id}`} dataSource={builtin} loading={loading} pagination={false} size="small"
           locale={{ emptyText: <EmptyState description="无内置工具" /> }}
           columns={[
             { title: '名称', dataIndex: 'name' },

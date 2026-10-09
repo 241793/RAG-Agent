@@ -253,7 +253,7 @@ export default function SystemOpsPage() {
         </Typography.Paragraph>
 
         <Table
-          rowKey="name" dataSource={backups} size="small" pagination={false}
+          rowKey="name" dataSource={backups} loading={backupBusy} size="small" pagination={false}
           locale={{ emptyText: '暂无服务端备份。点「创建服务端备份」保存一份到 data/backups（自动保留最近 10 份）。' }}
           columns={[
             { title: '备份文件', dataIndex: 'name', ellipsis: true },

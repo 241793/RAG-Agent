@@ -15,6 +15,7 @@ import ReactECharts from 'echarts-for-react'
 import { docApi, kbApi, providerApi, rbacApi, type Doc, type KB, type KBStats, type KBMember, type ConnectorInfo } from '../../api'
 import { errMsg } from '../../api/http'
 import DocErrorDrawer from '../../components/DocErrorDrawer'
+import PageContainer from '../../components/PageContainer'
 
 const statusColor: Record<string, string> = {
   pending: 'default', parsing: 'processing', chunking: 'processing',
@@ -507,7 +508,25 @@ export default function KBDetailPage() {
       const existed = docs.some((d) => d.id === r.id)
       message.success(existed ? `${file.name} 内容与已有文档重复，已复用` : `${file.name} 已上传，正在处理`)
       loadDocs()
-    } catch (e) { message.error(errMsg(e)) }
+    } catch (e) {
+      const msg = errMsg(e)
+      // 上传阶段的失败（如没配向量模型）给出可操作的引导，而非仅弹原始错误
+      Modal.error({
+        title: '上传失败',
+        width: 520,
+        content: (
+          <div style={{ fontSize: 13 }}>
+            <p style={{ marginTop: 8 }}>{msg}</p>
+            <p style={{ marginBottom: 4 }}>可按以下方式处理：</p>
+            <ul style={{ paddingLeft: 18, margin: 0, color: 'var(--color-text-2)' }}>
+              <li>若提示「未配置向量模型」：去「模型管理」配一个 embedding 模型；或本库改用<strong>纯关键词</strong>索引（编辑知识库 → 索引方式）。</li>
+              <li>若提示解析失败：确认文件格式受支持（PDF / Word / Excel / PPT / Markdown / 文本 / 图片）。</li>
+              <li>其它情况：点文档列表的「查看详情」看结构化报错与建议。</li>
+            </ul>
+          </div>
+        ),
+      })
+    }
     return false
   }
 
@@ -553,13 +572,15 @@ export default function KBDetailPage() {
   })
 
   return (
-    <div>
-      <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => nav('/kb')}>返回</Button>
-        <Typography.Title level={4} style={{ margin: 0 }}>{kb?.name || '知识库'}</Typography.Title>
+    <PageContainer
+      title={<Space>{kb?.name || '知识库'}
         {kb?.source_type === 'entry' && <Tag color="cyan">图文知识库</Tag>}
         {kb?.source_type === 'external' && <Tag color="purple">外部知识库</Tag>}
-      </Space>
+        {isKeyword && kb?.source_type !== 'entry' && <Tag color="orange">纯关键词</Tag>}
+      </Space>}
+      subtitle={kb?.description || undefined}
+      extra={<Button icon={<ArrowLeftOutlined />} onClick={() => nav('/kb')}>返回列表</Button>}
+    >
 
       {kb && (
         <Card style={{ marginBottom: 16 }} size="small">
@@ -599,7 +620,6 @@ export default function KBDetailPage() {
               <Descriptions.Item label="分块数">{kb.chunk_count}</Descriptions.Item>
             </Descriptions>
           )}
-          {kb.description && <Typography.Paragraph type="secondary" style={{ margin: '8px 0 0', fontSize: 12 }}>{kb.description}</Typography.Paragraph>}
         </Card>
       )}
 
@@ -1274,6 +1294,6 @@ export default function KBDetailPage() {
           )}
         </Form>
       </Modal>
-    </div>
+    </PageContainer>
   )
 }

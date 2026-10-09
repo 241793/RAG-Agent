@@ -11,6 +11,7 @@ import {
   type Agent, type AgentMode, type KB, type ModelConfig, type Skill,
 } from '../../api'
 import { errMsg } from '../../api/http'
+import PageContainer from '../../components/PageContainer'
 
 // 内置工具清单（与后端 registry 注册的一致）
 const BUILTIN_TOOLS: { name: string; label: string; perm: string; write?: boolean }[] = [
@@ -162,13 +163,14 @@ export default function AgentEditPage() {
     .filter((s): s is Skill => !!s && s.kind === 'prompt_pack' && !!(s as any).params_schema)
 
   return (
-    <div>
-      <Space style={{ marginBottom: 16 }}>
+    <PageContainer
+      title={`编辑智能体：${agent?.name || ''}`}
+      subtitle="配置智能体的角色、知识库范围、可调用的技能与工具、行为模式"
+      extra={<>
         <Button icon={<ArrowLeftOutlined />} onClick={() => nav('/agents')}>返回</Button>
-        <Typography.Title level={4} style={{ margin: 0 }}>编辑：{agent?.name}</Typography.Title>
-        <Button icon={<PlayCircleOutlined />} onClick={() => setTestOpen(true)}>测试对话</Button>
-      </Space>
-
+        <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => setTestOpen(true)}>测试对话</Button>
+      </>}
+    >
       <Tabs
         items={[
           {
@@ -343,6 +345,6 @@ export default function AgentEditPage() {
           <Button type="primary" icon={<SendOutlined />} loading={testStreaming} onClick={sendTest}>发送</Button>
         </Space.Compact>
       </Drawer>
-    </div>
+    </PageContainer>
   )
 }

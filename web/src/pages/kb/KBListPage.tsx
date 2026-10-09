@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
-  Alert, Button, Card, Col, Form, Input, InputNumber, List, message, Modal, Popconfirm, Row, Segmented, Select, Space, Tag, Tooltip, Typography,
+  Alert, Button, Card, Col, Collapse, Form, Input, InputNumber, List, message, Modal, Popconfirm, Row, Segmented, Select, Space, Tag, Tooltip, Typography,
 } from 'antd'
-import { PlusOutlined, DatabaseOutlined, EditOutlined, DeleteOutlined, ApiOutlined, CloudServerOutlined, FileImageOutlined } from '@ant-design/icons'
+import { PlusOutlined, DatabaseOutlined, EditOutlined, DeleteOutlined, ApiOutlined, CloudServerOutlined, FileImageOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { kbApi, providerApi, type KB, type ModelConfig } from '../../api'
 import { errMsg } from '../../api/http'
@@ -348,36 +348,44 @@ export default function KBListPage() {
                 </Typography.Text>
               </Form.Item>
               {indexMode !== 'keyword' && (
-                <Form.Item name="embedding_model_id" label="向量模型（Embedding）" extra="为空则用系统默认向量模型">
+                <Form.Item name="embedding_model_id" label="向量模型（Embedding）" extra="为空则用系统默认向量模型；不确定就留空">
                   <Select allowClear placeholder="默认向量模型"
                     options={embedModels.map((m) => ({ value: m.id, label: `${m.display_name || m.model_name}${m.embedding_dim ? `（${m.embedding_dim}维）` : ''}` }))} />
                 </Form.Item>
               )}
-              <Form.Item name={['chunk_strategy', 'type']} label="分块策略" style={{ marginBottom: 12 }}>
-                <Select options={STRATEGY_OPTIONS} onChange={(v) => setStrategy(v)} />
-              </Form.Item>
-              <Row gutter={12}>
-                <Col span={isParentChild ? 8 : 12}>
-                  <Form.Item name={['chunk_strategy', 'child_size']} label="子块字数">
-                    <InputNumber style={{ width: '100%' }} min={64} max={4096} placeholder="400" />
-                  </Form.Item>
-                </Col>
-                {isParentChild && (
-                  <Col span={8}>
-                    <Form.Item name={['chunk_strategy', 'parent_size']} label="父块字数">
-                      <InputNumber style={{ width: '100%' }} min={256} max={8192} placeholder="1500" />
+              <Collapse ghost size="small" items={[{
+                key: 'adv',
+                label: <span style={{ fontSize: 13 }}><SettingOutlined /> 高级设置（分块策略，一般无需修改）</span>,
+                children: (
+                  <>
+                    <Form.Item name={['chunk_strategy', 'type']} label="分块策略" style={{ marginBottom: 12 }}>
+                      <Select options={STRATEGY_OPTIONS} onChange={(v) => setStrategy(v)} />
                     </Form.Item>
-                  </Col>
-                )}
-                <Col span={isParentChild ? 8 : 12}>
-                  <Form.Item name={['chunk_strategy', 'overlap']} label="重叠字数">
-                    <InputNumber style={{ width: '100%' }} min={0} max={1024} placeholder="50" />
-                  </Form.Item>
-                </Col>
-              </Row>
+                    <Row gutter={12}>
+                      <Col span={isParentChild ? 8 : 12}>
+                        <Form.Item name={['chunk_strategy', 'child_size']} label="子块字数">
+                          <InputNumber style={{ width: '100%' }} min={64} max={4096} placeholder="400" />
+                        </Form.Item>
+                      </Col>
+                      {isParentChild && (
+                        <Col span={8}>
+                          <Form.Item name={['chunk_strategy', 'parent_size']} label="父块字数">
+                            <InputNumber style={{ width: '100%' }} min={256} max={8192} placeholder="1500" />
+                          </Form.Item>
+                        </Col>
+                      )}
+                      <Col span={isParentChild ? 8 : 12}>
+                        <Form.Item name={['chunk_strategy', 'overlap']} label="重叠字数">
+                          <InputNumber style={{ width: '100%' }} min={0} max={1024} placeholder="50" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                  </>
+                ),
+              }]} />
               {editKb && (
                 <Alert type="warning" showIcon style={{ marginTop: 4 }}
-                  message="修改分块策略/向量模型后，已有文档需重新入库（重灌）才会生效。" />
+                  message="修改索引方式 / 分块策略 / 向量模型后，已有文档需「重新处理」才会生效。" />
               )}
             </>
           )}
