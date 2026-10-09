@@ -20,7 +20,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     const p = u.permissions || []
     return p.includes('*') || p.includes(code)
   },
-  setUser: (u) => set({ user: u }),
+  setUser: (u) => set({ user: u, loading: false }),
   fetchMe: async () => {
     set({ loading: true })
     try {
@@ -33,6 +33,7 @@ export const useAuth = create<AuthState>((set, get) => ({
   logout: () => {
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
-    set({ user: null })
+    // loading 置 false，避免登出后再登录时守卫停留在转圈态
+    set({ user: null, loading: false })
   },
 }))
