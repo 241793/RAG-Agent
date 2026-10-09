@@ -168,7 +168,7 @@ export default function LoginPage() {
           </Form.Item>
           <Form.Item name="password" label="密码"
             rules={[{ required: true, message: '请输入密码' }, { min: 8, message: '至少 8 位' }]}
-            extra="至少 8 位，需含大写字母、小写字母、数字、符号中的至少三类">
+            extra="至少 8 位，需含字母、数字、符号中的至少两类（大小写不限）">
             <Input.Password placeholder="设置密码" autoComplete="new-password" />
           </Form.Item>
           <Form.Item name="reason" label="申请理由">

@@ -99,7 +99,11 @@ _MIN_PASSWORD_LEN = 8
 
 
 def check_password_strength(password: str) -> tuple[bool, str]:
-    """密码强度校验：长度 + 字符种类 + 弱密码黑名单。返回 (是否通过, 原因)。"""
+    """密码强度校验：长度 + 字符种类 + 弱密码黑名单。返回 (是否通过, 原因)。
+
+    不强求大小写混合——把「字母」视为一类（不分大小写），与数字、符号合计
+    三类中满足至少两类即可。即：纯小写字母 + 数字（如 abc12345）可通过。
+    """
     p = password or ""
     if len(p) < _MIN_PASSWORD_LEN:
         return False, f"密码至少 {_MIN_PASSWORD_LEN} 位"
@@ -107,17 +111,16 @@ def check_password_strength(password: str) -> tuple[bool, str]:
         return False, "密码不能超过 128 位"
     if p.lower() in _WEAK_PASSWORDS:
         return False, "密码过于常见，请更换更复杂的密码"
+    # 类别：字母（不分大小写）/ 数字 / 符号
     kinds = 0
-    if any(c.islower() for c in p):
-        kinds += 1
-    if any(c.isupper() for c in p):
+    if any(c.isalpha() for c in p):
         kinds += 1
     if any(c.isdigit() for c in p):
         kinds += 1
     if any(not c.isalnum() for c in p):
         kinds += 1
-    if kinds < 3:
-        return False, "密码需包含大写字母、小写字母、数字、符号中的至少三类"
+    if kinds < 2:
+        return False, "密码需包含字母、数字、符号中的至少两类"
     return True, ""
 
 

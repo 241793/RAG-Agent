@@ -12,9 +12,15 @@ def test_password_strength_rules():
     assert check_password_strength("abc")[0] is False          # 太短
     assert check_password_strength("admin123")[0] is False     # 弱密码
     assert check_password_strength("password")[0] is False     # 弱密码
-    assert check_password_strength("aaaaaaaa")[0] is False     # 单一字符类
+    assert check_password_strength("aaaaaaaa")[0] is False     # 只有字母（单类）
+    assert check_password_strength("12345678")[0] is False     # 只有数字（单类）
+    # 不强求大小写：小写字母 + 数字即可
+    assert check_password_strength("abc12345")[0] is True
+    assert check_password_strength("abcd1234")[0] is True
     assert check_password_strength("Password123!")[0] is True
     assert check_password_strength("Qq123456!")[0] is True
+    # 字母 + 符号也可（不含数字）
+    assert check_password_strength("abcdefg!")[0] is True
 
 
 def test_password_validation_raises():
