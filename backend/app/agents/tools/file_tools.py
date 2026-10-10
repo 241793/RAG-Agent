@@ -16,25 +16,63 @@ from app.ingest.storage import get_storage
 
 # 支持的文本抽取目标
 _TEXT_TARGETS = {"md", "txt", "csv"}
-# 纯文本直出格式（含代码/网页类：原样写入，扩展名即最终类型）
-_GEN_FORMATS = {"docx", "xlsx", "pdf", "pptx", "md", "csv", "txt", "html", "svg", "json", "js", "css", "xml", "py"}
-
+# 需要结构化渲染（走专门的排版库）的格式；其余一律按纯文本直出
+_STRUCT_FORMATS = {"docx", "xlsx", "pptx", "pdf"}
+# 常见扩展名 → MIME（未列出的按 text/plain 或按扩展名推断）
 _MIME = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "pdf": "application/pdf",
     "md": "text/markdown",
+    "markdown": "text/markdown",
     "csv": "text/csv",
     "txt": "text/plain",
+    "log": "text/plain",
     "html": "text/html",
+    "htm": "text/html",
     "svg": "image/svg+xml",
     "json": "application/json",
     "js": "text/javascript",
+    "mjs": "text/javascript",
+    "ts": "text/typescript",
+    "jsx": "text/jsx",
+    "tsx": "text/tsx",
     "css": "text/css",
+    "scss": "text/x-scss",
     "xml": "application/xml",
+    "yml": "text/yaml",
+    "yaml": "text/yaml",
     "py": "text/x-python",
+    "sh": "text/x-sh",
+    "java": "text/x-java",
+    "go": "text/x-go",
+    "rs": "text/x-rust",
+    "c": "text/x-c",
+    "cpp": "text/x-c++",
+    "h": "text/x-c",
+    "sql": "text/x-sql",
+    "ini": "text/plain",
+    "conf": "text/plain",
+    "env": "text/plain",
+    "vue": "text/x-vue",
+    "rb": "text/x-ruby",
+    "php": "text/x-php",
+    "kt": "text/x-kotlin",
+    "swift": "text/x-swift",
+    "bat": "text/plain",
+    "ps1": "text/plain",
+    "toml": "text/plain",
 }
+
+
+def _ext_of(filename: str) -> str:
+    return Path(filename).suffix.lower().lstrip(".")
+
+
+def _mime_for(ext: str) -> str:
+    """扩展名 → MIME；未收录的按 text/plain 兜底。"""
+    return _MIME.get(ext, "text/plain")
 
 
 def _check_tenant_key(ctx: ToolContext, file_key: str) -> str | None:
@@ -280,8 +318,10 @@ def _render_pdf(content: str) -> bytes:
     return buf.getvalue()
 
 
-def _render(args: dict) -> tuple[bytes, str]:
-    fmt = str(args.get("format") or "txt").lower()
+def _render(args: dict, fmt: str | None = None) -> tuple[bytes, str]:
+    """按格式渲染。fmt 缺省时从 args['format'] 取（兼容旧调用）。"""
+    if not fmt:
+        fmt = str(args.get("format") or "txt").lower().lstrip(".")
     content = str(args.get("content") or "")
     if fmt == "docx":
         return _render_docx(content), _MIME["docx"]
@@ -292,14 +332,8 @@ def _render(args: dict) -> tuple[bytes, str]:
         return _render_pptx(content, args.get("slides")), _MIME["pptx"]
     if fmt == "pdf":
         return _render_pdf(content), _MIME["pdf"]
-    if fmt == "csv":
-        return content.encode("utf-8"), _MIME["csv"]
-    if fmt == "md":
-        return content.encode("utf-8"), _MIME["md"]
-    # 网页/代码/结构化文本：原样直出（html/svg/json/js/css/xml/py/txt 等）
-    if fmt in _MIME:
-        return content.encode("utf-8"), _MIME[fmt]
-    return content.encode("utf-8"), _MIME["txt"]
+    # 其余格式（md/csv/txt/html/svg/json/js/css/… 及任何未知扩展名）：纯文本直出
+    return content.encode("utf-8"), _mime_for(fmt)
 
 
 def _save_artifact(ctx: ToolContext, filename: str, data: bytes, mime: str):
@@ -512,41 +546,46 @@ class _WriteToolMixin:
 class GenerateFileTool(_WriteToolMixin):
     name = "generate_file"
     description = (
-        "根据内容从零生成文件供用户下载。支持的 format：\n"
-        "- 办公文档：docx/xlsx/pdf/pptx（docx/pdf 用 content 传 markdown；xlsx 用 rows；pptx 用 slides）\n"
-        "- 文本/代码/网页：md/csv/txt/html/svg/json/js/css/xml/py（用 content 传原文，原样写出）\n"
-        "生成网页或 SVG 动画时用 format=html / svg，**不要**用 txt（否则扩展名错误）。"
+        "根据内容生成文件供用户下载。**按 filename 的扩展名自动判断格式**，无需手动指定。\n"
+        "支持任意常见类型：\n"
+        "- 办公文档：.docx / .pdf（content 传 markdown，会自动排版）、"
+        ".xlsx（用 rows 传二维数组）、.pptx（用 slides 传 [{title,bullets}]）\n"
+        "- 网页/代码/文本：.html / .svg / .json / .js / .css / .xml / .py / .md / .csv / .txt 等"
+        "（content 传原文，原样写出）\n"
+        "调用示例：要生成一个网页动画，就传 filename=\"anim.html\"（不要用 .txt），"
+        "content 放完整 HTML/SVG 源码。"
     )
     required_permission = "file:write"
     parameters = {
         "type": "object",
         "properties": {
-            "filename": {"type": "string", "description": "文件名（含扩展名，如 index.html、anim.svg）"},
-            "format": {"type": "string", "enum": sorted(_GEN_FORMATS)},
-            "content": {"type": "string", "description": "正文：办公类传 markdown，代码/网页类传原文"},
-            "rows": {"type": "array", "items": {"type": "array", "items": {}}, "description": "xlsx 数据"},
-            "slides": {"type": "array", "items": {"type": "object"}, "description": "pptx 幻灯片"},
+            "filename": {"type": "string", "description": "文件名（务必含正确扩展名，如 index.html、report.docx）"},
+            "content": {"type": "string", "description": "正文内容；办公文档传 markdown，网页/代码/文本传原文"},
+            "format": {"type": "string", "description": "可选。留空则按 filename 扩展名自动判断；仅当文件名无扩展名时需要指定"},
+            "rows": {"type": "array", "items": {"type": "array", "items": {}}, "description": "xlsx 数据（二维数组）"},
+            "slides": {"type": "array", "items": {"type": "object"}, "description": "pptx 幻灯片 [{title,bullets}]"},
         },
-        "required": ["filename", "format"],
+        "required": ["filename"],
     }
 
     def summarize(self, args: dict) -> str:
-        return f"生成文件「{args.get('filename')}」（格式 {args.get('format')}）"
+        return f"生成文件「{args.get('filename')}」"
 
     async def execute(self, args: dict, ctx: ToolContext) -> ToolResult:
-        fmt = str(args.get("format") or "").lower()
-        if fmt not in _GEN_FORMATS:
-            return ToolResult(content=f"不支持的格式：{fmt}", is_error=True)
-        filename = str(args.get("filename") or f"output.{fmt}")
-        # 文件名扩展名以 format 为准；避免出现 index.html.txt 这类双扩展名
-        if not filename.lower().endswith(f".{fmt}"):
-            # 若文件名已带别的扩展名，替换掉；否则追加
-            if "." in Path(filename).name:
-                filename = f"{_stem(filename)}.{fmt}"
-            else:
-                filename = f"{filename}.{fmt}"
+        filename = str(args.get("filename") or "").strip()
+        # 格式解析优先级：文件名扩展名 > 显式 format > 兜底 txt
+        ext = _ext_of(filename)
+        fmt = ext or str(args.get("format") or "").lower().lstrip(".")
+        if fmt == "markdown":
+            fmt = "md"
+        fmt = fmt or "txt"
+        if not filename:
+            filename = f"output.{fmt}"
+        elif not Path(filename).suffix:
+            # 文件名无扩展名：补上解析出的格式
+            filename = f"{filename}.{fmt}"
         try:
-            data, mime = _render(args)
+            data, mime = _render(args, fmt)
         except Exception as e:  # noqa: BLE001
             return ToolResult(content=f"生成失败：{str(e)[:200]}", is_error=True)
         file_key, art, _ = _save_artifact(ctx, filename, data, mime)
