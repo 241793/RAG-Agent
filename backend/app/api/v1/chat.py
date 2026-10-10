@@ -116,29 +116,50 @@ async def list_messages(
         )
     ).scalars().all()
     out = [MessageOut.model_validate(r) for r in rows]
-    # 兜底：历史消息若未记录 artifacts（旧版本生成的文件），按本会话产物 + 文件名
-    # 出现在该条消息内容中回填，保证「生成的文件」区可见、可预览。
+    # 兜底：历史消息若未记录 artifacts（旧版本生成的文件），按「产物时间落在相邻
+    # assistant 消息之间」精确归属；已有 artifacts 的消息不重复处理。
     from app.models import Artifact
 
-    arts = (
-        await db.execute(
-            select(Artifact).where(
-                Artifact.conversation_id == conv_id, Artifact.source == "generated"
-            ).order_by(Artifact.id.asc())
-        )
-    ).scalars().all()
-    if arts:
+    need = any(mo.role == "assistant" and not mo.artifacts for mo in out)
+    if need:
+        arts = (
+            await db.execute(
+                select(Artifact).where(
+                    Artifact.conversation_id == conv_id, Artifact.source == "generated"
+                ).order_by(Artifact.id.asc())
+            )
+        ).scalars().all()
+        # 已挂在任何消息上的 artifact_id，避免重复
+        used: set[int] = set()
         for mo in out:
-            if mo.role != "assistant" or mo.artifacts:
+            for a in (mo.artifacts or []):
+                if a.get("artifact_id"):
+                    used.add(a["artifact_id"])
+        # 待回填的 assistant 消息时间边界（仅无 artifacts 的）
+        bounds: list[tuple[int, int, MessageOut]] = []
+        for mo in out:
+            if mo.role == "assistant" and not mo.artifacts:
+                raw = next((r for r in rows if r.id == mo.id), None)
+                bounds.append((mo.id, int(getattr(raw, "created_at", 0) or 0), mo))
+
+        def _ats(a) -> int:
+            try:
+                return int(a.created_at.timestamp() * 1000) if a.created_at else 0
+            except Exception:  # noqa: BLE001
+                return 0
+
+        for a in arts:
+            if a.id in used:
                 continue
-            content = mo.content or ""
-            matched = [
-                {"file_key": a.file_key, "artifact_id": a.id, "name": a.file_name,
-                 "mime": a.mime, "size": a.size}
-                for a in arts if a.file_name and a.file_name in content
-            ]
-            if matched:
-                mo.artifacts = matched
+            t = _ats(a)
+            target = next((mo for _mid, mts, mo in bounds if mts >= t), None)
+            if target is None and bounds:
+                target = bounds[-1][2]
+            if target is not None:
+                target.artifacts = list(target.artifacts or []) + [{
+                    "file_key": a.file_key, "artifact_id": a.id, "name": a.file_name,
+                    "mime": a.mime, "size": a.size,
+                }]
     return out
 
 

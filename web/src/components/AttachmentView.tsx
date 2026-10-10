@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, Card, Drawer, Image, Space, Tag, Typography, message } from 'antd'
+import { Button, Card, Drawer, Image, Modal, Space, Tag, Typography, message } from 'antd'
 import {
   FileImageOutlined, FilePdfOutlined, FileWordOutlined, FileExcelOutlined,
   FilePptOutlined, FileTextOutlined, FileOutlined, DownloadOutlined, PaperClipOutlined,
@@ -67,14 +67,18 @@ export default function AttachmentView({ att, artifact = false }: { att: AttLike
     } catch (e) { message.error(errMsg(e)) }
   }
 
-  // 打开 HTML/网页：新标签页以 inline 方式预览（浏览器直接渲染）
-  const openInBrowser = async (inline = true) => {
+  // HTML 弹框预览状态
+  const [htmlOpen, setHtmlOpen] = useState(false)
+  const [htmlUrl, setHtmlUrl] = useState<string>()
+
+  const openHtml = async () => {
     try {
       const u = artifact && att.artifact_id
-        ? await getArtifactUrl(att.artifact_id, !inline)
-        : url
+        ? await getArtifactUrl(att.artifact_id)
+        : (url || (att.file_key ? await getAttachmentUrl(att.file_key) : undefined))
       if (!u) { message.warning('链接未就绪，请稍候重试'); return }
-      window.open(absUrl(u), '_blank', 'noopener')
+      setHtmlUrl(absUrl(u))
+      setHtmlOpen(true)
     } catch (e) { message.error(errMsg(e)) }
   }
 
@@ -106,14 +110,24 @@ export default function AttachmentView({ att, artifact = false }: { att: AttLike
       </div>
     ) : <Tag style={{ marginTop: 6 }}>PDF 加载中…</Tag>
   } else if (isHtml) {
-    // HTML 网页：点击在新标签页预览，或下载
+    // HTML 网页：点击弹框内嵌预览（iframe），或下载 / 新标签打开
     body = (
-      <Space style={{ marginTop: 6 }} wrap>
-        <Tag icon={<FileTextOutlined />} color="blue" style={{ cursor: 'pointer' }}
-          onClick={() => openInBrowser(true)}>{att.name}</Tag>
-        <Button size="small" type="link" onClick={() => openInBrowser(true)}>预览</Button>
-        <Button size="small" type="link" icon={<DownloadOutlined />} onClick={() => openInBrowser(false)}>下载</Button>
-      </Space>
+      <>
+        <Space style={{ marginTop: 6 }} wrap>
+          <Tag icon={<FileTextOutlined />} color="blue" style={{ cursor: 'pointer' }}
+            onClick={openHtml}>{att.name}</Tag>
+          <Button size="small" type="link" onClick={openHtml}>预览</Button>
+          <Button size="small" type="link" icon={<DownloadOutlined />} onClick={() => download()}>下载</Button>
+        </Space>
+        <Modal title={att.name} open={htmlOpen} onCancel={() => setHtmlOpen(false)} footer={null}
+          width="min(1000px, 92vw)" styles={{ body: { padding: 0 } }} destroyOnClose>
+          {htmlUrl && (
+            <iframe src={htmlUrl} title={att.name}
+              sandbox="allow-scripts allow-same-origin"
+              style={{ width: '100%', height: '76vh', border: 0, borderRadius: 6 }} />
+          )}
+        </Modal>
+      </>
     )
   } else if (kind === 'text') {
     body = (
