@@ -50,7 +50,9 @@ export default function ChatPage() {
     () => (localStorage.getItem('chat_retrieval_mode') as 'auto' | 'custom' | 'off') || 'auto'
   ) // 检索范围三态：初始值读上次选择
   const [aiTools, setAiTools] = useState(true)      // 允许 AI 调用平台工具
-  const [autoWrite, setAutoWrite] = useState(false) // 写操作免确认（全自动）
+  const [autoWrite, setAutoWrite] = useState(
+    () => localStorage.getItem('chat_auto_write') === '1'
+  ) // 写操作免确认（全自动）；记住上次选择，下次打开仍生效
   const [input, setInput] = useState('')
   // 按对话隔离的消息与流式状态：支持多对话并行生成，切换不打断
   const [convMsgs, setConvMsgs] = useState<Record<string, Msg[]>>({})
@@ -626,9 +628,12 @@ export default function ChatPage() {
             </span>
           </Tooltip>
           {aiTools && (
-            <Tooltip title="开启后写操作（建库/删除等）免确认直接执行；关闭则需逐条确认">
+            <Tooltip title="开启后写操作（建库/删除等）免确认直接执行；关闭则需逐条确认（选择会被记住）">
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <Switch size="small" checked={autoWrite} onChange={setAutoWrite} />免确认
+                <Switch size="small" checked={autoWrite} onChange={(v) => {
+                  setAutoWrite(v)
+                  localStorage.setItem('chat_auto_write', v ? '1' : '0')
+                }} />免确认
               </span>
             </Tooltip>
           )}
