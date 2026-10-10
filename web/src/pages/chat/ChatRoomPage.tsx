@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Avatar, Button, Card, Drawer, Dropdown, Empty, Input, List, message, Modal, Popconfirm, Select, Space, Switch, Tag, Tooltip, Typography, Upload,
+  Avatar, Button, Card, Drawer, Dropdown, Empty, Input, List, message, Modal, Popconfirm, Popover, Select, Space, Switch, Tag, Tooltip, Typography, Upload,
 } from 'antd'
 import {
   SendOutlined, PlusOutlined, TeamOutlined, RobotOutlined, UserOutlined, PaperClipOutlined,
@@ -51,8 +51,11 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   const [replyTo, setReplyTo] = useState<ChatMsgItem | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const [pendingCount, setPendingCount] = useState(0)
+  const [atOpen, setAtOpen] = useState(false)   // @ 选择器
+  const [atQuery, setAtQuery] = useState('')
 
   const listRef = useRef<HTMLDivElement>(null)
+  const taRef = useRef<any>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const activeIdRef = useRef<number | null>(null)
   const atBottomRef = useRef(true)
@@ -221,15 +224,35 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
     } catch (e) { message.error(errMsg(e)) }
   }
 
+  // 插入 @某人到输入框：若光标前刚打了一半的 "@xxx"，先吃掉它再插入（QQ 式）
   const handleMention = (uid: number, name: string) => {
-    setMentionIds((ids) => ids.includes(uid) ? ids : [...ids, uid])
-    setInput((t) => (t.endsWith(' ') || !t ? t : t + ' ') + `@${name} `)
+    setMentionIds((ids) => (ids.includes(uid) ? ids : [...ids, uid]))
+    setInput((t) => {
+      const m = t.match(/@[^\s@]*$/)
+      const base = m ? t.slice(0, m.index) : t
+      const sep = base && !base.endsWith(' ') ? ' ' : ''
+      return `${base}${sep}@${name} `
+    })
+    setAtOpen(false); setAtQuery('')
+    setTimeout(() => taRef.current?.focus(), 0)
   }
 
+  // 成员 + 机器人（含自己，QQ 也允许@自己）
   const mentionable = useMemo(() => [
-    ...(detail?.members || []).filter((m: any) => m.user_id !== me?.id).map((m: any) => ({ uid: m.user_id, name: m.name })),
-    ...(detail?.bots || []).map((b: any) => ({ uid: b.agent_id, name: b.name, agent: true })),
-  ], [detail, me])
+    ...(detail?.members || []).map((m: any) => ({ uid: m.user_id, name: m.name, agent: false, role: m.role })),
+    ...(detail?.bots || []).map((b: any) => ({ uid: b.agent_id, name: b.name, agent: true, role: '' })),
+  ], [detail])
+  const atFiltered = useMemo(() => {
+    const q = atQuery.trim().toLowerCase()
+    return mentionable.filter((x) => !q || x.name.toLowerCase().includes(q))
+  }, [mentionable, atQuery])
+
+  // 输入框内容变化：检测光标前是否有 "@xxx" → 打开/过滤 @ 选择器
+  const onInputChange = (val: string) => {
+    setInput(val)
+    const m = val.match(/@([^\s@]*)$/)
+    if (m) { setAtOpen(true); setAtQuery(m[1]) } else setAtOpen(false)
+  }
 
   return (
     <>
@@ -244,6 +267,17 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
               size="small" dataSource={rooms}
               locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="加载中…" /> }}
               renderItem={(r) => (
+                <Dropdown key={r.id} trigger={['contextMenu']} menu={{
+                  items: [
+                    { key: 'open', label: '打开' },
+                    { key: 'read', label: '标为已读', disabled: !r.unread },
+                  ],
+                  onClick: ({ key, domEvent }) => {
+                    domEvent.stopPropagation()
+                    if (key === 'open') openRoom(r.id)
+                    else if (key === 'read') { chatRoomApi.read(r.id).then(() => setRooms((rs) => rs.map((x) => x.id === r.id ? { ...x, unread: 0 } : x))) }
+                  },
+                }}>
                 <List.Item
                   style={{ cursor: 'pointer', padding: '6px 8px', borderRadius: 6, background: r.id === activeId ? 'var(--color-primary-soft)' : undefined }}
                   onClick={() => openRoom(r.id)}
@@ -258,6 +292,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                     <Typography.Text type="secondary" ellipsis style={{ fontSize: 12 }}>{r.last_preview || '暂无消息'}</Typography.Text>
                   </div>
                 </List.Item>
+                </Dropdown>
               )}
             />
           </div>
@@ -327,22 +362,50 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                   </Space>
                 )}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                  <Dropdown menu={{
-                    items: [
-                      { key: 'mention', label: '提到某人', type: 'group', children: mentionable.map((x) => ({ key: `m-${x.uid}`, label: `${x.agent ? '🤖 ' : ''}${x.name}` })) },
-                    ],
-                    onClick: ({ key }) => {
-                      if (key.startsWith('m-')) { const x = mentionable.find((y) => `m-${y.uid}` === key); if (x) handleMention(x.uid, x.name) }
-                    },
-                  }} trigger={['click']}>
-                    <Button icon={<Typography.Text>@</Typography.Text>} />
-                  </Dropdown>
+                  {/* @ 选择器（像 QQ）：可搜索群内所有人+机器人 */}
+                  <Popover
+                    open={atOpen} onOpenChange={(o) => { setAtOpen(o); if (o) setAtQuery('') }}
+                    trigger="click"
+                    placement="topLeft"
+                    content={
+                      <div style={{ width: 240 }}>
+                        <Input size="small" autoFocus placeholder="搜索成员 / 机器人"
+                          value={atQuery} onChange={(e) => setAtQuery(e.target.value)} style={{ marginBottom: 6 }} allowClear />
+                        <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                          <List size="small" dataSource={atFiltered}
+                            locale={{ emptyText: <div style={{ color: 'var(--color-text-3)', fontSize: 12, padding: 8 }}>无匹配成员</div> }}
+                            renderItem={(x: any) => (
+                              <List.Item style={{ cursor: 'pointer', padding: '4px 6px' }} onClick={() => handleMention(x.uid, x.name)}>
+                                <Space>
+                                  <Avatar size={20} icon={x.agent ? <RobotOutlined /> : <UserOutlined />}
+                                    style={{ background: x.agent ? '#7c3aed' : '#8c8c8c' }} />
+                                  <span style={{ fontSize: 13 }}>{x.name}</span>
+                                  {x.agent && <Tag color="purple" style={{ margin: 0, fontSize: 10 }}>机器人</Tag>}
+                                  {x.uid === me?.id && <Tag style={{ margin: 0, fontSize: 10 }}>我</Tag>}
+                                </Space>
+                              </List.Item>
+                            )} />
+                        </div>
+                      </div>
+                    }>
+                    <Tooltip title="提到某人（也可在输入框直接打 @）"><Button icon={<Typography.Text>@</Typography.Text>} /></Tooltip>
+                  </Popover>
                   <Upload beforeUpload={doUpload} showUploadList={false} multiple>
                     <Tooltip title="发送附件（图片/视频/音频/文件）"><Button icon={<PaperClipOutlined />} /></Tooltip>
                   </Upload>
-                  <Input.TextArea autoSize={{ minRows: 1, maxRows: 4 }} value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onPressEnter={(e) => { if (!e.shiftKey) { e.preventDefault(); send() } }}
+                  <Input.TextArea ref={taRef} autoSize={{ minRows: 1, maxRows: 4 }} value={input}
+                    onChange={(e) => onInputChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      // @ 选择器开启时：回车选中第一个匹配 / Esc 关闭（QQ 式）
+                      if (!atOpen) return
+                      if (e.key === 'Escape') { setAtOpen(false); return }
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        if (atFiltered.length) handleMention(atFiltered[0].uid, atFiltered[0].name)
+                        else setAtOpen(false)
+                      }
+                    }}
+                    onPressEnter={(e) => { if (!e.shiftKey && !atOpen) { e.preventDefault(); send() } }}
                     placeholder="输入消息，Enter 发送，Shift+Enter 换行；@ 可提及成员或机器人" />
                   <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={send}>发送</Button>
                   {detail.kind !== 'direct' && canAdmin && (
@@ -413,14 +476,33 @@ function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention }
           {m.sender_name} <span style={{ color: 'var(--color-text-3)' }}>{fmtTime(m.created_at)}</span>
           {m.pinned && <PushpinOutlined style={{ color: 'var(--color-warn)', marginLeft: 4 }} />}
         </div>
-        <div style={{
-          background: mine ? 'var(--color-primary-soft)' : 'var(--color-bg-subtle)',
-          border: '1px solid var(--color-border)', borderRadius: 8, padding: '6px 10px',
-          whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 14,
+        {/* 消息体：右键弹出操作菜单（回复/@/复制/置顶/撤回） */}
+        <Dropdown trigger={['contextMenu']} menu={{
+          items: [
+            { key: 'reply', label: '回复' },
+            { key: 'at', label: `@ ${m.sender_name}` },
+            { key: 'copy', label: '复制' },
+            { type: 'divider' },
+            ...(canPin ? [{ key: 'pin', label: m.pinned ? '取消置顶' : '置顶' }] : []),
+            ...(canRevoke ? [{ key: 'revoke', label: '撤回', danger: true }] : []),
+          ],
+          onClick: ({ key }) => {
+            if (key === 'reply') onReply()
+            else if (key === 'at') onMention(m.sender_id, m.sender_name)
+            else if (key === 'copy') { navigator.clipboard?.writeText(m.content || ''); message.success('已复制') }
+            else if (key === 'pin') onPin()
+            else if (key === 'revoke') Modal.confirm({ title: '撤回该消息？', onOk: onRevoke })
+          },
         }}>
-          {m.content}
-          {m.attachments?.map((a: any, i: number) => <AttachmentView key={i} att={a} />)}
-        </div>
+          <div style={{
+            background: mine ? 'var(--color-primary-soft)' : 'var(--color-bg-subtle)',
+            border: '1px solid var(--color-border)', borderRadius: 8, padding: '6px 10px',
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 14, cursor: 'context-menu',
+          }}>
+            {m.content}
+            {m.attachments?.map((a: any, i: number) => <AttachmentView key={i} att={a} />)}
+          </div>
+        </Dropdown>
         <div style={{ fontSize: 12, textAlign: mine ? 'right' : 'left', marginTop: 2 }}>
           <Space size={8}>
             <a onClick={onReply}>回复</a>
