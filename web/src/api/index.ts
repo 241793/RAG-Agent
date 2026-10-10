@@ -518,6 +518,7 @@ export const chatRoomApi = {
     members: { id: number; user_id: number | null; agent_id?: number | null; role: string; name: string; username?: string | null; is_admin?: boolean; is_agent?: boolean; muted_until?: number | null }[]
     bots: { member_id: number; agent_id: number; name: string }[]
     announcements?: { id: number; content: string; pinned: boolean; created_by?: number | null; created_by_name?: string; created_at?: number | null }[]
+    mute_all?: boolean
     pinned: ChatMsgItem[]
   }>(`/chat/rooms/${roomId}`).then((r) => r.data),
   messages: (roomId: number, beforeId?: number, limit = 30) =>
@@ -548,6 +549,17 @@ export const chatRoomApi = {
     http.delete(`/chat/rooms/${roomId}/announcements/${annId}`).then((r) => r.data),
   setBotRole: (roomId: number, agentId: number, role: string) =>
     http.post(`/chat/rooms/${roomId}/bots/${agentId}/role`, { role }).then((r) => r.data),
+  searchMessages: (roomId: number, q: string, limit = 30) =>
+    http.get<{ items: ChatMsgItem[]; count: number; keyword: string }>(
+      `/chat/rooms/${roomId}/messages/search`, { params: { q, limit } }).then((r) => r.data),
+  muteAll: (roomId: number, enabled: boolean, minutes = 0) =>
+    http.post(`/chat/rooms/${roomId}/mute-all`, { enabled, minutes }).then((r) => r.data),
+  memberProfile: (roomId: number, userId: number) =>
+    http.get<{
+      id: number; username: string; display_name: string; avatar?: string | null
+      email?: string | null; phone?: string | null; department_name?: string | null
+      is_admin: boolean; roles: string[]; user_type: string; status: string; last_login_at?: string | null
+    }>(`/chat/rooms/${roomId}/members/${userId}/profile`).then((r) => r.data),
   updateRoom: (roomId: number, data: { name?: string; avatar?: string; announcement?: string }) =>
     http.patch(`/chat/rooms/${roomId}`, data).then((r) => r.data),
   transferOwner: (roomId: number, userId: number) =>
@@ -1216,6 +1228,8 @@ export interface ScheduledTask {
   timeout_seconds?: number | null
   enabled: boolean
   depends_on_task_id?: number | null
+  room_id?: number | null
+  room_bot_agent_id?: number | null
   next_run_at?: number | null
   last_run_at?: number | null
   last_status?: string | null

@@ -97,6 +97,8 @@ async def create_task(
         retry_interval_seconds=int(data.get("retry_interval_seconds") or 60),
         timeout_seconds=data.get("timeout_seconds"),
         depends_on_task_id=data.get("depends_on_task_id"),
+        room_id=data.get("room_id"),
+        room_bot_agent_id=data.get("room_bot_agent_id"),
     )
     if t.depends_on_task_id:
         await _validate_dep_chain(db, tenant_id, t.id, t.depends_on_task_id)
@@ -142,7 +144,8 @@ async def update_task(db: AsyncSession, task: ScheduledTask, data: dict) -> Sche
         task.depends_on_task_id = dep
     for f in ("name", "agent_id", "target_type", "prompt", "inputs", "schedule_kind",
               "cron_expr", "interval_seconds", "run_at", "trigger_kind", "event_name",
-              "notify_on", "max_retries", "retry_interval_seconds", "timeout_seconds", "enabled"):
+              "notify_on", "max_retries", "retry_interval_seconds", "timeout_seconds", "enabled",
+              "room_id", "room_bot_agent_id"):
         if data.get(f) is not None:
             setattr(task, f, data[f])
     task.retry_count = 0

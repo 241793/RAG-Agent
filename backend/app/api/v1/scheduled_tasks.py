@@ -36,6 +36,8 @@ class TaskIn(BaseModel):
     timeout_seconds: int | None = None
     enabled: bool = True
     depends_on_task_id: int | None = None  # 前置任务：本任务在它成功后自动触发（A→B）
+    room_id: int | None = None  # 结果推送目标群（群管机器人）
+    room_bot_agent_id: int | None = None  # 群内发言机器人身份（留空=agent_id）
 
 
 def _to_out(t: ScheduledTask) -> dict:
@@ -50,6 +52,7 @@ def _to_out(t: ScheduledTask) -> dict:
         "retry_interval_seconds": t.retry_interval_seconds, "timeout_seconds": t.timeout_seconds,
         "enabled": t.enabled,
         "depends_on_task_id": t.depends_on_task_id,
+        "room_id": t.room_id, "room_bot_agent_id": t.room_bot_agent_id,
         "next_run_at": t.next_run_at, "last_run_at": t.last_run_at,
         "last_status": t.last_status, "last_result": t.last_result,
         "last_run_id": t.last_run_id, "conversation_id": t.conversation_id, "run_count": t.run_count,

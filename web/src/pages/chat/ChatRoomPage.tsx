@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Avatar, Button, Card, Drawer, Dropdown, Empty, Image, Input, List, message, Modal, Popconfirm, Popover, Select, Space, Spin, Switch, Tabs, Tag, Tooltip, Typography, Upload,
+  Avatar, Button, Card, Descriptions, Divider, Drawer, Dropdown, Empty, Image, Input, InputNumber, List, message, Modal, Popconfirm, Popover, Select, Space, Spin, Switch, Tabs, Tag, Tooltip, Typography, Upload,
 } from 'antd'
 import {
   SendOutlined, PlusOutlined, TeamOutlined, RobotOutlined, UserOutlined, PaperClipOutlined,
   PushpinOutlined, DeleteOutlined, MoreOutlined, ReloadOutlined, RollbackOutlined, EditOutlined,
+  SearchOutlined, ProfileOutlined, FolderOutlined, AudioMutedOutlined, MailOutlined, PhoneOutlined, ApartmentOutlined,
 } from '@ant-design/icons'
-import { chatRoomApi, rbacApi, agentApi, chatApi, type ChatRoomBrief, type ChatMsgItem } from '../../api'
+import { chatRoomApi, rbacApi, agentApi, chatApi, scheduledApi, type ChatRoomBrief, type ChatMsgItem } from '../../api'
 import { errMsg } from '../../api/http'
 import AttachmentView from '../../components/AttachmentView'
 
@@ -45,6 +46,9 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   const [botOpen, setBotOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   const [annOpen, setAnnOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [groupBotOpen, setGroupBotOpen] = useState(false)
+  const [profileUid, setProfileUid] = useState<number | null>(null)
   const [mentionIds, setMentionIds] = useState<number[]>([])
   const [replyTo, setReplyTo] = useState<ChatMsgItem | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
@@ -167,6 +171,8 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
     } else if (d.type === 'room_updated' && d.room_id === activeIdRef.current) {
       setDetail((cur: any) => cur ? { ...cur, name: d.name ?? cur.name, announcement: d.announcement ?? cur.announcement } : cur)
       setRooms((rs) => rs.map((r) => r.id === d.room_id ? { ...r, name: d.name ?? r.name } : r))
+    } else if (d.type === 'mute_all' && d.room_id === activeIdRef.current) {
+      setDetail((cur: any) => cur ? { ...cur, mute_all: !!d.enabled } : cur)
     }
   }
 
@@ -226,6 +232,30 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
       const r = await chatRoomApi.direct(userId)
       await loadRooms(); openRoom(r.id)
     } catch (e) { message.error(errMsg(e)) }
+  }
+
+  // 全员禁言：支持手动 / 定时（到点自动解除）
+  const openMuteAll = () => {
+    if (!detail) return
+    const cur = (detail as any).mute_all ?? false
+    let minutes = 0
+    Modal.confirm({
+      title: cur ? '关闭全员禁言？' : '开启全员禁言',
+      icon: null,
+      content: cur ? <span>关闭后所有成员可正常发言。</span> : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--color-text-2)' }}>自动解除时间（分钟，0=手动解除）</span>
+          <InputNumber min={0} defaultValue={0} style={{ width: 160 }} onChange={(v) => { minutes = Number(v) || 0 }} />
+        </div>
+      ),
+      onOk: async () => {
+        try {
+          const r: any = await chatRoomApi.muteAll(detail.id, !cur, cur ? 0 : minutes)
+          message.success(r.message || '已操作')
+          await openRoom(detail.id)
+        } catch (e) { message.error(errMsg(e)) }
+      },
+    })
   }
 
   // 插入 @某人到输入框：若光标前刚打了一半的 "@xxx"，先吃掉它再插入（QQ 式）
@@ -330,6 +360,11 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
           extra={
             <Space>
               <Tooltip title="自动滚动到最新"><span style={{ fontSize: 12, color: 'var(--color-text-3)' }}>自动跟随 <Switch size="small" checked={autoScroll} onChange={setAutoScroll} /></span></Tooltip>
+              {detail && <Tooltip title="搜索聊天记录"><Button size="small" icon={<SearchOutlined />} onClick={() => setSearchOpen(true)} /></Tooltip>}
+              {detail?.kind === 'direct' && (
+                <Tooltip title="查看对方资料"><Button size="small" icon={<ProfileOutlined />}
+                  onClick={() => { const peer = detail.members?.find((m: any) => m.user_id !== me?.id); if (peer) setProfileUid(peer.user_id) }} /></Tooltip>
+              )}
               <Button size="small" icon={<ReloadOutlined />} onClick={() => activeId && openRoom(activeId)} />
             </Space>
           }>
@@ -344,6 +379,12 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                   {detail.announcements[0].content}
                   {detail.announcements.length > 1 && <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>（共 {detail.announcements.length} 条，点击查看）</Typography.Text>}
                   {detail.announcements.length === 1 && <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>（点击查看全部）</Typography.Text>}
+                </div>
+              )}
+              {/* 全员禁言提示 */}
+              {(detail as any).mute_all && (
+                <div style={{ margin: '0 12px 8px', padding: '4px 10px', background: 'var(--color-error-soft, #fff1f0)', color: 'var(--color-error, #cf1322)', borderRadius: 6, fontSize: 12 }}>
+                  <AudioMutedOutlined /> 全员禁言中{canAdmin ? '（管理员可发言）' : '，暂时无法发言'}
                 </div>
               )}
               {/* 置顶消息 */}
@@ -436,12 +477,14 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                   {detail.kind !== 'direct' && canAdmin && (
                     <Dropdown menu={{
                       items: [
-                        { key: 'photo', label: '查看群相册/文件' },
+                        { key: 'photo', label: '查看群相册/文件', icon: <FolderOutlined /> },
                         { type: 'divider' },
                         { key: 'info', label: '群资料', icon: <EditOutlined /> },
                         { key: 'members', label: '群成员与管理', icon: <UserOutlined /> },
                         { key: 'bots', label: '机器人', icon: <RobotOutlined /> },
+                        { key: 'groupbot', label: '群管机器人', icon: <RobotOutlined /> },
                         { key: 'announcement', label: '设置群公告', icon: <PushpinOutlined /> },
+                        { key: 'muteall', label: '全员禁言', icon: <AudioMutedOutlined /> },
                         { type: 'divider' },
                         { key: 'clear', label: '清空聊天记录', danger: true },
                       ],
@@ -466,8 +509,10 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                           })
                         } else if (key === 'members') setMemberOpen(true)
                         else if (key === 'bots') setBotOpen(true)
+                        else if (key === 'groupbot') setGroupBotOpen(true)
                         else if (key === 'photo') setFilesOpen(true)
                         else if (key === 'announcement') setAnnOpen(true)
+                        else if (key === 'muteall') openMuteAll()
                         else if (key === 'clear') {
                           Modal.confirm({
                             title: '清空聊天记录？', content: '所有消息将被撤回（成员与群结构保留），不可恢复。',
@@ -505,12 +550,23 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
       <BotDrawer open={botOpen} onClose={() => setBotOpen(false)} detail={detail} agents={agents}
         onChanged={() => activeId && openRoom(activeId)} />
 
+      {/* 群管机器人 */}
+      <GroupBotDrawer open={groupBotOpen} onClose={() => setGroupBotOpen(false)} detail={detail}
+        onChanged={() => activeId && openRoom(activeId)} />
+
       {/* 群文件 / 相册 */}
       <FilesDrawer open={filesOpen} onClose={() => setFilesOpen(false)} detail={detail} />
 
       {/* 群公告 */}
       <AnnouncementDrawer open={annOpen} onClose={() => setAnnOpen(false)} detail={detail}
         canAdmin={canAdmin} onChanged={() => activeId && openRoom(activeId)} />
+
+      {/* 聊天记录搜索 */}
+      <SearchDrawer open={searchOpen} onClose={() => setSearchOpen(false)} detail={detail}
+        onJump={(mid) => { const el = document.getElementById(`msg-${mid}`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }} />
+
+      {/* 成员资料卡 */}
+      <ProfileDrawer open={profileUid != null} onClose={() => setProfileUid(null)} roomId={detail?.id} userId={profileUid} />
     </>
   )
 }
@@ -527,7 +583,7 @@ function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention, 
     </div>
   }
   return (
-    <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexDirection: mine ? 'row-reverse' : 'row' }}>
+    <div id={`msg-${m.id}`} style={{ display: 'flex', gap: 8, marginBottom: 12, flexDirection: mine ? 'row-reverse' : 'row' }}>
       <Tooltip title={canPrivate ? '点击私聊' : ''}>
         <Avatar size={34} icon={isBot ? <RobotOutlined /> : <UserOutlined />}
           onClick={canPrivate ? onPrivate : undefined}
@@ -815,6 +871,168 @@ function AnnouncementDrawer({ open, onClose, detail, canAdmin, onChanged }: any)
             </List.Item>
           )} />
         )
+      )}
+    </Drawer>
+  )
+}
+
+/** 聊天记录搜索：按关键词在群/私聊历史中检索，命中可直接跳转。 */
+function SearchDrawer({ open, onClose, detail, onJump }: any) {
+  const [q, setQ] = useState('')
+  const [items, setItems] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [searched, setSearched] = useState(false)
+
+  const doSearch = async () => {
+    if (!detail?.id || !q.trim()) return
+    setLoading(true); setSearched(true)
+    try { const r = await chatRoomApi.searchMessages(detail.id, q.trim()); setItems(r.items || []) }
+    catch (e) { message.error(errMsg(e)); setItems([]) }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { if (!open) { setQ(''); setItems([]); setSearched(false) } }, [open])
+
+  return (
+    <Drawer title="搜索聊天记录" width={480} open={open} onClose={onClose}>
+      <Input.Search placeholder="输入关键词搜索" allowClear enterButton="搜索"
+        value={q} onChange={(e) => setQ(e.target.value)} onSearch={doSearch} style={{ marginBottom: 12 }} />
+      {loading ? <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div> : (
+        !searched ? <Empty description="输入关键词开始搜索" /> :
+        items.length === 0 ? <Empty description="未找到匹配的消息" /> : (
+          <List size="small" dataSource={items} renderItem={(m: any) => (
+            <List.Item style={{ cursor: 'pointer' }} onClick={() => { onJump?.(m.id); onClose?.() }}>
+              <List.Item.Meta
+                avatar={<Avatar size="small" icon={m.sender_is_agent ? <RobotOutlined /> : <UserOutlined />} />}
+                title={<Space size={6}><span style={{ fontSize: 13 }}>{m.sender_name}</span>
+                  <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>{fmtTime(m.created_at)}</span></Space>}
+                description={<span style={{ fontSize: 13 }}>{m.content?.slice(0, 100)}{m.attachments ? ' [附件]' : ''}</span>} />
+            </List.Item>
+          )} />
+        )
+      )}
+    </Drawer>
+  )
+}
+
+/** 成员资料卡：显示头像/部门/邮箱/电话/角色（私聊与群成员通用）。 */
+function ProfileDrawer({ open, onClose, roomId, userId }: any) {
+  const [p, setP] = useState<any>(null)
+  const [loading, setLoading] = useState(false)
+  useEffect(() => {
+    if (!open || !roomId || !userId) return
+    setLoading(true); setP(null)
+    chatRoomApi.memberProfile(roomId, userId).then(setP).catch(() => setP(null)).finally(() => setLoading(false))
+  }, [open, roomId, userId])
+  return (
+    <Drawer title="成员资料" width={380} open={open} onClose={onClose}>
+      {loading ? <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div> : !p ? <Empty description="暂无资料" /> : (
+        <div>
+          <div style={{ textAlign: 'center', marginBottom: 16 }}>
+            <Avatar size={72} src={p.avatar || undefined} icon={<UserOutlined />} style={{ background: '#2563eb' }} />
+            <div style={{ fontSize: 18, fontWeight: 600, marginTop: 8 }}>{p.display_name}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-3)' }}>@{p.username}</div>
+            <Space size={4} style={{ marginTop: 6 }}>
+              {p.is_admin && <Tag color="geekblue">系统管理员</Tag>}
+              {(p.roles || []).map((r: string) => <Tag key={r} color="blue">{r}</Tag>)}
+              {p.user_type === 'external' && <Tag color="orange">外部用户</Tag>}
+            </Space>
+          </div>
+          <Divider style={{ margin: '8px 0' }} />
+          <Descriptions column={1} size="small" colon={false}>
+            <Descriptions.Item label={<Space size={4}><ApartmentOutlined />部门</Space>}>{p.department_name || '—'}</Descriptions.Item>
+            <Descriptions.Item label={<Space size={4}><MailOutlined />邮箱</Space>}>{p.email || '—'}</Descriptions.Item>
+            <Descriptions.Item label={<Space size={4}><PhoneOutlined />电话</Space>}>{p.phone || '—'}</Descriptions.Item>
+            <Descriptions.Item label="状态">{p.status === 'active' ? <Tag color="green">正常</Tag> : <Tag>停用</Tag>}</Descriptions.Item>
+            <Descriptions.Item label="最近登录">{p.last_login_at ? fmtTime(new Date(p.last_login_at).getTime()) : '—'}</Descriptions.Item>
+          </Descriptions>
+        </div>
+      )}
+    </Drawer>
+  )
+}
+
+/** 群管机器人：把群内机器人升级为「群管」——一键订阅日报/周报/月报、定时禁言等。 */
+function GroupBotDrawer({ open, onClose, detail, onChanged }: any) {
+  const bots: any[] = (detail?.members || []).filter((m: any) => m.is_agent)
+  const [botId, setBotId] = useState<number | null>(null)
+  const [tasks, setTasks] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const roomId = detail?.id
+  const bot = bots.find((b) => b.agent_id === botId) || bots[0]
+
+  const loadTasks = async () => {
+    if (!roomId) return
+    setLoading(true)
+    try { const all = await scheduledApi.list(); setTasks(all.filter((t: any) => t.room_id === roomId)) }
+    catch { setTasks([]) } finally { setLoading(false) }
+  }
+  useEffect(() => { if (open) { setBotId(bots[0]?.agent_id ?? null); loadTasks() } /* eslint-disable-next-line */ }, [open, roomId])
+
+  // 预设：一键创建群报表/定时禁言任务
+  const PRESETS = [
+    { key: 'daily', label: '每天日报', cron: '0 18 * * *', prompt: '请生成本群今日聊天日报：统计今日消息量、活跃成员、讨论要点，并给出简明总结。' },
+    { key: 'weekly', label: '每周周报', cron: '0 9 * * 1', prompt: '请生成本群本周聊天周报：汇总本周消息量、活跃成员排行、主要议题，并给出总结。' },
+    { key: 'monthly', label: '每月月报', cron: '0 9 1 * *', prompt: '请生成本群本月聊天月报：汇总本月消息量、活跃成员、主要议题与趋势，并给出总结。' },
+    { key: 'mute_night', label: '每晚禁言', cron: '0 22 * * *', prompt: '请开启本群全员禁言，共 600 分钟。' },
+  ]
+  const subscribe = async (preset: any) => {
+    if (!bot) { message.warning('请先把一个机器人拉进群'); return }
+    try {
+      await scheduledApi.create({
+        name: `${preset.label}·${detail.name}`,
+        agent_id: bot.agent_id, target_type: 'prompt', prompt: preset.prompt,
+        schedule_kind: 'cron', cron_expr: preset.cron,
+        room_id: roomId, room_bot_agent_id: bot.agent_id, notify_on: 'never', enabled: true,
+      })
+      message.success(`已订阅「${preset.label}」`); loadTasks()
+    } catch (e) { message.error(errMsg(e)) }
+  }
+  const removeTask = async (t: any) => {
+    try { await scheduledApi.remove(t.id); message.success('已取消'); loadTasks() } catch (e) { message.error(errMsg(e)) }
+  }
+  const toggleTask = async (t: any) => {
+    try { await scheduledApi.enable(t.id, !t.enabled); loadTasks() } catch (e) { message.error(errMsg(e)) }
+  }
+
+  return (
+    <Drawer title="群管机器人" width={480} open={open} onClose={onClose}>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+        把群内机器人设为<b>群管理员</b>后，它就能在群里被 <b>@</b> 时替你执行群管理：
+        禁言/踢人/改公告/置顶/发通知，并可按计划自动推送<b>日报 / 周报 / 月报</b>、定时开关禁言。
+      </Typography.Paragraph>
+      {bots.length === 0 ? <Empty description="群里还没有机器人，请先在「机器人」里添加" /> : (
+        <>
+          <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-2)' }}>选择群管机器人</div>
+          <Select style={{ width: '100%', marginBottom: 12 }} value={bot?.agent_id}
+            onChange={setBotId}
+            options={bots.map((b) => ({ value: b.agent_id, label: `${b.name}${b.role === 'admin' ? '（管理员）' : '（普通成员，请先设为管理员）'}` }))} />
+          {bot && bot.role !== 'admin' && bot.role !== 'owner' && (
+            <Button size="small" type="primary" ghost style={{ marginBottom: 12 }}
+              onClick={async () => { await chatRoomApi.setBotRole(roomId, bot.agent_id, 'admin'); message.success('已设为群管理员'); onChanged?.() }}>
+              一键设为本群管理员
+            </Button>
+          )}
+
+          <Divider orientation="left" style={{ margin: '8px 0' }}>一键订阅</Divider>
+          <Space wrap>
+            {PRESETS.map((p) => <Button key={p.key} size="small" onClick={() => subscribe(p)}>{p.label}</Button>)}
+          </Space>
+
+          <Divider orientation="left" style={{ margin: '16px 0 8px' }}>本群定时任务</Divider>
+          {loading ? <div style={{ textAlign: 'center', padding: 16 }}><Spin /></div> : (
+            tasks.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无群定时任务" /> : (
+              <List size="small" dataSource={tasks} renderItem={(t: any) => (
+                <List.Item actions={[
+                  <a key="t" onClick={() => toggleTask(t)}>{t.enabled ? '停用' : '启用'}</a>,
+                  <Popconfirm key="d" title="取消该任务？" onConfirm={() => removeTask(t)}><a style={{ color: 'var(--color-error)' }}>取消</a></Popconfirm>,
+                ]}>
+                  <List.Item.Meta title={<Space size={4}><span>{t.name}</span>{t.enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>}</Space>}
+                    description={<span style={{ fontSize: 12 }}>{t.cron_expr} · 下次：{t.next_run_at ? fmtTime(t.next_run_at) : '—'}</span>} />
+                </List.Item>
+              )} />
+            )
+          )}
+        </>
       )}
     </Drawer>
   )

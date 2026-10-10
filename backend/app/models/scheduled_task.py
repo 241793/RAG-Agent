@@ -39,6 +39,10 @@ class ScheduledTask(Base, IdMixin, TimestampMixin, TenantMixin):
     last_result: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_run_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # WorkflowRun.id
     conversation_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # 专属会话
+    # 结果推送目标群（QQ 式群管机器人）：非空时把本次执行结果作为一条机器人消息发到该群
+    room_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
+    # 群内以哪个机器人身份发言（Agent.id）；留空则用 agent_id
+    room_bot_agent_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     run_count: Mapped[int] = mapped_column(Integer, default=0)
     # 依赖链：本任务在本任务成功后自动触发（A→B）。NULL = 无依赖。
     depends_on_task_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)

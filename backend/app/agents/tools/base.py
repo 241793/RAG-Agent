@@ -20,6 +20,8 @@ class ToolContext:
     conversation_id: int | None = None
     agent_id: int | None = None
     run_id: int | None = None
+    # 群聊作用域：机器人在某群被 @ 时注入，房间作用域工具据此操作该群
+    room_id: int | None = None
     emit: Callable[[dict], Awaitable[None]] | None = None
     config: dict = field(default_factory=dict)  # agent.tool_config[<tool_name>]
 

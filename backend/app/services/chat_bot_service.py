@@ -60,9 +60,15 @@ async def _run_bot(room_id: int, agent_id: int, content: str, asker_id: int) -> 
         ps = await load_principal_set(db, principal_user)
         perms = await get_user_permission_codes(db, principal_user)
 
+        # 房间作用域群管工具：机器人在本群的角色决定可用写操作（owner/admin 才放行）
+        from app.agents.tools.chat_room_tools import build_room_tools
+
+        room_tools = build_room_tools(room_id)
+
         runner = AgentRunner(
             db, agent=agent, ps=ps, conversation=None, history=[], perms=perms,
             summary=None, persist=False, allow_auto_write=True,
+            room_id=room_id, extra_tools=room_tools,
         )
         # 去掉开头的 @机器人名，作为真正的问题
         query = content

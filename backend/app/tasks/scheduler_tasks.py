@@ -120,6 +120,9 @@ async def execute_task(task_id: int, *, manual: bool = False) -> None:
 
         # 终态通知（独立 session，失败不影响任务状态）
         await _notify(task_id, ok=ok, result=result_text, error=error_text, manual=manual)
+        # 群定时任务：把结果作为机器人消息推送到目标群
+        if ok and result_text:
+            await _push_to_room(task_id, result_text)
         # 依赖链：本任务成功后，触发以本任务为前置的下游任务（A → B）
         if ok:
             await _trigger_dependents(task_id)
@@ -128,6 +131,43 @@ async def execute_task(task_id: int, *, manual: bool = False) -> None:
     finally:
         _RUNNING.discard(task_id)
         _get_sem().release()
+
+
+async def _push_to_room(task_id: int, result_text: str) -> None:
+    """群定时任务：把执行结果以机器人身份发到目标群并广播。"""
+    from app.core.db import AsyncSessionLocal
+    from app.models import Agent, ChatRoom, ScheduledTask
+    from app.services import chat_room_service as S
+    from app.services.chat_broadcaster import broadcaster
+
+    try:
+        async with AsyncSessionLocal() as db:
+            t = await db.get(ScheduledTask, task_id)
+            if not t or not t.room_id:
+                return
+            room = await db.get(ChatRoom, t.room_id)
+            if not room or room.status != "active":
+                return
+            bot_id = t.room_bot_agent_id or t.agent_id
+            ag = await db.get(Agent, bot_id)
+            if not ag:
+                return
+            body = (result_text or "").strip()
+            if not body:
+                return
+            msg = await S.post_message(
+                db, room=room, sender_id=bot_id, sender_type="agent",
+                content=f"【{t.name}】\n{body[:6000]}",
+            )
+            await db.flush()
+            out = await S.serialize_message(db, msg)
+            await db.commit()
+        await broadcaster.broadcast_room(
+            tenant_id=room.tenant_id, room_id=room.id,
+            payload={"type": "message", "room_id": room.id, "message": out},
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("push_to_room_failed", task_id=task_id)
 
 
 async def _trigger_dependents(task_id: int) -> None:
@@ -201,9 +241,16 @@ async def _do_run(db, t) -> tuple[bool, str, str, int | None]:
             return True, text, "", run_id, attachments
         else:
             # 不建会话、不落 Message：无人值守地跑一次提示词
+            # 群定时任务（room_id 非空）：注入房间作用域群管工具，让机器人能真正执行群管理
+            room_tools = None
+            if t.room_id:
+                from app.agents.tools.chat_room_tools import build_room_tools
+
+                room_tools = build_room_tools(t.room_id)
             runner = AgentRunner(
                 db, agent=agent, ps=pset, conversation=None, history=[], perms=perms,
                 summary=None, persist=False,
+                room_id=t.room_id, extra_tools=room_tools,
             )
             text = ""
             async for evt in runner.run(t.prompt or t.name):

@@ -52,6 +52,7 @@ async def run_react_loop(
     tools: list,
     conversation_id: int | None = None,
     agent_id: int | None = None,
+    room_id: int | None = None,
     tool_config: dict | None = None,
     dynamic_tools: dict[str, object] | None = None,
     temperature: float = 0.3,
@@ -144,7 +145,7 @@ async def run_react_loop(
                     args = {}
                 ctx = ToolContext(
                     db=db, ps=ps, tenant_id=ps.tenant_id, user_id=ps.user_id,
-                    conversation_id=conversation_id, agent_id=agent_id,
+                    conversation_id=conversation_id, agent_id=agent_id, room_id=room_id,
                     config=((tool_config or {}).get("builtin", {}).get(tc.name) or {}),
                 )
                 _t0 = time.time()

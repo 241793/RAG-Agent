@@ -273,3 +273,94 @@ async def name_map_for(db: AsyncSession, msgs: list[ChatMessage]) -> dict[int, d
         return {}
     rows = (await db.execute(select(User).where(User.id.in_(set(ids))))).scalars().all()
     return {u.id: {"name": u.display_name or u.username, "username": u.username} for u in rows}
+
+
+async def search_messages(
+    db: AsyncSession, *, room_id: int, keyword: str, limit: int = 30,
+    before_id: int | None = None,
+) -> list[ChatMessage]:
+    """按关键词搜索群内历史消息（撤回的除外，内容/附件名匹配）。"""
+    kw = (keyword or "").strip()
+    stmt = select(ChatMessage).where(
+        ChatMessage.room_id == room_id,
+        ChatMessage.revoked.is_(False),
+        ChatMessage.content.ilike(f"%{kw}%") if kw else True,
+    )
+    if before_id:
+        stmt = stmt.where(ChatMessage.id < before_id)
+    stmt = stmt.order_by(ChatMessage.id.desc()).limit(limit)
+    rows = list((await db.execute(stmt)).scalars().all())
+    rows.reverse()
+    return rows
+
+
+async def room_stats(db: AsyncSession, *, room: ChatRoom, days: int = 7) -> dict:
+    """群活跃统计：成员数/消息总数/最近 N 天消息数/活跃人数/Top 发言者/近期要点。"""
+    from app.services.chat_room_service import _now_ms as _now
+
+    now_ms = _now()
+    since = now_ms - days * 86_400_000
+
+    member_count = int(
+        (await db.execute(
+            select(func.count()).select_from(ChatRoomMember).where(ChatRoomMember.room_id == room.id)
+        )).scalar_one()
+    )
+    message_count = int(room.message_count or 0)
+    recent_rows = (
+        await db.execute(
+            select(ChatMessage).where(
+                ChatMessage.room_id == room.id,
+                ChatMessage.revoked.is_(False),
+                ChatMessage.created_at >= since,
+            ).order_by(ChatMessage.id.desc())
+        )
+    ).scalars().all()
+    recent_count = len(recent_rows)
+    speakers: dict[int, int] = {}
+    for m in recent_rows:
+        if m.sender_type == "user" and m.sender_id:
+            speakers[m.sender_id] = speakers.get(m.sender_id, 0) + 1
+    nm = await name_map_for(db, list(recent_rows))
+    top = sorted(speakers.items(), key=lambda x: -x[1])[:5]
+    top_speakers = [(nm.get(uid, {}).get("name") or f"用户{uid}", c) for uid, c in top]
+    # 近期代表消息（最近 8 条有内容的）
+    snippets = [m.content[:80] for m in recent_rows if m.content][:8]
+    return {
+        "member_count": member_count,
+        "message_count": message_count,
+        "recent_count": recent_count,
+        "active_users": len(speakers),
+        "speakers": speakers,
+        "top_speakers": top_speakers,
+        "recent_snippets": snippets,
+    }
+
+
+async def set_mute_all(
+    db: AsyncSession, *, room: ChatRoom, enabled: bool, minutes: int = 0,
+) -> int | None:
+    """开启/关闭全员禁言。存入 room.settings["mute_all_until"]（毫秒，None=未开启）。
+
+    开启时可带 minutes（到点自动解除由调度器/读取时判断）。返回该到期时刻。
+    """
+    settings_ = dict(room.settings or {})
+    if enabled:
+        until = _now_ms() + minutes * 60_000 if minutes > 0 else 0
+        settings_["mute_all_until"] = until
+        room.settings = settings_
+    else:
+        settings_.pop("mute_all_until", None)
+        room.settings = settings_
+    await db.flush()
+    return settings_.get("mute_all_until")
+
+
+def mute_all_active(room: ChatRoom) -> bool:
+    """全员禁言是否生效（0 表示手动解除前一直生效）。"""
+    until = (room.settings or {}).get("mute_all_until")
+    if until is None:
+        return False
+    if until == 0:
+        return True
+    return until > _now_ms()

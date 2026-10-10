@@ -167,6 +167,8 @@ class AgentRunner:
         images: list[dict] | None = None,
         persist: bool = True,
         allow_auto_write: bool = False,
+        room_id: int | None = None,
+        extra_tools: list | None = None,
     ) -> None:
         self.db = db
         self.agent = agent
@@ -176,6 +178,10 @@ class AgentRunner:
         self.persist = persist and conversation is not None
         # allow_auto_write=True（如外部渠道绑定内部账号）：写工具直接执行，不走网页端 HITL 确认。
         self.allow_auto_write = allow_auto_write
+        # 群聊作用域：机器人在某群被 @ 时注入，供房间作用域工具（群管）使用
+        self.room_id = room_id
+        # 额外工具（房间作用域群管工具）：随本次运行装配，不走 tool_config
+        self.extra_tools = extra_tools or []
         self.history = history or []
         # 当前用户权限码集合：用于工具级过滤与二次校验。
         # 默认空集（安全）：未显式传 perms 时不给任何工具权限，避免越权。
@@ -251,6 +257,13 @@ class AgentRunner:
             perms=self.perms,
             is_external=bool(getattr(self.ps, "is_external", False)),
         )
+        # 房间作用域群管工具：随本次运行装配（仅群聊机器人，按其在群内角色放行）
+        if self.extra_tools:
+            seen = {t.name for t in tools}
+            for t in self.extra_tools:
+                if t.name not in seen and tool_allowed(t, self.perms):
+                    tools.append(t)
+                    seen.add(t.name)
 
         llm, rm = await get_llm(self.db, tenant_id=self.ps.tenant_id,
                                 config_id=self.model_override or eff.model_config_id)
@@ -602,7 +615,7 @@ class AgentRunner:
             db=self.db, ps=self.ps, perms=self.perms, llm=llm, rm=rm,
             messages=messages, tools=tools,
             conversation_id=self.conversation.id if self.conversation else None,
-            agent_id=self.agent.id, tool_config=eff.tool_config,
+            agent_id=self.agent.id, room_id=self.room_id, tool_config=eff.tool_config,
             temperature=temp, max_turns=max_turns,
             allow_auto_write=(not self.persist) or self.allow_auto_write,
             on_audit=_audit, on_pending_action=pending,

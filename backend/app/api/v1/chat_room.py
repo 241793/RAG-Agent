@@ -17,7 +17,17 @@ from app.core.config import settings
 from app.core.db import AsyncSessionLocal, get_db
 from app.core.errors import NotFoundError, PermissionDeniedError, ValidationError
 from app.middleware.auth_dep import get_current_user, require_permission
-from app.models import Agent, ChatAnnouncement, ChatMessage, ChatRoom, ChatRoomMember, User
+from app.models import (
+    Agent,
+    ChatAnnouncement,
+    ChatMessage,
+    ChatRoom,
+    ChatRoomMember,
+    Department,
+    Role,
+    User,
+    UserRole,
+)
 from app.services import chat_room_service as S
 from app.services.audit_service import audited
 from app.services.chat_broadcaster import broadcaster
@@ -123,6 +133,7 @@ async def room_detail(
         "id": room.id, "name": room.name, "kind": room.kind, "is_default": room.is_default,
         "announcement": room.announcement, "owner_id": room.owner_id, "my_role": role,
         "peer_user_id": room.peer_user_id, "members": members, "bots": bots,
+        "mute_all": S.mute_all_active(room),
         "announcements": [{
             "id": a.id, "content": a.content, "pinned": a.pinned,
             "created_by": a.created_by, "created_by_name": ann_names.get(a.created_by or 0) or "",
@@ -239,10 +250,14 @@ async def send_message(
 ) -> dict:
     """发消息（支持附件/@提及/引用回复）。"""
     room = await _guard_room(db, user, room_id)
-    # 禁言检查
+    # 禁言检查：个人禁言 + 全员禁言（管理员豁免全员禁言）
     m = await S.is_member(db, room_id=room_id, user_id=user.id)
     if m and m.muted_until and m.muted_until > _now_ms():
         raise PermissionDeniedError("你已被禁言")
+    if S.mute_all_active(room):
+        role = await S.member_role(db, room=room, user_id=user.id, is_admin=bool(user.is_admin))
+        if role not in ("owner", "admin"):
+            raise PermissionDeniedError("全员禁言中，暂时无法发言")
     content = (body.get("content") or "").strip()
     attachments = body.get("attachments") or None
     if not content and not attachments:
@@ -353,6 +368,80 @@ def _attach_category(content_type: str, name: str = "") -> str:
     if ext in ("mp3", "wav", "ogg", "m4a", "flac", "aac"):
         return "audio"
     return "file"
+
+
+@router.get("/{room_id}/messages/search")
+async def search_messages(
+    room_id: int,
+    q: str = Query(..., min_length=1, description="搜索关键词"),
+    limit: int = Query(30, ge=1, le=100),
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """在群内历史消息中搜索（内容匹配，撤回除外）。"""
+    room = await _guard_room(db, user, room_id)
+    rows = await S.search_messages(db, room_id=room.id, keyword=q, limit=limit)
+    nm = await S.name_map_for(db, rows)
+    return {
+        "items": [await S.serialize_message(db, m, name_map=nm) for m in rows],
+        "count": len(rows),
+        "keyword": q,
+    }
+
+
+@router.post("/{room_id}/mute-all")
+async def mute_all(
+    room_id: int,
+    body: dict,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """开启/关闭全员禁言（管理员以上）。minutes>0 时到点自动解除。"""
+    room = await _guard_room(db, user, room_id)
+    role = await S.member_role(db, room=room, user_id=user.id, is_admin=bool(user.is_admin))
+    _require_admin_role(role)
+    enabled = bool(body.get("enabled"))
+    minutes = int(body.get("minutes") or 0)
+    until = await S.set_mute_all(db, room=room, enabled=enabled, minutes=minutes)
+    await broadcaster.broadcast_room(tenant_id=room.tenant_id, room_id=room.id,
+                                     payload={"type": "mute_all", "room_id": room.id, "enabled": enabled, "until": until})
+    if enabled:
+        tip = f"，{minutes} 分钟后自动解除" if minutes else ""
+        return {"message": f"已开启全员禁言{tip}", "enabled": True, "until": until}
+    return {"message": "已关闭全员禁言", "enabled": False, "until": None}
+
+
+@router.get("/{room_id}/members/{member_user_id}/profile")
+async def member_profile(
+    room_id: int,
+    member_user_id: int,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """查看某成员资料（私聊/群成员资料卡）。"""
+    await _guard_room(db, user, room_id)
+    u = await db.get(User, member_user_id)
+    if not u or u.tenant_id != user.tenant_id:
+        raise NotFoundError("用户不存在")
+    dept_name = None
+    if u.department_id:
+        dept = await db.get(Department, u.department_id)
+        dept_name = dept.name if dept else None
+    role = (
+        await db.execute(
+            select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(
+                UserRole.user_id == u.id, UserRole.tenant_id == u.tenant_id
+            )
+        )
+    ).scalars().all()
+    return {
+        "id": u.id, "username": u.username, "display_name": u.display_name or u.username,
+        "avatar": u.avatar, "email": u.email, "phone": u.phone,
+        "department_name": dept_name, "is_admin": bool(u.is_admin),
+        "roles": list({r for r in role if r}),
+        "user_type": u.user_type, "last_login_at": u.last_login_at,
+        "status": u.status,
+    }
 
 
 @router.post("/{room_id}/messages/{msg_id}/revoke")
