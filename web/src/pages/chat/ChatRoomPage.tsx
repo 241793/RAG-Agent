@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Avatar, Button, Card, Descriptions, Divider, Drawer, Dropdown, Empty, Image, Input, InputNumber, List, message, Modal, Popconfirm, Popover, Select, Space, Spin, Switch, Tabs, Tag, Tooltip, Typography, Upload,
+  Alert, Avatar, Button, Card, Descriptions, Divider, Drawer, Dropdown, Empty, Image, Input, InputNumber, List, message, Modal, Popconfirm, Popover, Select, Space, Spin, Switch, Tabs, Tag, Tooltip, Typography, Upload,
 } from 'antd'
 import {
   SendOutlined, PlusOutlined, TeamOutlined, RobotOutlined, UserOutlined, PaperClipOutlined,
   PushpinOutlined, DeleteOutlined, MoreOutlined, ReloadOutlined, RollbackOutlined, EditOutlined,
   SearchOutlined, ProfileOutlined, FolderOutlined, AudioMutedOutlined, MailOutlined, PhoneOutlined, ApartmentOutlined,
 } from '@ant-design/icons'
-import { chatRoomApi, rbacApi, agentApi, chatApi, scheduledApi, type ChatRoomBrief, type ChatMsgItem } from '../../api'
+import { chatRoomApi, rbacApi, agentApi, chatApi, authApi, scheduledApi, type ChatRoomBrief, type ChatMsgItem } from '../../api'
 import { errMsg } from '../../api/http'
 import AttachmentView from '../../components/AttachmentView'
 
@@ -434,6 +434,9 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                 <Tooltip title="查看对方资料"><Button size="small" icon={<ProfileOutlined />}
                   onClick={() => { const peer = detail.members?.find((m: any) => m.user_id !== me?.id); if (peer) setProfileUid(peer.user_id) }} /></Tooltip>
               )}
+              {me?.id && (
+                <Tooltip title="我的资料"><Button size="small" icon={<UserOutlined />} onClick={() => setProfileUid(me.id)} /></Tooltip>
+              )}
               <Button size="small" icon={<ReloadOutlined />} onClick={() => activeId && openRoom(activeId)} />
             </Space>
           }>
@@ -472,6 +475,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                   displayName={dispName(m.sender_id, m.sender_name)}
                   onRevoke={() => revoke(m)} onPin={() => pin(m, !m.pinned)} onReply={() => setReplyTo(m)}
                   onMention={handleMention}
+                  onProfile={() => setProfileUid(m.sender_id)}
                   onPrivate={() => { if (m.sender_type === 'user' && m.sender_id !== me?.id) startDirect(m.sender_id) }} />)}
               </div>
 
@@ -614,6 +618,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
       <MemberDrawer open={memberOpen} onClose={() => setMemberOpen(false)} detail={detail} users={users} me={me}
         canAdmin={canAdmin} isOwner={myRole === 'owner' || me?.is_admin}
         dispName={dispName} onRemark={editRemark} remarks={remarks}
+        onProfile={(uid: number) => { setMemberOpen(false); setProfileUid(uid) }}
         onChanged={() => activeId && openRoom(activeId)}
         onPrivate={(m: any) => { setMemberOpen(false); startDirect(m.user_id) }}
         onLeave={async () => { await chatRoomApi.leaveRoom(detail.id); setMemberOpen(false); setActiveId(null); setDetail(null); loadRooms() }}
@@ -639,13 +644,14 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
         onJump={(mid) => { const el = document.getElementById(`msg-${mid}`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }} />
 
       {/* 成员资料卡 */}
-      <ProfileDrawer open={profileUid != null} onClose={() => setProfileUid(null)} roomId={detail?.id} userId={profileUid} />
+      <ProfileDrawer open={profileUid != null} onClose={() => setProfileUid(null)} roomId={detail?.id} userId={profileUid}
+        me={me} onSaved={(u: any) => setMe(u)} />
     </>
   )
 }
 
 /** 单条消息气泡 */
-function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply, onMention, onPrivate }: any) {
+function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply, onMention, onPrivate, onProfile }: any) {
   const mine = m.sender_type === 'user' && m.sender_id === me?.id
   const isBot = m.sender_type === 'agent'
   const shownName = displayName || m.sender_name
@@ -658,10 +664,10 @@ function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply
   }
   return (
     <div id={`msg-${m.id}`} style={{ display: 'flex', gap: 8, marginBottom: 12, flexDirection: mine ? 'row-reverse' : 'row' }}>
-      <Tooltip title={canPrivate ? '点击私聊' : ''}>
+      <Tooltip title={m.sender_type === 'user' ? '点击查看资料' : ''}>
         <Avatar size={34} icon={isBot ? <RobotOutlined /> : <UserOutlined />}
-          onClick={canPrivate ? onPrivate : undefined}
-          style={{ background: isBot ? '#7c3aed' : (mine ? '#2563eb' : '#8c8c8c'), flexShrink: 0, cursor: canPrivate ? 'pointer' : 'default' }} />
+          onClick={m.sender_type === 'user' ? onProfile : undefined}
+          style={{ background: isBot ? '#7c3aed' : (mine ? '#2563eb' : '#8c8c8c'), flexShrink: 0, cursor: m.sender_type === 'user' ? 'pointer' : 'default' }} />
       </Tooltip>
       <div style={{ maxWidth: '68%', minWidth: 0 }}>
         <div style={{ fontSize: 12, color: 'var(--color-text-2)', textAlign: mine ? 'right' : 'left', marginBottom: 2 }}>
@@ -681,6 +687,7 @@ function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply
           items: [
             { key: 'reply', label: '回复' },
             { key: 'at', label: `@ ${m.sender_name}` },
+            ...(m.sender_type === 'user' ? [{ key: 'profile', label: mine ? '我的资料' : '查看资料' }] : []),
             ...(canPrivate ? [{ key: 'private', label: '私聊' }] : []),
             { key: 'copy', label: '复制' },
             { type: 'divider' },
@@ -690,6 +697,7 @@ function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply
           onClick: ({ key }) => {
             if (key === 'reply') onReply()
             else if (key === 'at') onMention(m.sender_id, m.sender_name)
+            else if (key === 'profile') onProfile()
             else if (key === 'private') onPrivate()
             else if (key === 'copy') { navigator.clipboard?.writeText(m.content || ''); message.success('已复制') }
             else if (key === 'pin') onPin()
@@ -729,7 +737,7 @@ function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply
   )
 }
 
-function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, dispName, onRemark, remarks, onChanged, onPrivate, onLeave, onDissolve }: any) {
+function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, dispName, onRemark, remarks, onProfile, onChanged, onPrivate, onLeave, onDissolve }: any) {
   const [addOpen, setAddOpen] = useState(false)
   const [pick, setPick] = useState<number[]>([])
   const [q, setQ] = useState('')
@@ -799,7 +807,8 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, dis
         ].filter(Boolean)}>
           <List.Item.Meta
             avatar={<Avatar size="small" icon={m.is_agent ? <RobotOutlined /> : <UserOutlined />}
-              style={{ background: m.role === 'owner' ? '#faad14' : m.is_agent ? '#7c3aed' : '#8c8c8c' }} />}
+              onClick={!m.is_agent ? () => onProfile?.(m.user_id) : undefined}
+              style={{ background: m.role === 'owner' ? '#faad14' : m.is_agent ? '#7c3aed' : '#8c8c8c', cursor: !m.is_agent ? 'pointer' : 'default' }} />}
             title={<Space size={4} wrap>
               <span>{m.is_agent ? m.name : (dispName?.(m.user_id, m.name) || m.name)}</span>
               {!m.is_agent && remarksHas(m.user_id) && <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>（{m.name}）</span>}
@@ -1006,24 +1015,64 @@ function SearchDrawer({ open, onClose, detail, onJump }: any) {
   )
 }
 
-/** 成员资料卡：显示头像/部门/邮箱/电话/角色（私聊与群成员通用）。 */
-function ProfileDrawer({ open, onClose, roomId, userId }: any) {
+/** 成员资料卡：显示头像/部门/邮箱/电话/角色；查看自己时可编辑姓名/邮箱/电话/头像。 */
+function ProfileDrawer({ open, onClose, roomId, userId, me, onSaved }: any) {
   const [p, setP] = useState<any>(null)
   const [loading, setLoading] = useState(false)
-  useEffect(() => {
-    if (!open || !roomId || !userId) return
+  const [editing, setEditing] = useState(false)
+  const [form] = Form.useForm()
+  const [saving, setSaving] = useState(false)
+  const isSelf = !!me && userId === me.id
+
+  const load = () => {
+    if (!roomId || !userId) return
     setLoading(true); setP(null)
     chatRoomApi.memberProfile(roomId, userId).then(setP).catch(() => setP(null)).finally(() => setLoading(false))
-  }, [open, roomId, userId])
+  }
+  useEffect(() => { if (open) { setEditing(false); load() } /* eslint-disable-next-line */ }, [open, roomId, userId])
+
+  const openEdit = () => {
+    form.setFieldsValue({ display_name: p?.display_name, email: p?.email, phone: p?.phone, avatar: p?.avatar })
+    setEditing(true)
+  }
+  const save = async () => {
+    const v = await form.validateFields().catch(() => null)
+    if (!v) return
+    setSaving(true)
+    try {
+      const u = await authApi.updateProfile(v)
+      onSaved?.(u)
+      message.success('资料已保存'); setEditing(false); load()
+    } catch (e) { message.error(errMsg(e)) } finally { setSaving(false) }
+  }
+
   return (
-    <Drawer title="成员资料" width={380} open={open} onClose={onClose}>
-      {loading ? <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div> : !p ? <Empty description="暂无资料" /> : (
+    <Drawer title={isSelf ? '我的资料' : '成员资料'} width={380} open={open} onClose={onClose}
+      extra={isSelf && !editing && !loading && p ? <Button size="small" icon={<EditOutlined />} onClick={openEdit}>编辑</Button> : null}>
+      {loading ? <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div> : !p ? <Empty description="暂无资料" /> : editing ? (
+        <Form form={form} layout="vertical">
+          <div style={{ textAlign: 'center', marginBottom: 12 }}>
+            <Form.Item name="avatar" noStyle><AvatarInput /></Form.Item>
+          </div>
+          <Form.Item name="display_name" label="姓名/昵称" rules={[{ required: true, message: '请输入姓名' }]}><Input /></Form.Item>
+          <Form.Item name="email" label="邮箱" rules={[{ type: 'email', message: '邮箱格式不正确' }]}><Input placeholder="可选" /></Form.Item>
+          <Form.Item name="phone" label="电话"><Input placeholder="可选" /></Form.Item>
+          <Space>
+            <Button type="primary" loading={saving} onClick={save}>保存</Button>
+            <Button onClick={() => setEditing(false)}>取消</Button>
+          </Space>
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
+            用户名、部门与角色由管理员维护，此处不可修改。
+          </Typography.Paragraph>
+        </Form>
+      ) : (
         <div>
           <div style={{ textAlign: 'center', marginBottom: 16 }}>
             <Avatar size={72} src={p.avatar || undefined} icon={<UserOutlined />} style={{ background: '#2563eb' }} />
             <div style={{ fontSize: 18, fontWeight: 600, marginTop: 8 }}>{p.display_name}</div>
             <div style={{ fontSize: 12, color: 'var(--color-text-3)' }}>@{p.username}</div>
-            <Space size={4} style={{ marginTop: 6 }}>
+            <Space size={4} style={{ marginTop: 6 }} wrap>
+              {isSelf && <Tag color="green">我</Tag>}
               {p.is_admin && <Tag color="geekblue">系统管理员</Tag>}
               {(p.roles || []).map((r: string) => <Tag key={r} color="blue">{r}</Tag>)}
               {p.user_type === 'external' && <Tag color="orange">外部用户</Tag>}
@@ -1040,6 +1089,29 @@ function ProfileDrawer({ open, onClose, roomId, userId }: any) {
         </div>
       )}
     </Drawer>
+  )
+}
+
+/** 头像编辑：上传图片或直接填 URL。 */
+function AvatarInput({ value, onChange }: any) {
+  const [uploading, setUploading] = useState(false)
+  const doUpload = async (file: File) => {
+    setUploading(true)
+    try {
+      const att: any = await chatApi.uploadAttachment(file)
+      onChange?.(att.file_key || att.url)
+      message.success('头像已上传')
+    } catch (e) { message.error(errMsg(e)) } finally { setUploading(false) }
+    return false
+  }
+  return (
+    <Space direction="vertical" align="center" style={{ width: '100%' }}>
+      <Avatar size={72} src={value || undefined} icon={<UserOutlined />} style={{ background: '#2563eb' }} />
+      <Upload beforeUpload={doUpload} showUploadList={false} accept="image/*">
+        <Button size="small" loading={uploading}>上传头像</Button>
+      </Upload>
+      <Input value={value || ''} placeholder="或直接填图片 URL" onChange={(e) => onChange?.(e.target.value)} style={{ width: 260 }} />
+    </Space>
   )
 }
 
@@ -1086,28 +1158,60 @@ function GroupBotDrawer({ open, onClose, detail, onChanged }: any) {
     try { await scheduledApi.enable(t.id, !t.enabled); loadTasks() } catch (e) { message.error(errMsg(e)) }
   }
 
+  // 编辑/新建定时任务
+  const [editOpen, setEditOpen] = useState(false)
+  const [editTask, setEditTask] = useState<any>(null)   // null=新建
+  const [tf] = Form.useForm()
+  const openNewTask = () => { setEditTask(null); tf.setFieldsValue({ name: `${detail?.name}·自定义任务`, cron_expr: '0 9 * * *', prompt: '', enabled: true }); setEditOpen(true) }
+  const openEditTask = (t: any) => { setEditTask(t); tf.setFieldsValue({ name: t.name, cron_expr: t.cron_expr || '', prompt: t.prompt || '', enabled: !!t.enabled }); setEditOpen(true) }
+  const submitTask = async () => {
+    const v = await tf.validateFields().catch(() => null)
+    if (!v) return
+    if (!bot) { message.warning('请先选择机器人'); return }
+    try {
+      if (editTask) {
+        await scheduledApi.update(editTask.id, {
+          name: v.name, cron_expr: v.cron_expr, schedule_kind: 'cron',
+          prompt: v.prompt, enabled: v.enabled,
+        })
+      } else {
+        await scheduledApi.create({
+          name: v.name, agent_id: bot.agent_id, target_type: 'prompt', prompt: v.prompt,
+          schedule_kind: 'cron', cron_expr: v.cron_expr,
+          room_id: roomId, room_bot_agent_id: bot.agent_id, notify_on: 'never', enabled: v.enabled,
+        })
+      }
+      message.success(editTask ? '已保存' : '已创建'); setEditOpen(false); loadTasks()
+    } catch (e) { message.error(errMsg(e)) }
+  }
+
   return (
-    <Drawer title="群管机器人" width={480} open={open} onClose={onClose}>
+    <Drawer title="群管机器人" width={520} open={open} onClose={onClose}>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         把群内机器人设为<b>群管理员</b>后，它就能在群里被 <b>@</b> 时替你执行群管理：
-        禁言/踢人/改公告/置顶/发通知，并可按计划自动推送<b>日报 / 周报 / 月报</b>、定时开关禁言。
+        禁言/踢人/设管理员/改公告/置顶/搜消息/查统计，并可按计划自动推送<b>日报 / 周报 / 月报</b>、定时开关禁言。
       </Typography.Paragraph>
       {bots.length === 0 ? <Empty description="群里还没有机器人，请先在「机器人」里添加" /> : (
         <>
           <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-2)' }}>选择群管机器人</div>
-          <Select style={{ width: '100%', marginBottom: 12 }} value={bot?.agent_id}
-            onChange={setBotId}
-            options={bots.map((b) => ({ value: b.agent_id, label: `${b.name}${b.role === 'admin' ? '（管理员）' : '（普通成员，请先设为管理员）'}` }))} />
+          <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
+            <Select style={{ flex: 1 }} value={bot?.agent_id} onChange={setBotId}
+              options={bots.map((b) => ({ value: b.agent_id, label: `${b.name}（${b.role === 'owner' ? '群主' : b.role === 'admin' ? '管理员' : '普通成员'}）` }))} />
+            <Button onClick={() => window.open(`/agents/${bot?.agent_id}`, '_blank')}>编辑机器人</Button>
+          </Space.Compact>
           {bot && bot.role !== 'admin' && bot.role !== 'owner' && (
-            <Button size="small" type="primary" ghost style={{ marginBottom: 12 }}
-              onClick={async () => { await chatRoomApi.setBotRole(roomId, bot.agent_id, 'admin'); message.success('已设为群管理员'); onChanged?.() }}>
-              一键设为本群管理员
-            </Button>
+            <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+              message={<span>该机器人当前是普通成员，管理类操作（禁言/踢人/改公告等）会被拒绝。
+                <Button size="small" type="primary" style={{ marginLeft: 8 }}
+                  onClick={async () => { await chatRoomApi.setBotRole(roomId, bot.agent_id, 'admin'); message.success('已设为群管理员'); onChanged?.() }}>
+                  设为本群管理员
+                </Button></span>} />
           )}
 
           <Divider orientation="left" style={{ margin: '8px 0' }}>一键订阅</Divider>
           <Space wrap>
             {PRESETS.map((p) => <Button key={p.key} size="small" onClick={() => subscribe(p)}>{p.label}</Button>)}
+            <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={openNewTask}>自定义任务</Button>
           </Space>
 
           <Divider orientation="left" style={{ margin: '16px 0 8px' }}>本群定时任务</Divider>
@@ -1115,15 +1219,34 @@ function GroupBotDrawer({ open, onClose, detail, onChanged }: any) {
             tasks.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无群定时任务" /> : (
               <List size="small" dataSource={tasks} renderItem={(t: any) => (
                 <List.Item actions={[
+                  <a key="e" onClick={() => openEditTask(t)}>编辑</a>,
                   <a key="t" onClick={() => toggleTask(t)}>{t.enabled ? '停用' : '启用'}</a>,
+                  <a key="run" onClick={async () => { try { await scheduledApi.runNow(t.id); message.success('已触发，稍后推送本群') } catch (e) { message.error(errMsg(e)) } }}>立即运行</a>,
                   <Popconfirm key="d" title="取消该任务？" onConfirm={() => removeTask(t)}><a style={{ color: 'var(--color-error)' }}>取消</a></Popconfirm>,
                 ]}>
-                  <List.Item.Meta title={<Space size={4}><span>{t.name}</span>{t.enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>}</Space>}
-                    description={<span style={{ fontSize: 12 }}>{t.cron_expr} · 下次：{t.next_run_at ? fmtTime(t.next_run_at) : '—'}</span>} />
+                  <List.Item.Meta
+                    title={<Space size={4}><span>{t.name}</span>{t.enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>}</Space>}
+                    description={<span style={{ fontSize: 12 }}>{t.cron_expr} · 下次：{t.next_run_at ? fmtTime(t.next_run_at) : '—'}{t.last_status ? ` · 上次：${t.last_status}` : ''}</span>} />
                 </List.Item>
               )} />
             )
           )}
+
+          <Modal title={editTask ? '编辑定时任务' : '新建定时任务'} open={editOpen} onOk={submitTask}
+            onCancel={() => setEditOpen(false)} destroyOnClose width={520}>
+            <Form form={tf} layout="vertical">
+              <Form.Item name="name" label="任务名称" rules={[{ required: true }]}><Input /></Form.Item>
+              <Form.Item name="cron_expr" label="执行计划（cron：分 时 日 月 周）" rules={[{ required: true }]}
+                extra="例：0 18 * * * = 每天18:00；0 9 * * 1 = 每周一9:00；0 9 1 * * = 每月1号9:00">
+                <Input placeholder="0 18 * * *" />
+              </Form.Item>
+              <Form.Item name="prompt" label="到点执行的提示词" rules={[{ required: true }]}
+                extra="机器人会按此提示词执行，结果自动推送到本群。可写「生成本群今日聊天日报」等">
+                <Input.TextArea rows={4} />
+              </Form.Item>
+              <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
+            </Form>
+          </Modal>
         </>
       )}
     </Drawer>

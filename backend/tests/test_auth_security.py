@@ -628,11 +628,11 @@ def test_profile_update_endpoint():
 
 
 def test_profile_update_cannot_change_username():
-    """个人资料编辑只允许 姓名/邮箱/头像，不含用户名/权限。"""
+    """个人资料编辑只允许 姓名/邮箱/电话/头像，不含用户名/权限。"""
     from app.schemas.auth import ProfileUpdateRequest
 
     fields = set(ProfileUpdateRequest.model_fields.keys())
-    assert fields == {"display_name", "email", "avatar"}
+    assert fields == {"display_name", "email", "phone", "avatar"}
 
 
 def test_ticket_export_route_exists():

@@ -469,11 +469,150 @@ class RoomScheduleTool(_RoomTool):
         )
 
 
+class RoomRevokeTool(_RoomTool):
+    name = "room_revoke_message"
+    description = "撤回群内某条消息（按消息 id）。用于处理违规/不当发言。"
+    kind = "write"
+    admin_only = True
+    parameters = {
+        "type": "object",
+        "properties": {"message_id": {"type": "integer", "description": "要撤回的消息 id"}},
+        "required": ["message_id"],
+    }
+
+    async def execute(self, args, ctx, room) -> ToolResult:
+        from app.models import ChatMessage
+        from app.services.chat_broadcaster import broadcaster
+        import time as _t
+
+        mid = int(args.get("message_id") or 0)
+        msg = await ctx.db.get(ChatMessage, mid)
+        if not msg or msg.room_id != room.id:
+            return ToolResult(content="消息不存在", is_error=True)
+        if msg.revoked:
+            return ToolResult(content="该消息已被撤回", is_error=True)
+        msg.revoked = True
+        msg.revoked_by = ctx.agent_id
+        msg.revoked_at = int(_t.time() * 1000)
+        msg.content = ""
+        msg.attachments = None
+        await ctx.db.flush()
+        await broadcaster.broadcast_room(
+            tenant_id=room.tenant_id, room_id=room.id,
+            payload={"type": "revoke", "room_id": room.id, "message_id": mid, "revoked_by": ctx.agent_id},
+        )
+        return ToolResult(content=f"已撤回消息 #{mid}。")
+
+
+class RoomWarnTool(_RoomTool):
+    name = "room_warn_member"
+    description = "在群里 @ 某位成员并发出一条群管理提醒/警告（并可选同时禁言）。"
+    kind = "write"
+    admin_only = True
+    parameters = {
+        "type": "object",
+        "properties": {
+            "member": {"type": "string", "description": "成员昵称或用户名"},
+            "reason": {"type": "string", "description": "提醒/警告内容"},
+            "mute_minutes": {"type": "integer", "description": "可选：同时禁言多少分钟（0=不禁言）"},
+        },
+        "required": ["member", "reason"],
+    }
+
+    async def execute(self, args, ctx, room) -> ToolResult:
+        from app.services import chat_room_service as S
+
+        who = str(args.get("member") or "").strip()
+        reason = str(args.get("reason") or "").strip()
+        mins = int(args.get("mute_minutes") or 0)
+        u = await _resolve_user(ctx, room, who)
+        if not u:
+            return ToolResult(content=f"群里找不到成员「{who}」", is_error=True)
+        name = u.display_name or u.username
+        if mins > 0:
+            m = await S.ensure_member_row(ctx.db, tenant_id=room.tenant_id, room_id=room.id, user_id=u.id)
+            import time as _t
+            m.muted_until = int(_t.time() * 1000) + mins * 60_000
+            await ctx.db.flush()
+        tip = f"（并禁言 {mins} 分钟）" if mins > 0 else ""
+        await _send_room_message(ctx, room, f"@{name} 请注意：{reason}{tip}", mentions=[u.id])
+        return ToolResult(content=f"已提醒成员「{name}」{tip}")
+
+
+class RoomPinnedTool(_RoomTool):
+    name = "room_list_pinned"
+    description = "列出本群的置顶消息与最近公告，便于回复群内常见问题。"
+    parameters = {"type": "object", "properties": {}}
+
+    async def execute(self, args, ctx, room) -> ToolResult:
+        from sqlalchemy import select
+
+        from app.models import ChatAnnouncement, ChatMessage
+        from app.services import chat_room_service as S
+
+        pinned = (
+            await ctx.db.execute(
+                select(ChatMessage).where(
+                    ChatMessage.room_id == room.id, ChatMessage.pinned.is_(True), ChatMessage.revoked.is_(False)
+                ).order_by(ChatMessage.id.desc()).limit(20)
+            )
+        ).scalars().all()
+        anns = (
+            await ctx.db.execute(
+                select(ChatAnnouncement).where(ChatAnnouncement.room_id == room.id)
+                .order_by(ChatAnnouncement.pinned.desc(), ChatAnnouncement.id.desc()).limit(10)
+            )
+        ).scalars().all()
+        lines = []
+        if anns:
+            lines.append("群公告：")
+            for a in anns:
+                lines.append(f"- {a.content[:200]}")
+        if pinned:
+            lines.append("置顶消息：")
+            for m in pinned:
+                lines.append(f"- [{m.id}] {m.content[:200]}")
+        return ToolResult(content="\n".join(lines) or "（暂无置顶消息或公告）")
+
+
+class RoomQuietModeTool(_RoomTool):
+    name = "room_quiet_hours"
+    description = "为群设置「静默时段」：到点自动开启全员禁言，次日到点自动解除。适合夜间免打扰。"
+    kind = "write"
+    admin_only = True
+    parameters = {
+        "type": "object",
+        "properties": {
+            "mute_at": {"type": "string", "description": "每天开启禁言的时刻，cron 格式，如 0 22 * * *"},
+            "unmute_at": {"type": "string", "description": "每天解除禁言的时刻，如 0 7 * * *"},
+        },
+        "required": ["mute_at", "unmute_at"],
+    }
+
+    async def execute(self, args, ctx, room) -> ToolResult:
+        from app.services.schedule_service import create_task
+
+        mute_at = str(args.get("mute_at") or "0 22 * * *")
+        unmute_at = str(args.get("unmute_at") or "0 7 * * *")
+        base = {"agent_id": ctx.agent_id, "target_type": "prompt", "schedule_kind": "cron",
+                "room_id": room.id, "room_bot_agent_id": ctx.agent_id, "notify_on": "never", "enabled": True}
+        await create_task(ctx.db, tenant_id=ctx.tenant_id, owner_id=ctx.user_id or 0, data={
+            **base, "name": f"静默·开启·{room.name}", "cron_expr": mute_at,
+            "prompt": "请开启本群全员禁言（12 小时）。",
+        })
+        await create_task(ctx.db, tenant_id=ctx.tenant_id, owner_id=ctx.user_id or 0, data={
+            **base, "name": f"静默·解除·{room.name}", "cron_expr": unmute_at,
+            "prompt": "请关闭本群全员禁言。",
+        })
+        return ToolResult(content=f"已设置静默时段：{mute_at} 开启禁言，{unmute_at} 解除。")
+
+
 # 注册给房间作用域使用的工具集合
 ROOM_TOOLS = [
     ListRoomMembersTool,
     SearchRoomMessagesTool,
     RoomStatsTool,
+    RoomPinnedTool,
     RoomSendMessageTool,
     RoomMuteTool,
     RoomKickTool,
@@ -481,6 +620,9 @@ ROOM_TOOLS = [
     RoomAnnouncementTool,
     RoomPinTool,
     RoomMuteAllTool,
+    RoomRevokeTool,
+    RoomWarnTool,
+    RoomQuietModeTool,
     RoomScheduleTool,
 ]
 

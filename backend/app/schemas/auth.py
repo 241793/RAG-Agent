@@ -38,6 +38,7 @@ class ProfileUpdateRequest(BaseModel):
     """个人资料自助编辑（仅本人可改的字段）。"""
     display_name: str | None = Field(default=None, max_length=64)
     email: str | None = Field(default=None, max_length=128)
+    phone: str | None = Field(default=None, max_length=32)
     avatar: str | None = Field(default=None, max_length=256)
 
 
@@ -53,6 +54,7 @@ class UserOut(BaseModel):
     username: str
     display_name: str
     email: str | None = None
+    phone: str | None = None
     avatar: str | None = None
     is_admin: bool = False
     department_id: int | None = None

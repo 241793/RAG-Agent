@@ -191,7 +191,7 @@ export const authApi = {
   login: (username: string, password: string) =>
     http.post('/auth/login', { username, password }).then((r) => r.data),
   me: () => http.get<User>('/auth/me').then((r) => r.data),
-  updateProfile: (data: { display_name?: string; email?: string; avatar?: string }) =>
+  updateProfile: (data: { display_name?: string; email?: string; phone?: string; avatar?: string }) =>
     http.patch<User>('/auth/profile', data).then((r) => r.data),
   register: (data: { username: string; password: string; display_name?: string; email?: string; department_id?: number; reason?: string }) =>
     http.post<{ message: string; pending: boolean }>('/auth/register', data).then((r) => r.data),

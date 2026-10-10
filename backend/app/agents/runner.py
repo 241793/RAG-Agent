@@ -207,6 +207,49 @@ class AgentRunner:
             return bool(agent_cfg["inject_capabilities"])
         return bool(getattr(settings, "inject_capabilities_default", True))
 
+    async def _group_manager_brief(self) -> str | None:
+        """群管机器人的角色说明：告诉它当前群与可用群管理工具。"""
+        from sqlalchemy import select
+
+        from app.models import ChatRoom, ChatRoomMember
+
+        room = await self.db.get(ChatRoom, self.room_id)
+        if not room:
+            return None
+        role = "member"
+        if room.owner_id == self.agent.id:
+            role = "owner"
+        else:
+            m = (
+                await self.db.execute(
+                    select(ChatRoomMember).where(
+                        ChatRoomMember.room_id == room.id, ChatRoomMember.agent_id == self.agent.id
+                    )
+                )
+            ).scalar_one_or_none()
+            if m and m.role:
+                role = m.role
+        tool_names = "、".join(t.name for t in self.extra_tools)
+        is_admin = role in ("owner", "admin")
+        lines = [
+            f"【群管模式】你正在群「{room.name}」中作为机器人被 @。",
+            f"你在本群的角色：{'群主' if role == 'owner' else '管理员' if role == 'admin' else '普通成员'}。",
+            "你可以使用以下群管理工具（本群作用域）：" + tool_names + "。",
+        ]
+        if is_admin:
+            lines.append(
+                "你是本群管理员，被要求时可主动执行：禁言/解禁、移出成员、设为/取消管理员、"
+                "发公告、置顶消息、撤回消息、开启/关闭全员禁言、搜索消息、查看统计、"
+                "创建定时任务（日报/周报/月报、夜间静默等）、发群里通知。"
+                "执行管理操作前简要说明你将要做什么；操作成功后简短汇报结果。"
+            )
+        else:
+            lines.append(
+                "你是普通成员，只能查询（成员/消息搜索/统计/置顶公告）与发言；"
+                "需要禁言/踢人等管理操作时，请提示需要先把本机器人设为群管理员。"
+            )
+        return "\n".join(lines)
+
     async def run(self, query: str, mode_id: int | None = None) -> AsyncIterator[dict]:
         t0 = time.time()
         mode = None
@@ -271,6 +314,11 @@ class AgentRunner:
         messages: list[ChatMessage] = []
         if eff.system_prompt:
             messages.append(ChatMessage(role="system", content=eff.system_prompt))
+        # 群管机器人：告知其在群内角色与可用群管理能力
+        if self.room_id and self.extra_tools:
+            role_brief = await self._group_manager_brief()
+            if role_brief:
+                messages.append(ChatMessage(role="system", content=role_brief))
         # 引用纪律（与问答页对齐）：用到检索资料时标注 [n]，不得编造引用编号
         if self._inject_caps(eff):
             messages.append(ChatMessage(role="system", content=_CITATION_RULE))
