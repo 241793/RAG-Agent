@@ -13,6 +13,16 @@ import AttachmentView from '../../components/AttachmentView'
 
 const ROLE_LABEL: Record<string, string> = { owner: '群主', admin: '管理员', member: '成员' }
 
+/** 部门标签（聊天室各界面统一展示）。 */
+function DeptTag({ name, style }: { name?: string | null; style?: React.CSSProperties }) {
+  if (!name) return null
+  return (
+    <Tag color="cyan" style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 5px', ...style }}>
+      {name}
+    </Tag>
+  )
+}
+
 function fmtTime(ms: number) {
   const d = new Date(ms)
   const now = new Date()
@@ -364,8 +374,10 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
               {detail?.kind === 'direct' && (() => {
                 const peer = detail?.members?.find((m: any) => m.user_id !== me?.id)
                 if (!peer) return null
-                const sub = `${peer.department || ''}${peer.department && peer.username ? ' · ' : ''}${peer.username ? '@' + peer.username : ''}`
-                return sub ? <Typography.Text type="secondary" style={{ fontSize: 12 }}>{sub}</Typography.Text> : null
+                return <>
+                  <DeptTag name={peer.department} />
+                  {peer.username && <Typography.Text type="secondary" style={{ fontSize: 12 }}>@{peer.username}</Typography.Text>}
+                </>
               })()}
             </Space>
           }
@@ -458,11 +470,8 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                                   <Avatar size={20} icon={x.agent ? <RobotOutlined /> : <UserOutlined />}
                                     style={{ background: x.agent ? '#7c3aed' : '#8c8c8c' }} />
                                   <span style={{ fontSize: 13 }}>{x.name}</span>
-                                  {!x.agent && (x.department || x.username) && (
-                                    <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>
-                                      {x.department || ''}{x.department && x.username ? ' · ' : ''}{x.username ? `@${x.username}` : ''}
-                                    </span>
-                                  )}
+                                  {!x.agent && <DeptTag name={x.department} style={{ fontSize: 10 }} />}
+                                  {!x.agent && x.username && <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>@{x.username}</span>}
                                   {x.agent && <Tag color="purple" style={{ margin: 0, fontSize: 10 }}>机器人</Tag>}
                                   {x.uid === me?.id && <Tag style={{ margin: 0, fontSize: 10 }}>我</Tag>}
                                 </Space>
@@ -610,9 +619,10 @@ function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention, 
         <div style={{ fontSize: 12, color: 'var(--color-text-2)', textAlign: mine ? 'right' : 'left', marginBottom: 2 }}>
           {isBot && <Tag color="purple" style={{ marginRight: 4 }}>机器人</Tag>}
           {m.sender_name}
-          {!isBot && (
-            <span style={{ color: 'var(--color-text-3)', marginLeft: 4 }}>
-              {m.sender_department ? `${m.sender_department} · ` : ''}{m.sender_username ? `@${m.sender_username}` : ''}
+          {!isBot && (m.sender_department || m.sender_username) && (
+            <span style={{ marginLeft: 4, display: 'inline-flex', alignItems: 'center', gap: 4, verticalAlign: 'middle' }}>
+              <DeptTag name={m.sender_department} />
+              {m.sender_username && <span style={{ color: 'var(--color-text-3)' }}>@{m.sender_username}</span>}
             </span>
           )}
           {' '}<span style={{ color: 'var(--color-text-3)' }}>{fmtTime(m.created_at)}</span>
@@ -750,9 +760,10 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onC
               {m.muted_until && m.muted_until > Date.now() && <Tag color="orange">禁言中</Tag>}
             </Space>}
             description={!m.is_agent && (m.department || m.username) ? (
-              <span style={{ fontSize: 12, color: 'var(--color-text-3)' }}>
-                {m.department || ''}{m.department && m.username ? ' · ' : ''}{m.username ? `@${m.username}` : ''}
-              </span>
+              <Space size={6} style={{ fontSize: 12 }}>
+                <DeptTag name={m.department} />
+                {m.username && <span style={{ color: 'var(--color-text-3)' }}>@{m.username}</span>}
+              </Space>
             ) : undefined} />
         </List.Item>
       )} />
@@ -932,11 +943,8 @@ function SearchDrawer({ open, onClose, detail, onJump }: any) {
               <List.Item.Meta
                 avatar={<Avatar size="small" icon={m.sender_is_agent ? <RobotOutlined /> : <UserOutlined />} />}
                 title={<Space size={6}><span style={{ fontSize: 13 }}>{m.sender_name}</span>
-                  {!m.sender_is_agent && (m.sender_department || m.sender_username) && (
-                    <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>
-                      {m.sender_department || ''}{m.sender_department && m.sender_username ? ' · ' : ''}{m.sender_username ? `@${m.sender_username}` : ''}
-                    </span>
-                  )}
+                  {!m.sender_is_agent && <DeptTag name={m.sender_department} style={{ fontSize: 10 }} />}
+                  {!m.sender_is_agent && m.sender_username && <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>@{m.sender_username}</span>}
                   <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>{fmtTime(m.created_at)}</span></Space>}
                 description={<span style={{ fontSize: 13 }}>{m.content?.slice(0, 100)}{m.attachments ? ' [附件]' : ''}</span>} />
             </List.Item>
