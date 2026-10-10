@@ -773,7 +773,7 @@ function Bubble({ m, me, canAdmin, canPin, displayName, onlineMap, readTotal, sh
             style={{ background: isBot ? '#7c3aed' : (mine ? '#2563eb' : '#8c8c8c'), cursor: m.sender_type === 'user' ? 'pointer' : 'default' }} />
           {m.sender_type === 'user' && (
             <span style={{
-              position: 'absolute', right: -1, bottom: -1, lineHeight: 0,
+              position: 'absolute', left: -2, top: -2, lineHeight: 0,
               padding: 2, borderRadius: '50%', background: 'var(--color-bg, #fff)',
             }}><OnlineDot online={online} size={9} /></span>
           )}
