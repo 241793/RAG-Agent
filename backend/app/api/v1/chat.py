@@ -143,8 +143,20 @@ async def list_messages(
                 bounds.append((mo.id, int(getattr(raw, "created_at", 0) or 0), mo))
 
         def _ats(a) -> int:
+            """产物创建时间 -> epoch 毫秒。
+
+            SQLite 存的是 UTC 的 naive datetime（TimestampMixin 用 utcnow()），
+            读出后无 tzinfo；必须按 UTC 解释，否则 .timestamp() 会再减掉本地时区偏移，
+            时间整体前移导致归属错乱。
+            """
             try:
-                return int(a.created_at.timestamp() * 1000) if a.created_at else 0
+                dt = a.created_at
+                if dt is None:
+                    return 0
+                if dt.tzinfo is None:
+                    from datetime import timezone as _tz
+                    dt = dt.replace(tzinfo=_tz.utc)
+                return int(dt.timestamp() * 1000)
             except Exception:  # noqa: BLE001
                 return 0
 
