@@ -67,6 +67,19 @@ export default function AttachmentView({ att, artifact = false }: { att: AttLike
     } catch (e) { message.error(errMsg(e)) }
   }
 
+  // 打开 HTML/网页：新标签页以 inline 方式预览（浏览器直接渲染）
+  const openInBrowser = async (inline = true) => {
+    try {
+      const u = artifact && att.artifact_id
+        ? await getArtifactUrl(att.artifact_id, !inline)
+        : url
+      if (!u) { message.warning('链接未就绪，请稍候重试'); return }
+      window.open(absUrl(u), '_blank', 'noopener')
+    } catch (e) { message.error(errMsg(e)) }
+  }
+
+  const isHtml = ['html', 'htm'].includes(ext)
+
   const fileCard = (
     <Space align="center" style={{ marginTop: 6 }}>
       <Tag icon={<PaperClipOutlined />} style={{ margin: 0 }}>{att.name}{fmtSize(att.size) ? ` (${fmtSize(att.size)})` : ''}</Tag>
@@ -92,6 +105,16 @@ export default function AttachmentView({ att, artifact = false }: { att: AttLike
         <div><Button size="small" type="link" icon={<DownloadOutlined />} onClick={() => download()}>下载 PDF</Button></div>
       </div>
     ) : <Tag style={{ marginTop: 6 }}>PDF 加载中…</Tag>
+  } else if (isHtml) {
+    // HTML 网页：点击在新标签页预览，或下载
+    body = (
+      <Space style={{ marginTop: 6 }} wrap>
+        <Tag icon={<FileTextOutlined />} color="blue" style={{ cursor: 'pointer' }}
+          onClick={() => openInBrowser(true)}>{att.name}</Tag>
+        <Button size="small" type="link" onClick={() => openInBrowser(true)}>预览</Button>
+        <Button size="small" type="link" icon={<DownloadOutlined />} onClick={() => openInBrowser(false)}>下载</Button>
+      </Space>
+    )
   } else if (kind === 'text') {
     body = (
       <Space style={{ marginTop: 6 }}>
