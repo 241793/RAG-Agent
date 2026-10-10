@@ -573,9 +573,11 @@ async def batch_merge_export(
     else:
         data, mime = _render({"format": fmt, "content": md})
     filename = f"合并导出-{len(docs)}篇.{fmt}"
+    from app.core.http_utils import content_disposition
+
     return StreamingResponse(
         io.BytesIO(data), media_type=mime,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": content_disposition(filename)},
     )
 
 

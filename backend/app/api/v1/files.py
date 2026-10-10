@@ -99,8 +99,11 @@ async def download_file(
         raise NotFoundError("文件不存在")
     if not p.is_file():
         raise NotFoundError("文件已丢失")
-    disp = "inline" if inline else "attachment"
-    return FileResponse(str(p), headers={"Content-Disposition": f'{disp}; filename="{art.file_name}"'})
+    from app.core.http_utils import content_disposition
+
+    return FileResponse(str(p), headers={
+        "Content-Disposition": content_disposition(art.file_name, inline=bool(inline)),
+    })
 
 
 @router.get("/{artifact_id}/url")

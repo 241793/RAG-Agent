@@ -100,3 +100,15 @@ def test_file_tools():
     finally:
         loop.close()
         asyncio.set_event_loop(None)
+
+
+def test_content_disposition_handles_non_ascii():
+    """文件名含中文时 Content-Disposition 必须可 latin-1 编码（否则响应 500）。"""
+    from app.core.http_utils import content_disposition
+
+    for name in ("pelican-bicycle.html", "鹈鹕骑自行车.html", "合并导出-3篇.pdf", 'a b"c.txt'):
+        val = content_disposition(name, inline=True)
+        val.encode("latin-1")  # 复现 starlette 头部编码，不能再抛 UnicodeEncodeError
+        assert val.startswith("inline;")
+        assert "filename*=UTF-8''" in val
+    assert content_disposition("中文.docx").startswith("attachment;")

@@ -403,8 +403,11 @@ async def get_attachment(
         raise NotFoundError("附件不存在")
     if not p.is_file():
         raise NotFoundError("附件不存在")
-    disp = "attachment" if download else "inline"
-    return FileResponse(str(p), headers={"Content-Disposition": f'{disp}; filename="{p.name}"'})
+    from app.core.http_utils import content_disposition
+
+    return FileResponse(str(p), headers={
+        "Content-Disposition": content_disposition(p.name, inline=not download),
+    })
 
 
 @router.post("/attachments/{file_key:path}/sign")
@@ -632,8 +635,10 @@ async def export_conversation_endpoint(
     filename, data, mime = await export_conversation(db, conversation=conv, user_id=user.id, fmt=fmt)
     import io
 
+    from app.core.http_utils import content_disposition
+
     return StreamingResponse(io.BytesIO(data), media_type=mime,
-                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+                             headers={"Content-Disposition": content_disposition(filename)})
 
 
 @router.post("/conversations/{conv_id}/share")
