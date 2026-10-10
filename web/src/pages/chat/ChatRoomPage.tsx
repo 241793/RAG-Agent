@@ -403,6 +403,55 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   }, [mentionable, atQuery])
 
   // 输入框内容变化：检测光标前是否有 "@xxx" → 打开/过滤 @ 选择器
+  // 群管理菜单（标题栏右侧按钮与输入区共用同一份定义）
+  const groupMenu = {
+    items: [
+      { key: 'photo', label: '查看群相册/文件', icon: <FolderOutlined /> },
+      { type: 'divider' },
+      { key: 'info', label: '群资料', icon: <EditOutlined /> },
+      { key: 'members', label: '群成员与管理', icon: <UserOutlined /> },
+      { key: 'bots', label: '机器人', icon: <RobotOutlined /> },
+      { key: 'groupbot', label: '群管机器人', icon: <RobotOutlined /> },
+      { key: 'announcement', label: '设置群公告', icon: <PushpinOutlined /> },
+      { key: 'muteall', label: '全员禁言', icon: <AudioMutedOutlined /> },
+      { type: 'divider' },
+      { key: 'clear', label: '清空聊天记录', danger: true },
+    ],
+    onClick: ({ key }: { key: string }) => {
+      if (key === 'info') {
+        let nm = detail.name, an = detail.announcement || ''
+        Modal.confirm({
+          title: '群资料', icon: null, width: 480,
+          content: (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              <span style={{ fontSize: 12, color: 'var(--color-text-2)' }}>群名称</span>
+              <Input defaultValue={nm} disabled={detail.is_default} onChange={(e) => { nm = e.target.value }} />
+              <span style={{ fontSize: 12, color: 'var(--color-text-2)' }}>群公告</span>
+              <Input.TextArea defaultValue={an} rows={3} onChange={(e) => { an = e.target.value }} />
+            </div>
+          ),
+          onOk: async () => {
+            const r = await chatRoomApi.updateRoom(detail.id, { name: nm, announcement: an })
+            setDetail({ ...detail, name: r.name || nm, announcement: an })
+            loadRooms(); message.success('已保存')
+          },
+        })
+      } else if (key === 'members') setMemberOpen(true)
+      else if (key === 'bots') setBotOpen(true)
+      else if (key === 'groupbot') setGroupBotOpen(true)
+      else if (key === 'photo') setFilesOpen(true)
+      else if (key === 'announcement') setAnnOpen(true)
+      else if (key === 'muteall') openMuteAll()
+      else if (key === 'clear') {
+        Modal.confirm({
+          title: '清空聊天记录？', content: '所有消息将被撤回（成员与群结构保留），不可恢复。',
+          okButtonProps: { danger: true },
+          onOk: async () => { await chatRoomApi.clearMessages(detail.id); setMsgs([]); message.success('已清空') },
+        })
+      }
+    },
+  }
+
   const onInputChange = (val: string) => {
     setInput(val)
     const m = val.match(/@([^\s@]*)$/)
@@ -456,12 +505,18 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                   onClick={() => openRoom(r.id)}
                 >
                   <div style={{ width: '100%', minWidth: 0 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }}>
                       <Typography.Text ellipsis strong={!!r.unread} style={{ fontSize: 13 }}>
                         {r.kind === 'direct' ? <><UserOutlined /> </> : r.is_default ? '📢 ' : ''}
                         {r.kind === 'direct' && r.peer ? (r.peer.remark || r.peer.name) : r.name}
                       </Typography.Text>
-                      {!!r.unread && <Tag color="red" style={{ margin: 0 }}>{r.unread}</Tag>}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        {/* 私聊：显示对方在线状态 */}
+                        {r.kind === 'direct' && r.peer && (
+                          <OnlineDot online={r.peer.online ?? onlineMap?.[r.peer.user_id]} size={8} />
+                        )}
+                        {!!r.unread && <Tag color="red" style={{ margin: 0 }}>{r.unread}</Tag>}
+                      </span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
                       {r.kind === 'direct' && r.peer && (r.peer.department || r.peer.username) && (
@@ -500,6 +555,14 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                   {peer.username && <Typography.Text type="secondary" style={{ fontSize: 12 }}>@{peer.username}</Typography.Text>}
                 </>
               })()}
+              {/* 群管理：放在标题右侧（图标 + 群名 + 角色标签 之后） */}
+              {detail && detail.kind !== 'direct' && canAdmin && (
+                <Dropdown menu={groupMenu} trigger={['click']}>
+                  <Tooltip title="群管理">
+                    <Button size="small" type="text" icon={<MoreOutlined />} />
+                  </Tooltip>
+                </Dropdown>
+              )}
             </Space>
           }
           extra={
@@ -628,57 +691,6 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                     onPressEnter={(e) => { if (!e.shiftKey && !atOpen) { e.preventDefault(); send() } }}
                     placeholder="输入消息，Enter 发送，Shift+Enter 换行；@ 可提及成员或机器人" />
                   <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={send}>发送</Button>
-                  {detail.kind !== 'direct' && canAdmin && (
-                    <Dropdown menu={{
-                      items: [
-                        { key: 'photo', label: '查看群相册/文件', icon: <FolderOutlined /> },
-                        { type: 'divider' },
-                        { key: 'info', label: '群资料', icon: <EditOutlined /> },
-                        { key: 'members', label: '群成员与管理', icon: <UserOutlined /> },
-                        { key: 'bots', label: '机器人', icon: <RobotOutlined /> },
-                        { key: 'groupbot', label: '群管机器人', icon: <RobotOutlined /> },
-                        { key: 'announcement', label: '设置群公告', icon: <PushpinOutlined /> },
-                        { key: 'muteall', label: '全员禁言', icon: <AudioMutedOutlined /> },
-                        { type: 'divider' },
-                        { key: 'clear', label: '清空聊天记录', danger: true },
-                      ],
-                      onClick: ({ key }) => {
-                        if (key === 'info') {
-                          let nm = detail.name, an = detail.announcement || ''
-                          Modal.confirm({
-                            title: '群资料', icon: null, width: 480,
-                            content: (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-                                <span style={{ fontSize: 12, color: 'var(--color-text-2)' }}>群名称</span>
-                                <Input defaultValue={nm} disabled={detail.is_default} onChange={(e) => { nm = e.target.value }} />
-                                <span style={{ fontSize: 12, color: 'var(--color-text-2)' }}>群公告</span>
-                                <Input.TextArea defaultValue={an} rows={3} onChange={(e) => { an = e.target.value }} />
-                              </div>
-                            ),
-                            onOk: async () => {
-                              const r = await chatRoomApi.updateRoom(detail.id, { name: nm, announcement: an })
-                              setDetail({ ...detail, name: r.name || nm, announcement: an })
-                              loadRooms(); message.success('已保存')
-                            },
-                          })
-                        } else if (key === 'members') setMemberOpen(true)
-                        else if (key === 'bots') setBotOpen(true)
-                        else if (key === 'groupbot') setGroupBotOpen(true)
-                        else if (key === 'photo') setFilesOpen(true)
-                        else if (key === 'announcement') setAnnOpen(true)
-                        else if (key === 'muteall') openMuteAll()
-                        else if (key === 'clear') {
-                          Modal.confirm({
-                            title: '清空聊天记录？', content: '所有消息将被撤回（成员与群结构保留），不可恢复。',
-                            okButtonProps: { danger: true },
-                            onOk: async () => { await chatRoomApi.clearMessages(detail.id); setMsgs([]); message.success('已清空') },
-                          })
-                        }
-                      },
-                    }} trigger={['click']}>
-                      <Tooltip title="群管理"><Button icon={<MoreOutlined />} /></Tooltip>
-                    </Dropdown>
-                  )}
                 </div>
               </div>
             </>

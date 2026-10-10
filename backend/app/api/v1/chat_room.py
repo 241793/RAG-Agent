@@ -46,7 +46,14 @@ async def list_rooms(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """我可见的房间（默认大群 + 我加入的群 + 我的私聊），带未读数。"""
-    return await S.list_rooms(db, tenant_id=user.tenant_id, user_id=user.id, is_admin=bool(user.is_admin))
+    rooms = await S.list_rooms(db, tenant_id=user.tenant_id, user_id=user.id, is_admin=bool(user.is_admin))
+    # 补在线状态（broadcaster 只在 API 层可用）：私聊显示对方绿点
+    online_ids = broadcaster.online_user_ids()
+    for r in rooms:
+        peer = r.get("peer")
+        if peer and peer.get("user_id"):
+            peer["online"] = peer["user_id"] in online_ids
+    return rooms
 
 
 @router.post("")

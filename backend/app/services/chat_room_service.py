@@ -371,8 +371,8 @@ async def set_remark(
     return text
 
 
-async def _user_brief(db: AsyncSession, user_id: int | None) -> dict | None:
-    """某用户的展示信息（姓名/用户名/部门/是否管理员）。"""
+async def _user_brief(db: AsyncSession, user_id: int | None, *, online_ids: set[int] | None = None) -> dict | None:
+    """某用户的展示信息（姓名/用户名/部门/是否管理员/是否在线）。"""
     from app.models import Department
 
     if not user_id:
@@ -387,6 +387,7 @@ async def _user_brief(db: AsyncSession, user_id: int | None) -> dict | None:
     return {
         "user_id": u.id, "name": u.display_name or u.username, "username": u.username,
         "department": dept_name, "is_admin": bool(u.is_admin),
+        "online": (u.id in online_ids) if online_ids is not None else None,
     }
 
 
