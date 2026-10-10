@@ -48,6 +48,7 @@ export default function AgentEditPage() {
   const [testStreaming, setTestStreaming] = useState(false)
   const [adminTools, setAdminTools] = useState<string[]>(ADMIN_TOOLS_FALLBACK)
   const [form] = Form.useForm()
+  const [toolForm] = Form.useForm()
   const [modeForm] = Form.useForm()
   const testListRef = useRef<HTMLDivElement>(null)
 
@@ -64,10 +65,13 @@ export default function AgentEditPage() {
         model_config_id: a.model_config_id, kb_ids: a.kb_ids || [], skill_ids: a.skill_ids || [],
         temperature: a.config?.temperature ?? 0.3,
         greeting: a.config?.greeting,
+        max_turns: tc.max_turns ?? 4,
+      })
+      // 工具开关：独立表单实例（避免与基础配置共用实例导致字段互相覆盖）
+      toolForm.setFieldsValue({
         ...builtinVals,
         admin_enabled: tc.admin?.enabled ?? false,
         admin_tools: tc.admin?.tools ?? [],
-        max_turns: tc.max_turns ?? 4,
       })
       // 技能参数（按技能 slug 命名空间回填）
       form.setFieldValue('skill_params', (a.config as any)?.params || {})
@@ -83,17 +87,18 @@ export default function AgentEditPage() {
 
   const save = async () => {
     const v = await form.validateFields()
+    const tv = await toolForm.validateFields()
     try {
       // 合并而非覆盖：保留现有 tool_config 中未在本页编辑的字段，避免抹掉其它工具配置
       const prev = agent?.tool_config || {}
       const builtin: Record<string, any> = { ...(prev.builtin || {}) }
       for (const t of BUILTIN_TOOLS) {
-        builtin[t.name] = { ...(builtin[t.name] || {}), enabled: !!v[`bt_${t.name}`] }
+        builtin[t.name] = { ...(builtin[t.name] || {}), enabled: !!tv[`bt_${t.name}`] }
       }
       const toolConfig = {
         ...prev,
         builtin,
-        admin: { ...(prev.admin || {}), enabled: !!v.admin_enabled, tools: v.admin_tools || [] },
+        admin: { ...(prev.admin || {}), enabled: !!tv.admin_enabled, tools: tv.admin_tools || [] },
         max_turns: v.max_turns,
       }
       await agentApi.update(agentId, {
@@ -172,9 +177,11 @@ export default function AgentEditPage() {
       </>}
     >
       <Tabs
+        destroyOnHidden={false}
         items={[
           {
             key: 'basic', label: '基础配置',
+            forceRender: true,
             children: (
               <Card>
                 <Form form={form} layout="vertical" style={{ maxWidth: 720 }}>
@@ -247,9 +254,10 @@ export default function AgentEditPage() {
           },
           {
             key: 'tools', label: '可用工具',
+            forceRender: true,
             children: (
               <Card>
-                <Form form={form} layout="vertical" style={{ maxWidth: 720 }}>
+                <Form form={toolForm} layout="vertical" style={{ maxWidth: 720 }}>
                   <Typography.Title level={5} style={{ marginTop: 0 }}>内置工具</Typography.Title>
                   {BUILTIN_TOOLS.map((t) => (
                     <Form.Item key={t.name} name={`bt_${t.name}`} valuePropName="checked"
