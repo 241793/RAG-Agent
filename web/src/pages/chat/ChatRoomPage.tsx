@@ -44,6 +44,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   const [memberOpen, setMemberOpen] = useState(false)
   const [botOpen, setBotOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
+  const [annOpen, setAnnOpen] = useState(false)
   const [mentionIds, setMentionIds] = useState<number[]>([])
   const [replyTo, setReplyTo] = useState<ChatMsgItem | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
@@ -159,7 +160,13 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
     } else if (d.type === 'pin' && d.room_id === activeIdRef.current) {
       setMsgs((cur) => cur.map((m) => m.id === d.message_id ? { ...m, pinned: d.pinned } : m))
     } else if (d.type === 'announcement' && d.room_id === activeIdRef.current) {
-      setDetail((cur: any) => cur ? { ...cur, announcement: d.announcement } : cur)
+      // 公告变化：刷新整个房间详情（含多条公告列表）
+      openRoom(activeIdRef.current!)
+    } else if (d.type === 'cleared' && d.room_id === activeIdRef.current) {
+      setMsgs([])
+    } else if (d.type === 'room_updated' && d.room_id === activeIdRef.current) {
+      setDetail((cur: any) => cur ? { ...cur, name: d.name ?? cur.name, announcement: d.announcement ?? cur.announcement } : cur)
+      setRooms((rs) => rs.map((r) => r.id === d.room_id ? { ...r, name: d.name ?? r.name } : r))
     }
   }
 
@@ -234,11 +241,25 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
     setTimeout(() => taRef.current?.focus(), 0)
   }
 
-  // 成员 + 机器人（含自己，QQ 也允许@自己）
-  const mentionable = useMemo(() => [
-    ...(detail?.members || []).map((m: any) => ({ uid: m.user_id, name: m.name, agent: false, role: m.role })),
-    ...(detail?.bots || []).map((b: any) => ({ uid: b.agent_id, name: b.name, agent: true, role: '' })),
-  ], [detail])
+  // 可 @ 对象：成员（已含机器人，is_agent 标记）。QQ 也允许 @ 自己。
+  const mentionable = useMemo(() => {
+    const seen = new Set<string>()
+    const out: { uid: number; name: string; agent: boolean; role: string }[] = []
+    for (const m of (detail?.members || [])) {
+      const key = m.is_agent ? `a${m.agent_id}` : `u${m.user_id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ uid: m.is_agent ? m.agent_id : m.user_id, name: m.name, agent: !!m.is_agent, role: m.role })
+    }
+    // 兜底：detail.bots 中未进入 members 的机器
+    for (const b of (detail?.bots || [])) {
+      const key = `a${b.agent_id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ uid: b.agent_id, name: b.name, agent: true, role: '' })
+    }
+    return out
+  }, [detail])
   const atFiltered = useMemo(() => {
     const q = atQuery.trim().toLowerCase()
     return mentionable.filter((x) => !q || x.name.toLowerCase().includes(q))
@@ -258,7 +279,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
         <Card size="small" style={{ width: 260, flex: '0 0 auto', display: 'flex', flexDirection: 'column' }}
           styles={{ body: { padding: 8, display: 'flex', flexDirection: 'column', height: '100%' } }}
           title={<Space><TeamOutlined />会话</Space>}
-          extra={<Tooltip title="新建群聊"><Button size="small" type="text" icon={<PlusOutlined />} onClick={() => setNewOpen(true)} /></Tooltip>}>
+          extra={me?.is_admin ? <Tooltip title="新建群聊"><Button size="small" type="text" icon={<PlusOutlined />} onClick={() => setNewOpen(true)} /></Tooltip> : null}>
           <div style={{ flex: 1, overflowY: 'auto' }}>
             <List
               size="small" dataSource={rooms}
@@ -314,10 +335,15 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
           }>
           {!detail ? <Empty style={{ marginTop: 80 }} description="从左侧选择一个会话" /> : (
             <>
-              {/* 群公告 */}
-              {detail.announcement && (
-                <div style={{ margin: '0 12px 8px', padding: '6px 10px', background: 'var(--color-warn-soft)', borderRadius: 6, fontSize: 13 }}>
-                  <PushpinOutlined style={{ color: 'var(--color-warn)', marginRight: 6 }} />{detail.announcement}
+              {/* 群公告（多条，QQ 式：显示最新一条 + 条数，点击查看全部） */}
+              {detail.announcements?.length > 0 && (
+                <div onClick={() => setAnnOpen(true)}
+                  style={{ margin: '0 12px 8px', padding: '6px 10px', background: 'var(--color-warn-soft)', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>
+                  <PushpinOutlined style={{ color: 'var(--color-warn)', marginRight: 6 }} />
+                  {detail.announcements[0].pinned && <Tag color="orange" style={{ marginRight: 4 }}>置顶</Tag>}
+                  {detail.announcements[0].content}
+                  {detail.announcements.length > 1 && <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>（共 {detail.announcements.length} 条，点击查看）</Typography.Text>}
+                  {detail.announcements.length === 1 && <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>（点击查看全部）</Typography.Text>}
                 </div>
               )}
               {/* 置顶消息 */}
@@ -441,14 +467,8 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                         } else if (key === 'members') setMemberOpen(true)
                         else if (key === 'bots') setBotOpen(true)
                         else if (key === 'photo') setFilesOpen(true)
-                        else if (key === 'announcement') {
-                          let v = detail.announcement || ''
-                          Modal.confirm({
-                            title: '设置群公告', icon: null,
-                            content: <Input.TextArea defaultValue={v} rows={3} onChange={(e) => { v = e.target.value }} />,
-                            onOk: async () => { await chatRoomApi.setAnnouncement(detail.id, v); setDetail({ ...detail, announcement: v }) },
-                          })
-                        } else if (key === 'clear') {
+                        else if (key === 'announcement') setAnnOpen(true)
+                        else if (key === 'clear') {
                           Modal.confirm({
                             title: '清空聊天记录？', content: '所有消息将被撤回（成员与群结构保留），不可恢复。',
                             okButtonProps: { danger: true },
@@ -487,6 +507,10 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
 
       {/* 群文件 / 相册 */}
       <FilesDrawer open={filesOpen} onClose={() => setFilesOpen(false)} detail={detail} />
+
+      {/* 群公告 */}
+      <AnnouncementDrawer open={annOpen} onClose={() => setAnnOpen(false)} detail={detail}
+        canAdmin={canAdmin} onChanged={() => activeId && openRoom(activeId)} />
     </>
   )
 }
@@ -587,8 +611,12 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onC
     catch (e) { message.error(errMsg(e)) }
   }
   const setRole = async (m: any) => {
-    try { await chatRoomApi.setRole(detail.id, m.user_id, m.role === 'admin' ? 'member' : 'admin'); onChanged() }
-    catch (e) { message.error(errMsg(e)) }
+    try {
+      const next = m.role === 'admin' ? 'member' : 'admin'
+      if (m.is_agent) await chatRoomApi.setBotRole(detail.id, m.agent_id, next)
+      else await chatRoomApi.setRole(detail.id, m.user_id, next)
+      message.success(next === 'admin' ? '已设为群管理员' : '已取消群管理员'); onChanged()
+    } catch (e) { message.error(errMsg(e)) }
   }
   const mute = async (m: any) => {
     const mins = window.prompt(`禁言「${m.name}」多少分钟？（0 = 解除）`, '10')
@@ -597,7 +625,11 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onC
     catch (e) { message.error(errMsg(e)) }
   }
   const kick = async (m: any) => {
-    try { await chatRoomApi.removeMember(detail.id, m.user_id); onChanged() }
+    try {
+      if (m.is_agent) await chatRoomApi.removeBot(detail.id, m.agent_id)
+      else await chatRoomApi.removeMember(detail.id, m.user_id)
+      onChanged()
+    }
     catch (e) { message.error(errMsg(e)) }
   }
   const transfer = async (m: any) => {
@@ -608,23 +640,31 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onC
   return (
     <Drawer title={`群成员（${members.length}）${admins ? ` · 管理员 ${admins}` : ''}`} width={480} open={open} onClose={onClose}
       extra={canAdmin && !isDefault && <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>添加成员</Button>}>
-      <Input.Search placeholder="搜索成员" allowClear value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 10 }} />
+      <Input.Search placeholder="搜索成员/机器人" allowClear value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 10 }} />
       <List size="small" dataSource={sorted} renderItem={(m: any) => (
         <List.Item actions={[
-          m.user_id !== me?.id && <a key="p" onClick={() => onPrivate?.(m)}>私聊</a>,
-          ...(isOwner && m.role !== 'owner' ? [
+          !m.is_agent && m.user_id !== me?.id && <a key="p" onClick={() => onPrivate?.(m)}>私聊</a>,
+          ...(isOwner && m.role !== 'owner' && !m.is_agent ? [
             <a key="r" onClick={() => setRole(m)}>{m.role === 'admin' ? '取消管理' : '设为管理'}</a>,
             <Popconfirm key="t" title={`转让群主给「${m.name}」？`} onConfirm={() => transfer(m)}><a>转让</a></Popconfirm>,
           ] : []),
-          ...(canAdmin && m.role !== 'owner' && m.user_id !== me?.id ? [
+          ...(isOwner && m.is_agent ? [
+            <a key="ar" onClick={() => setRole(m)}>{m.role === 'admin' ? '取消管理' : '设为管理'}</a>,
+          ] : []),
+          ...(canAdmin && m.role !== 'owner' && m.user_id !== me?.id && !m.is_agent ? [
             <a key="m" onClick={() => mute(m)}>{m.muted_until && m.muted_until > Date.now() ? '解除禁言' : '禁言'}</a>,
+          ] : []),
+          ...(canAdmin && m.role !== 'owner' && !(m.user_id === me?.id) ? [
             <Popconfirm key="k" title={`把「${m.name}」移出群？`} onConfirm={() => kick(m)}><a>移出</a></Popconfirm>,
           ] : []),
         ].filter(Boolean)}>
-          <List.Item.Meta avatar={<Avatar size="small" icon={<UserOutlined />} style={{ background: m.role === 'owner' ? '#faad14' : '#8c8c8c' }} />}
+          <List.Item.Meta
+            avatar={<Avatar size="small" icon={m.is_agent ? <RobotOutlined /> : <UserOutlined />}
+              style={{ background: m.role === 'owner' ? '#faad14' : m.is_agent ? '#7c3aed' : '#8c8c8c' }} />}
             title={<Space size={4}>
               <span>{m.name}</span>
               {m.user_id === me?.id && <Tag>我</Tag>}
+              {m.is_agent && <Tag color="purple">机器人</Tag>}
               {m.role === 'owner' && <Tag color="gold">群主</Tag>}
               {m.role === 'admin' && <Tag color="blue">管理员</Tag>}
               {m.is_admin && <Tag color="geekblue">系统管理员</Tag>}
@@ -702,6 +742,78 @@ function FilesDrawer({ open, onClose, detail }: any) {
               </List.Item>
             )} />
           )
+        )
+      )}
+    </Drawer>
+  )
+}
+
+/** 群公告（QQ 式：多条记录，管理员可增删改）。 */
+function AnnouncementDrawer({ open, onClose, detail, canAdmin, onChanged }: any) {
+  const [list, setList] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [editId, setEditId] = useState<number | null>(null)   // null=不在编辑；0=新建
+  const [draft, setDraft] = useState('')
+  const [draftPinned, setDraftPinned] = useState(false)
+
+  const load = async () => {
+    if (!detail?.id) return
+    setLoading(true)
+    try { setList(await chatRoomApi.announcements(detail.id)) }
+    catch { setList([]) } finally { setLoading(false) }
+  }
+  useEffect(() => { if (open) load() }, [open, detail?.id])
+
+  const startNew = () => { setEditId(0); setDraft(''); setDraftPinned(false) }
+  const startEdit = (a: any) => { setEditId(a.id); setDraft(a.content); setDraftPinned(!!a.pinned) }
+  const cancel = () => { setEditId(null); setDraft(''); setDraftPinned(false) }
+  const save = async () => {
+    if (!draft.trim()) { message.warning('公告内容不能为空'); return }
+    try {
+      if (editId === 0) await chatRoomApi.setAnnouncement(detail.id, draft.trim(), draftPinned)
+      else await chatRoomApi.updateAnnouncement(detail.id, editId as number, { content: draft.trim(), pinned: draftPinned })
+      message.success('已保存'); cancel(); await load(); onChanged?.()
+    } catch (e) { message.error(errMsg(e)) }
+  }
+  const remove = async (a: any) => {
+    try { await chatRoomApi.deleteAnnouncement(detail.id, a.id); message.success('已删除'); await load(); onChanged?.() }
+    catch (e) { message.error(errMsg(e)) }
+  }
+  const togglePin = async (a: any) => {
+    try { await chatRoomApi.updateAnnouncement(detail.id, a.id, { pinned: !a.pinned }); await load(); onChanged?.() }
+    catch (e) { message.error(errMsg(e)) }
+  }
+
+  return (
+    <Drawer title="群公告" width={480} open={open} onClose={onClose}
+      extra={canAdmin && editId === null && <Button size="small" type="primary" icon={<PlusOutlined />} onClick={startNew}>发布公告</Button>}>
+      {canAdmin && editId !== null && (
+        <div style={{ marginBottom: 12, padding: 10, border: '1px solid var(--color-border)', borderRadius: 6 }}>
+          <Input.TextArea value={draft} rows={3} maxLength={2000} showCount
+            placeholder="输入公告内容…" onChange={(e) => setDraft(e.target.value)} />
+          <Space style={{ marginTop: 8 }}>
+            <Space size={4}><Switch size="small" checked={draftPinned} onChange={setDraftPinned} /><span style={{ fontSize: 12 }}>置顶</span></Space>
+            <Button size="small" type="primary" onClick={save}>保存</Button>
+            <Button size="small" onClick={cancel}>取消</Button>
+          </Space>
+        </div>
+      )}
+      {loading ? <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div> : (
+        list.length === 0 ? <Empty description="暂无公告" /> : (
+          <List dataSource={list} renderItem={(a: any) => (
+            <List.Item actions={canAdmin ? [
+              <a key="p" onClick={() => togglePin(a)}>{a.pinned ? '取消置顶' : '置顶'}</a>,
+              <a key="e" onClick={() => startEdit(a)}>编辑</a>,
+              <Popconfirm key="d" title="删除这条公告？" onConfirm={() => remove(a)}><a style={{ color: 'var(--color-error)' }}>删除</a></Popconfirm>,
+            ] : []}>
+              <List.Item.Meta
+                title={<Space size={4}>
+                  {a.pinned && <Tag color="orange">置顶</Tag>}
+                  <span style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{a.created_by_name || '管理员'} · {a.created_at ? fmtTime(a.created_at) : ''}</span>
+                </Space>}
+                description={<span style={{ whiteSpace: 'pre-wrap', color: 'var(--color-text-1)' }}>{a.content}</span>} />
+            </List.Item>
+          )} />
         )
       )}
     </Drawer>

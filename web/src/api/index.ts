@@ -515,8 +515,9 @@ export const chatRoomApi = {
   detail: (roomId: number) => http.get<{
     id: number; name: string; kind: string; is_default: boolean; announcement?: string | null
     owner_id: number; my_role: string; peer_user_id?: number | null
-    members: { id: number; user_id: number; role: string; name: string; username?: string | null }[]
+    members: { id: number; user_id: number | null; agent_id?: number | null; role: string; name: string; username?: string | null; is_admin?: boolean; is_agent?: boolean; muted_until?: number | null }[]
     bots: { member_id: number; agent_id: number; name: string }[]
+    announcements?: { id: number; content: string; pinned: boolean; created_by?: number | null; created_by_name?: string; created_at?: number | null }[]
     pinned: ChatMsgItem[]
   }>(`/chat/rooms/${roomId}`).then((r) => r.data),
   messages: (roomId: number, beforeId?: number, limit = 30) =>
@@ -537,8 +538,16 @@ export const chatRoomApi = {
     http.delete(`/chat/rooms/${roomId}/members/${userId}`).then((r) => r.data),
   mute: (roomId: number, userId: number, minutes: number) =>
     http.post(`/chat/rooms/${roomId}/members/${userId}/mute`, { minutes }).then((r) => r.data),
-  setAnnouncement: (roomId: number, announcement: string) =>
-    http.post(`/chat/rooms/${roomId}/announcement`, { announcement }).then((r) => r.data),
+  setAnnouncement: (roomId: number, announcement: string, pinned = false) =>
+    http.post(`/chat/rooms/${roomId}/announcement`, { announcement, pinned }).then((r) => r.data),
+  announcements: (roomId: number) =>
+    http.get(`/chat/rooms/${roomId}/announcements`).then((r) => r.data),
+  updateAnnouncement: (roomId: number, annId: number, data: { content?: string; pinned?: boolean }) =>
+    http.patch(`/chat/rooms/${roomId}/announcements/${annId}`, data).then((r) => r.data),
+  deleteAnnouncement: (roomId: number, annId: number) =>
+    http.delete(`/chat/rooms/${roomId}/announcements/${annId}`).then((r) => r.data),
+  setBotRole: (roomId: number, agentId: number, role: string) =>
+    http.post(`/chat/rooms/${roomId}/bots/${agentId}/role`, { role }).then((r) => r.data),
   updateRoom: (roomId: number, data: { name?: string; avatar?: string; announcement?: string }) =>
     http.patch(`/chat/rooms/${roomId}`, data).then((r) => r.data),
   transferOwner: (roomId: number, userId: number) =>

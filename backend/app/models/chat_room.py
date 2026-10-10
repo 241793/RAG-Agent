@@ -66,6 +66,25 @@ class ChatRoomMember(Base, IdMixin, TenantMixin, TimestampMixin):
     )
 
 
+class ChatAnnouncement(Base, IdMixin, TimestampMixin, TenantMixin):
+    """群公告记录（QQ 式：一个群可有多条公告，支持编辑/删除）。
+
+    ChatRoom.announcement 保留为「最后一条公告」的兼容快照，展示以本表为准。
+    """
+
+    __tablename__ = "chat_announcement"
+
+    room_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # 发布者 user_id
+    updated_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # 最后编辑者
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)  # 置顶（长期展示）
+
+    __table_args__ = (
+        Index("ix_chat_ann_room", "room_id", "id"),
+    )
+
+
 class ChatMessage(Base, IdMixin, TenantMixin):
     """聊天消息。撤回用软删（revoked + 保留占位），置顶用 pinned。"""
 

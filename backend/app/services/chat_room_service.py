@@ -77,6 +77,40 @@ async def is_member(db: AsyncSession, *, room_id: int, user_id: int) -> ChatRoom
     return None
 
 
+async def get_member_row(db: AsyncSession, *, room_id: int, user_id: int) -> ChatRoomMember | None:
+    """只取库中真实成员行（默认大群的「虚拟成员」返回 None）。"""
+    return (
+        await db.execute(
+            select(ChatRoomMember).where(
+                ChatRoomMember.room_id == room_id, ChatRoomMember.user_id == user_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def ensure_member_row(
+    db: AsyncSession, *, tenant_id: int, room_id: int, user_id: int, role: str = "member",
+) -> ChatRoomMember:
+    """取库中成员行，不存在则落库（用于对默认大群虚拟成员执行禁言/设管理员等持久化操作）。"""
+    m = await get_member_row(db, room_id=room_id, user_id=user_id)
+    if not m:
+        m = ChatRoomMember(tenant_id=tenant_id, room_id=room_id, user_id=user_id, role=role)
+        db.add(m)
+        await db.flush()
+    return m
+
+
+async def mark_read(db: AsyncSession, *, room_id: int, user_id: int, tenant_id: int) -> None:
+    """记录已读水位（毫秒）。
+
+    默认大群成员可能是「虚拟成员」（未显式入表），此处确保持久化一条成员行，
+    否则 last_read_at 写入内存对象、会话结束即丢失，导致未读数永远不清零。
+    """
+    m = await ensure_member_row(db, tenant_id=tenant_id, room_id=room_id, user_id=user_id)
+    m.last_read_at = _now_ms()
+    await db.flush()
+
+
 async def member_role(db: AsyncSession, *, room: ChatRoom, user_id: int, is_admin: bool) -> str:
     """有效角色：租户管理员在群里等同 owner（拥有撤回任何消息等权力）。"""
     if is_admin or room.owner_id == user_id:

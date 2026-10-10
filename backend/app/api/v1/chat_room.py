@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.db import AsyncSessionLocal, get_db
 from app.core.errors import NotFoundError, PermissionDeniedError, ValidationError
 from app.middleware.auth_dep import get_current_user, require_permission
-from app.models import ChatMessage, ChatRoom, ChatRoomMember, User
+from app.models import Agent, ChatAnnouncement, ChatMessage, ChatRoom, ChatRoomMember, User
 from app.services import chat_room_service as S
 from app.services.audit_service import audited
 from app.services.chat_broadcaster import broadcaster
@@ -46,16 +46,23 @@ async def create_room(
     user: User = Depends(require_permission("chat:use")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """创建群聊。"""
+    """创建群聊（仅管理员可建；默认全员大群由系统维护）。"""
     name = (body.get("name") or "").strip()
     if not name:
         raise ValidationError("请填写群名称")
+    if not user.is_admin:
+        raise PermissionDeniedError("仅管理员可创建群聊")
     room = ChatRoom(
         tenant_id=user.tenant_id, name=name[:128], kind="group",
         owner_id=user.id, announcement=(body.get("announcement") or None),
     )
     db.add(room)
     await db.flush()
+    # 历史遗留：曾删除的房间若残留成员行，room_id 复用时触发唯一约束。
+    # 落新房间时先清理该 id 的孤儿行，再做幂等插入。
+    from sqlalchemy import delete as _del
+
+    await db.execute(_del(ChatRoomMember).where(ChatRoomMember.room_id == room.id))
     db.add(ChatRoomMember(tenant_id=user.tenant_id, room_id=room.id, user_id=user.id, role="owner"))
     # 创建者指定初始成员
     for uid in (body.get("member_ids") or []):
@@ -101,18 +108,35 @@ async def room_detail(
         )
     ).scalars().all()
     nm = await S.name_map_for(db, list(pinned))
+    anns = (
+        await db.execute(
+            select(ChatAnnouncement).where(ChatAnnouncement.room_id == room_id)
+            .order_by(ChatAnnouncement.pinned.desc(), ChatAnnouncement.id.desc()).limit(100)
+        )
+    ).scalars().all()
+    ann_uids = {a.created_by for a in anns if a.created_by}
+    ann_names: dict[int, str] = {}
+    if ann_uids:
+        aus = (await db.execute(select(User).where(User.id.in_(ann_uids)))).scalars().all()
+        ann_names = {u.id: (u.display_name or u.username) for u in aus}
     return {
         "id": room.id, "name": room.name, "kind": room.kind, "is_default": room.is_default,
         "announcement": room.announcement, "owner_id": room.owner_id, "my_role": role,
         "peer_user_id": room.peer_user_id, "members": members, "bots": bots,
+        "announcements": [{
+            "id": a.id, "content": a.content, "pinned": a.pinned,
+            "created_by": a.created_by, "created_by_name": ann_names.get(a.created_by or 0) or "",
+            "created_at": a.created_at.timestamp() * 1000 if a.created_at else None,
+        } for a in anns],
         "pinned": [await S.serialize_message(db, m, name_map=nm) for m in pinned],
     }
 
 
 async def _room_members(db: AsyncSession, room: ChatRoom) -> list[dict]:
-    """成员列表。默认大群 = 全部内部用户（动态），其余群 = 成员表。
+    """成员列表（含机器人）。默认大群 = 全部内部用户（动态）+ 已入群机器人。
 
-    角色来自成员表（默认大群里未显式入表的用户视为普通成员）。
+    人类成员角色来自成员表（默认大群里未显式入表的用户视为普通成员），群主覆盖。
+    机器人以 agent_id 行入表，可被设为群管理员（role=admin）。
     """
     # 成员表中的角色覆盖
     rows = (
@@ -148,8 +172,18 @@ async def _room_members(db: AsyncSession, room: ChatRoom) -> list[dict]:
         out.append({
             "id": u.id, "user_id": u.id, "role": role,
             "name": u.display_name or u.username, "username": u.username,
-            "is_admin": bool(u.is_admin),
+            "is_admin": bool(u.is_admin), "is_agent": False,
             "muted_until": next((m.muted_until for m in rows if m.user_id == u.id), None),
+        })
+    # 机器人成员（agent_id 行），附角色/禁言
+    for m in rows:
+        if not m.agent_id:
+            continue
+        ag = await db.get(Agent, m.agent_id)
+        out.append({
+            "id": m.agent_id, "user_id": None, "agent_id": m.agent_id, "role": m.role or "member",
+            "name": ag.name if ag else f"机器人#{m.agent_id}", "username": None,
+            "is_admin": False, "is_agent": True, "muted_until": m.muted_until,
         })
     return out
 
@@ -377,10 +411,7 @@ async def mark_read(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await _guard_room(db, user, room_id)
-    m = await S.is_member(db, room_id=room_id, user_id=user.id)
-    if m:
-        m.last_read_at = _now_ms()
-        await db.flush()
+    await S.mark_read(db, room_id=room_id, user_id=user.id, tenant_id=user.tenant_id)
     return {"message": "ok"}
 
 
@@ -418,16 +449,17 @@ async def set_member_role(
     user: User = Depends(require_permission("chat:use")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """设置/取消群管理员（仅群主）。"""
+    """设置/取消群管理员（群主或租户管理员可操作；成员需真实在群）。"""
     room = await _guard_room(db, user, room_id)
     if room.owner_id != user.id and not user.is_admin:
         raise PermissionDeniedError("仅群主可设置群管理员")
     role = (body.get("role") or "member")
     if role not in ("admin", "member"):
         raise ValidationError("role 只能为 admin/member")
-    m = await S.is_member(db, room_id=room_id, user_id=member_user_id)
-    if not m:
+    if not await S.is_member(db, room_id=room_id, user_id=member_user_id):
         raise NotFoundError("该用户不在群里")
+    # 默认大群的虚拟成员：确保持久化后再改角色
+    m = await S.ensure_member_row(db, tenant_id=room.tenant_id, room_id=room_id, user_id=member_user_id)
     m.role = role
     await db.flush()
     return {"message": "已设为群管理员" if role == "admin" else "已取消群管理员"}
@@ -446,7 +478,7 @@ async def remove_member(
     _require_admin_role(role)
     if member_user_id == room.owner_id:
         raise PermissionDeniedError("不能移除群主")
-    m = await S.is_member(db, room_id=room_id, user_id=member_user_id)
+    m = await S.get_member_row(db, room_id=room_id, user_id=member_user_id)
     if m:
         await db.delete(m)
         await db.flush()
@@ -465,10 +497,10 @@ async def mute_member(
     room = await _guard_room(db, user, room_id)
     role = await S.member_role(db, room=room, user_id=user.id, is_admin=bool(user.is_admin))
     _require_admin_role(role)
-    m = await S.is_member(db, room_id=room_id, user_id=member_user_id)
-    if not m:
-        raise NotFoundError("该用户不在群里")
     minutes = int(body.get("minutes") or 0)
+    if not await S.is_member(db, room_id=room_id, user_id=member_user_id):
+        raise NotFoundError("该用户不在群里")
+    m = await S.ensure_member_row(db, tenant_id=room.tenant_id, room_id=room_id, user_id=member_user_id)
     m.muted_until = None if minutes <= 0 else _now_ms() + minutes * 60_000
     await db.flush()
     return {"message": "已解除禁言" if minutes <= 0 else f"已禁言 {minutes} 分钟"}
@@ -481,15 +513,106 @@ async def set_announcement(
     user: User = Depends(require_permission("chat:use")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """设置群公告（管理员以上）。"""
+    """发布群公告（管理员以上）。兼容旧接口：作为新增一条公告。"""
     room = await _guard_room(db, user, room_id)
     role = await S.member_role(db, room=room, user_id=user.id, is_admin=bool(user.is_admin))
     _require_admin_role(role)
-    room.announcement = (body.get("announcement") or "").strip()[:1000] or None
+    content = (body.get("announcement") or "").strip()[:2000]
+    if not content:
+        raise ValidationError("公告内容不能为空")
+    ann = ChatAnnouncement(
+        tenant_id=room.tenant_id, room_id=room.id, content=content,
+        created_by=user.id, pinned=bool(body.get("pinned")),
+    )
+    db.add(ann)
+    # 兼容快照：房间上保留最新一条公告
+    room.announcement = content
     await db.flush()
     await broadcaster.broadcast_room(tenant_id=room.tenant_id, room_id=room.id,
-                                     payload={"type": "announcement", "room_id": room.id, "announcement": room.announcement})
+                                     payload={"type": "announcement", "room_id": room.id, "announcement": content})
+    return {"message": "已发布公告", "id": ann.id}
+
+
+@router.get("/{room_id}/announcements")
+async def list_announcements(
+    room_id: int,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """群公告列表（多条，新的在前；置顶优先）。"""
+    room = await _guard_room(db, user, room_id)
+    rows = (
+        await db.execute(
+            select(ChatAnnouncement).where(ChatAnnouncement.room_id == room.id)
+            .order_by(ChatAnnouncement.pinned.desc(), ChatAnnouncement.id.desc()).limit(100)
+        )
+    ).scalars().all()
+    uids = {a.created_by for a in rows if a.created_by} | {a.updated_by for a in rows if a.updated_by}
+    name_map: dict[int, str] = {}
+    if uids:
+        us = (await db.execute(select(User).where(User.id.in_(uids)))).scalars().all()
+        name_map = {u.id: (u.display_name or u.username) for u in us}
+    return [{
+        "id": a.id, "content": a.content, "pinned": a.pinned,
+        "created_by": a.created_by, "created_by_name": name_map.get(a.created_by or 0) or "",
+        "updated_by": a.updated_by, "created_at": a.created_at.timestamp() * 1000 if a.created_at else None,
+        "updated_at": a.updated_at.timestamp() * 1000 if getattr(a, "updated_at", None) else None,
+    } for a in rows]
+
+
+@router.patch("/{room_id}/announcements/{ann_id}")
+async def update_announcement(
+    room_id: int,
+    ann_id: int,
+    body: dict,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """编辑群公告（管理员以上）。"""
+    room = await _guard_room(db, user, room_id)
+    role = await S.member_role(db, room=room, user_id=user.id, is_admin=bool(user.is_admin))
+    _require_admin_role(role)
+    ann = await db.get(ChatAnnouncement, ann_id)
+    if not ann or ann.room_id != room.id:
+        raise NotFoundError("公告不存在")
+    if "content" in body:
+        content = (body.get("content") or "").strip()[:2000]
+        if not content:
+            raise ValidationError("公告内容不能为空")
+        ann.content = content
+    if "pinned" in body:
+        ann.pinned = bool(body.get("pinned"))
+    ann.updated_by = user.id
+    await db.flush()
     return {"message": "已更新公告"}
+
+
+@router.delete("/{room_id}/announcements/{ann_id}")
+async def delete_announcement(
+    room_id: int,
+    ann_id: int,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """删除群公告（管理员以上）。"""
+    room = await _guard_room(db, user, room_id)
+    role = await S.member_role(db, room=room, user_id=user.id, is_admin=bool(user.is_admin))
+    _require_admin_role(role)
+    ann = await db.get(ChatAnnouncement, ann_id)
+    if not ann or ann.room_id != room.id:
+        raise NotFoundError("公告不存在")
+    await db.delete(ann)
+    await db.flush()
+    # 快照回退到剩余最新一条
+    latest = (
+        await db.execute(
+            select(ChatAnnouncement).where(ChatAnnouncement.room_id == room.id)
+            .order_by(ChatAnnouncement.id.desc()).limit(1)
+        )
+    ).scalar_one_or_none()
+    room.announcement = latest.content if latest else None
+    await db.flush()
+    return {"message": "已删除公告"}
 
 
 # ==================== 群资料 / 群主 / 退群 / 清空（QQ 式）====================
@@ -649,6 +772,33 @@ async def add_bot(
     await broadcaster.broadcast_room(tenant_id=room.tenant_id, room_id=room.id,
                                      payload={"type": "bot_added", "room_id": room.id, "agent_id": aid, "name": ag.name})
     return {"message": f"已添加机器人「{ag.name}」"}
+
+
+@router.post("/{room_id}/bots/{agent_id}/role")
+async def set_bot_role(
+    room_id: int,
+    agent_id: int,
+    body: dict,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """设置/取消机器人管理员（群主或租户管理员可操作）。"""
+    room = await _guard_room(db, user, room_id)
+    if room.owner_id != user.id and not user.is_admin:
+        raise PermissionDeniedError("仅群主可设置群管理员")
+    role = (body.get("role") or "member")
+    if role not in ("admin", "member"):
+        raise ValidationError("role 只能为 admin/member")
+    m = (
+        await db.execute(
+            select(ChatRoomMember).where(ChatRoomMember.room_id == room_id, ChatRoomMember.agent_id == agent_id)
+        )
+    ).scalar_one_or_none()
+    if not m:
+        raise NotFoundError("该机器人不在群里")
+    m.role = role
+    await db.flush()
+    return {"message": "已设为群管理员" if role == "admin" else "已取消群管理员"}
 
 
 @router.delete("/{room_id}/bots/{agent_id}")
