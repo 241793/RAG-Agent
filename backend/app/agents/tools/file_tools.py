@@ -16,8 +16,8 @@ from app.ingest.storage import get_storage
 
 # 支持的文本抽取目标
 _TEXT_TARGETS = {"md", "txt", "csv"}
-# 可生成格式
-_GEN_FORMATS = {"docx", "xlsx", "pdf", "pptx", "md", "csv", "txt"}
+# 纯文本直出格式（含代码/网页类：原样写入，扩展名即最终类型）
+_GEN_FORMATS = {"docx", "xlsx", "pdf", "pptx", "md", "csv", "txt", "html", "svg", "json", "js", "css", "xml", "py"}
 
 _MIME = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -27,6 +27,13 @@ _MIME = {
     "md": "text/markdown",
     "csv": "text/csv",
     "txt": "text/plain",
+    "html": "text/html",
+    "svg": "image/svg+xml",
+    "json": "application/json",
+    "js": "text/javascript",
+    "css": "text/css",
+    "xml": "application/xml",
+    "py": "text/x-python",
 }
 
 
@@ -289,6 +296,9 @@ def _render(args: dict) -> tuple[bytes, str]:
         return content.encode("utf-8"), _MIME["csv"]
     if fmt == "md":
         return content.encode("utf-8"), _MIME["md"]
+    # 网页/代码/结构化文本：原样直出（html/svg/json/js/css/xml/py/txt 等）
+    if fmt in _MIME:
+        return content.encode("utf-8"), _MIME[fmt]
     return content.encode("utf-8"), _MIME["txt"]
 
 
@@ -502,16 +512,18 @@ class _WriteToolMixin:
 class GenerateFileTool(_WriteToolMixin):
     name = "generate_file"
     description = (
-        "根据内容从零生成办公文件（docx/xlsx/pdf/pptx/md/csv/txt）供用户下载。"
-        "docx/pdf 用 content（markdown 文本）；xlsx 用 rows（二维数组）；pptx 用 slides（[{title,bullets}]）。"
+        "根据内容从零生成文件供用户下载。支持的 format：\n"
+        "- 办公文档：docx/xlsx/pdf/pptx（docx/pdf 用 content 传 markdown；xlsx 用 rows；pptx 用 slides）\n"
+        "- 文本/代码/网页：md/csv/txt/html/svg/json/js/css/xml/py（用 content 传原文，原样写出）\n"
+        "生成网页或 SVG 动画时用 format=html / svg，**不要**用 txt（否则扩展名错误）。"
     )
     required_permission = "file:write"
     parameters = {
         "type": "object",
         "properties": {
-            "filename": {"type": "string", "description": "文件名（含扩展名）"},
+            "filename": {"type": "string", "description": "文件名（含扩展名，如 index.html、anim.svg）"},
             "format": {"type": "string", "enum": sorted(_GEN_FORMATS)},
-            "content": {"type": "string", "description": "正文（markdown/纯文本）"},
+            "content": {"type": "string", "description": "正文：办公类传 markdown，代码/网页类传原文"},
             "rows": {"type": "array", "items": {"type": "array", "items": {}}, "description": "xlsx 数据"},
             "slides": {"type": "array", "items": {"type": "object"}, "description": "pptx 幻灯片"},
         },
@@ -526,8 +538,13 @@ class GenerateFileTool(_WriteToolMixin):
         if fmt not in _GEN_FORMATS:
             return ToolResult(content=f"不支持的格式：{fmt}", is_error=True)
         filename = str(args.get("filename") or f"output.{fmt}")
+        # 文件名扩展名以 format 为准；避免出现 index.html.txt 这类双扩展名
         if not filename.lower().endswith(f".{fmt}"):
-            filename = f"{filename}.{fmt}"
+            # 若文件名已带别的扩展名，替换掉；否则追加
+            if "." in Path(filename).name:
+                filename = f"{_stem(filename)}.{fmt}"
+            else:
+                filename = f"{filename}.{fmt}"
         try:
             data, mime = _render(args)
         except Exception as e:  # noqa: BLE001

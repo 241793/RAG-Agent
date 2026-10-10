@@ -53,7 +53,7 @@ export function fileExt(name: string): string {
   return i >= 0 ? name.slice(i + 1).toLowerCase() : ''
 }
 
-const TEXT_EXTS = new Set(['txt', 'md', 'markdown', 'csv', 'log', 'json', 'xml', 'yml', 'yaml'])
+const TEXT_EXTS = new Set(['txt', 'md', 'markdown', 'csv', 'log', 'json', 'xml', 'yml', 'yaml', 'html', 'htm', 'js', 'css', 'py'])
 
 export function renderKind(name: string, type?: string): 'image' | 'video' | 'pdf' | 'text' | 'office' | 'other' {
   const ext = fileExt(name)
