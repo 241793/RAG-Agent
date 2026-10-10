@@ -46,11 +46,14 @@ export default function AgentEditPage() {
   const [testMsgs, setTestMsgs] = useState<{ role: string; content: string }[]>([])
   const [testInput, setTestInput] = useState('')
   const [testStreaming, setTestStreaming] = useState(false)
-  const [adminTools, setAdminTools] = useState<string[]>(ADMIN_TOOLS_FALLBACK)
   const [form] = Form.useForm()
-  const [toolForm] = Form.useForm()
   const [modeForm] = Form.useForm()
   const testListRef = useRef<HTMLDivElement>(null)
+  // 工具开关用受控 state（不依赖 Form 实例，避免隐藏 Tab 下字段读不到值）
+  const [builtinState, setBuiltinState] = useState<Record<string, boolean>>({})
+  const [adminEnabled, setAdminEnabled] = useState(false)
+  const [adminToolsSel, setAdminToolsSel] = useState<string[]>([])
+  const [adminToolsPool, setAdminToolsPool] = useState<string[]>(ADMIN_TOOLS_FALLBACK)
 
   const load = async () => {
     try {
@@ -58,7 +61,10 @@ export default function AgentEditPage() {
       setAgent(a)
       const tc = a.tool_config || {}
       const builtinVals: Record<string, boolean> = {}
-      for (const t of BUILTIN_TOOLS) builtinVals[`bt_${t.name}`] = tc.builtin?.[t.name]?.enabled ?? false
+      for (const t of BUILTIN_TOOLS) builtinVals[t.name] = tc.builtin?.[t.name]?.enabled ?? false
+      setBuiltinState(builtinVals)
+      setAdminEnabled(tc.admin?.enabled ?? false)
+      setAdminToolsSel(tc.admin?.tools ?? [])
       form.setFieldsValue({
         name: a.name, description: a.description, system_prompt: a.system_prompt,
         visibility: a.visibility || 'private',
@@ -67,12 +73,6 @@ export default function AgentEditPage() {
         greeting: a.config?.greeting,
         max_turns: tc.max_turns ?? 4,
       })
-      // 工具开关：独立表单实例（避免与基础配置共用实例导致字段互相覆盖）
-      toolForm.setFieldsValue({
-        ...builtinVals,
-        admin_enabled: tc.admin?.enabled ?? false,
-        admin_tools: tc.admin?.tools ?? [],
-      })
       // 技能参数（按技能 slug 命名空间回填）
       form.setFieldValue('skill_params', (a.config as any)?.params || {})
       setKbs(await kbApi.list())
@@ -80,25 +80,24 @@ export default function AgentEditPage() {
       setSkills(await skillApi.list())
       setModes(await agentApi.modes(agentId))
       setVersions(await agentApi.versions(agentId).catch(() => []))
-      toolApi.adminList().then((list) => setAdminTools(list.map((x) => x.name))).catch(() => {})
+      toolApi.adminList().then((list) => setAdminToolsPool(list.map((x) => x.name))).catch(() => {})
     } catch (e) { message.error(errMsg(e)) }
   }
   useEffect(() => { load() }, [agentId])
 
   const save = async () => {
     const v = await form.validateFields()
-    const tv = await toolForm.validateFields()
     try {
-      // 合并而非覆盖：保留现有 tool_config 中未在本页编辑的字段，避免抹掉其它工具配置
+      // 合并而非覆盖：保留现有 tool_config 中未在本页编辑的字段
       const prev = agent?.tool_config || {}
       const builtin: Record<string, any> = { ...(prev.builtin || {}) }
       for (const t of BUILTIN_TOOLS) {
-        builtin[t.name] = { ...(builtin[t.name] || {}), enabled: !!tv[`bt_${t.name}`] }
+        builtin[t.name] = { ...(builtin[t.name] || {}), enabled: !!builtinState[t.name] }
       }
       const toolConfig = {
         ...prev,
         builtin,
-        admin: { ...(prev.admin || {}), enabled: !!tv.admin_enabled, tools: tv.admin_tools || [] },
+        admin: { ...(prev.admin || {}), enabled: !!adminEnabled, tools: adminToolsSel || [] },
         max_turns: v.max_turns,
       }
       await agentApi.update(agentId, {
@@ -257,30 +256,33 @@ export default function AgentEditPage() {
             forceRender: true,
             children: (
               <Card>
-                <Form form={toolForm} layout="vertical" style={{ maxWidth: 720 }}>
+                <div style={{ maxWidth: 720 }}>
                   <Typography.Title level={5} style={{ marginTop: 0 }}>内置工具</Typography.Title>
                   {BUILTIN_TOOLS.map((t) => (
-                    <Form.Item key={t.name} name={`bt_${t.name}`} valuePropName="checked"
-                      style={{ marginBottom: 8 }}>
-                      <Switch checkedChildren="开" unCheckedChildren="关" />
+                    <div key={t.name} style={{ marginBottom: 8, display: 'flex', alignItems: 'center' }}>
+                      <Switch checkedChildren="开" unCheckedChildren="关"
+                        checked={!!builtinState[t.name]}
+                        onChange={(v) => setBuiltinState((s) => ({ ...s, [t.name]: v }))} />
                       <span style={{ marginLeft: 10 }}>{t.label}</span>
                       <Tag style={{ marginLeft: 8 }} color={t.write ? 'orange' : 'default'}>
                         {t.perm}{t.write ? ' · 需人工确认' : ''}
                       </Tag>
-                    </Form.Item>
+                    </div>
                   ))}
                   <Typography.Title level={5}>管理类工具</Typography.Title>
-                  <Form.Item name="admin_enabled" valuePropName="checked" style={{ marginBottom: 8 }}>
-                    <Switch checkedChildren="开" unCheckedChildren="关" />
+                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center' }}>
+                    <Switch checkedChildren="开" unCheckedChildren="关"
+                      checked={adminEnabled} onChange={setAdminEnabled} />
                     <span style={{ marginLeft: 10 }}>启用管理类工具（创建技能/智能体、写文档等）</span>
-                  </Form.Item>
-                  <Form.Item name="admin_tools" label="限定可用工具（留空=全部）">
-                    <Select mode="multiple" allowClear placeholder="留空=全部管理工具"
-                      showSearch optionFilterProp="value"
-                      options={adminTools.map((n) => ({ value: n, label: n }))} />
-                  </Form.Item>
+                  </div>
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ marginBottom: 4, color: 'var(--color-text-2)', fontSize: 13 }}>限定可用工具（留空=全部）</div>
+                    <Select mode="multiple" allowClear style={{ width: '100%' }} placeholder="留空=全部管理工具"
+                      showSearch optionFilterProp="value" value={adminToolsSel} onChange={setAdminToolsSel}
+                      options={adminToolsPool.map((n) => ({ value: n, label: n }))} />
+                  </div>
                   <Button type="primary" onClick={save}>保存工具配置</Button>
-                </Form>
+                </div>
               </Card>
             ),
           },
