@@ -742,7 +742,9 @@ async def share_conversation(
     await db.flush()
     token = create_file_token(scope="artifact", tenant_id=user.tenant_id, artifact_id=art.id)
     return {
-        "url": f"/api/v1/files/{art.id}/download?inline=1&t={token}",
+        # 分享产物为 md 对话记录：用 attachment 下载（inline 会让浏览器把 markdown
+        # 当纯文本显示/下载，用户容易误以为「生成的文件打不开」）
+        "url": f"/api/v1/files/{art.id}/download?t={token}",
         "download_url": f"/api/v1/files/{art.id}/download?t={token}",
         "expires_in": settings.file_token_expire_minutes * 60,
     }
