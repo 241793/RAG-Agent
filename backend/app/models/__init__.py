@@ -39,7 +39,7 @@ from app.models.knowledge_base import (
     KnowledgeBase,
 )
 from app.models.model_provider import ModelConfig, ModelProvider, UsageLog
-from app.models.chat_room import ChatAnnouncement, ChatMessage, ChatRoom, ChatRoomMember
+from app.models.chat_room import ChatAnnouncement, ChatMessage, ChatRoom, ChatRoomMember, ChatUserRemark
 from app.models.notification import Notification
 from app.models.notify_channel import NotifyChannel
 from app.models.record_template import RecordEntry, RecordTemplate
@@ -82,6 +82,7 @@ __all__ = [
     "Message",
     "ChatRoom",
     "ChatAnnouncement",
+    "ChatUserRemark",
     "ChatRoomMember",
     "ChatMessage",
     "ModelProvider",

@@ -96,6 +96,35 @@ async def create_direct(
     return {"id": room.id, "kind": "direct", "message": "ok"}
 
 
+@router.get("/remarks")
+async def list_remarks(
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """我设置的全部私聊备注 {peer_id: remark}（前端用于覆盖展示对方名称）。"""
+    return {"remarks": {str(k): v for k, v in (await S.get_remarks(db, owner_id=user.id)).items()}}
+
+
+@router.put("/remarks/{peer_id}")
+async def set_remark(
+    peer_id: int,
+    body: dict,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """设置/清除对某人的私聊备注（仅本人可见，不影响对方真实账号）。"""
+    if peer_id == user.id:
+        raise ValidationError("不能给自己设备注")
+    peer = await db.get(User, peer_id)
+    if not peer or peer.tenant_id != user.tenant_id:
+        raise NotFoundError("用户不存在")
+    remark = await S.set_remark(
+        db, tenant_id=user.tenant_id, owner_id=user.id, peer_id=peer_id,
+        remark=(body.get("remark") or ""),
+    )
+    return {"message": "已保存备注" if remark else "已清除备注", "remark": remark}
+
+
 @router.get("/{room_id}")
 async def room_detail(
     room_id: int,

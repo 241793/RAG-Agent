@@ -66,6 +66,23 @@ class ChatRoomMember(Base, IdMixin, TenantMixin, TimestampMixin):
     )
 
 
+class ChatUserRemark(Base, IdMixin, TimestampMixin, TenantMixin):
+    """用户对某人的私聊备注（仅本人可见，不改对方账号）。
+
+    remark 为空/删除记录即恢复显示对方真实姓名。
+    """
+
+    __tablename__ = "chat_user_remark"
+
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)  # 设置者
+    peer_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)  # 被备注的人
+    remark: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "peer_id", name="uq_chat_remark_owner_peer"),
+    )
+
+
 class ChatAnnouncement(Base, IdMixin, TimestampMixin, TenantMixin):
     """群公告记录（QQ 式：一个群可有多条公告，支持编辑/删除）。
 

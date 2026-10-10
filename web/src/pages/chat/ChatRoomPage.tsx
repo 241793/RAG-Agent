@@ -65,6 +65,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   const [pendingCount, setPendingCount] = useState(0)
   const [atOpen, setAtOpen] = useState(false)   // @ 选择器
   const [atQuery, setAtQuery] = useState('')
+  const [remarks, setRemarks] = useState<Record<string, string>>({})  // 私聊备注 {peerId: remark}
 
   const listRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<any>(null)
@@ -75,15 +76,48 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
 
   activeIdRef.current = activeId
 
-  // 拉当前用户 / 可选成员 / 智能体
+  // 拉当前用户 / 可选成员 / 智能体 / 私聊备注
   useEffect(() => {
     fetchMe()
     rbacApi.users(1, 500).then((r) => setUsers(r.items.map((u) => ({ id: u.id, label: u.display_name || u.username })))).catch(() => {})
     agentApi.list().then((a) => setAgents(a.filter((x) => x.type === 'agent'))).catch(() => {})
+    loadRemarks()
   }, [])
+
+  const loadRemarks = async () => {
+    try { const r = await chatRoomApi.remarks(); setRemarks(r.remarks || {}) } catch { /* ignore */ }
+  }
 
   const fetchMe = async () => {
     try { const r = await import('../../api').then((m) => m.authApi.me()); setMe(r) } catch { /* ignore */ }
+  }
+
+  // 展示名：优先用我给对方设的备注，其次真实姓名（仅私聊对端 / 消息发送者本人）
+  const dispName = (userId: number | null | undefined, realName: string) => {
+    if (!userId) return realName
+    return remarks[String(userId)] || realName
+  }
+
+  // 设置/清除某人的私聊备注
+  const editRemark = (userId: number, realName: string, current?: string) => {
+    let v = current || ''
+    Modal.confirm({
+      title: `设置备注 · ${realName}`,
+      icon: null,
+      content: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+          <Input defaultValue={v} maxLength={32} placeholder="输入备注名（留空则清除）" onChange={(e) => { v = e.target.value }} />
+          <span style={{ fontSize: 12, color: 'var(--color-text-3)' }}>仅你可见，不会修改对方的真实用户名。</span>
+        </div>
+      ),
+      onOk: async () => {
+        try {
+          const r = await chatRoomApi.setRemark(userId, v.trim())
+          setRemarks((m) => { const n = { ...m }; if (r.remark) n[String(userId)] = r.remark; else delete n[String(userId)]; return n })
+          message.success(r.message || '已保存')
+        } catch (e) { message.error(errMsg(e)) }
+      },
+    })
   }
 
   const loadRooms = async () => {
@@ -332,11 +366,13 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                 <Dropdown key={r.id} trigger={['contextMenu']} menu={{
                   items: [
                     { key: 'open', label: '打开' },
+                    ...(r.kind === 'direct' && r.peer ? [{ key: 'remark', label: r.peer.remark ? '修改备注' : '设置备注' }] : []),
                     { key: 'read', label: '标为已读', disabled: !r.unread },
                   ],
                   onClick: ({ key, domEvent }) => {
                     domEvent.stopPropagation()
                     if (key === 'open') openRoom(r.id)
+                    else if (key === 'remark' && r.peer) editRemark(r.peer.user_id, r.peer.name, r.peer.remark || '')
                     else if (key === 'read') { chatRoomApi.read(r.id).then(() => setRooms((rs) => rs.map((x) => x.id === r.id ? { ...x, unread: 0 } : x))) }
                   },
                 }}>
@@ -347,11 +383,20 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                   <div style={{ width: '100%', minWidth: 0 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
                       <Typography.Text ellipsis strong={!!r.unread} style={{ fontSize: 13 }}>
-                        {r.kind === 'direct' ? <><UserOutlined /> </> : r.is_default ? '📢 ' : ''}{r.name}
+                        {r.kind === 'direct' ? <><UserOutlined /> </> : r.is_default ? '📢 ' : ''}
+                        {r.kind === 'direct' && r.peer ? (r.peer.remark || r.peer.name) : r.name}
                       </Typography.Text>
                       {!!r.unread && <Tag color="red" style={{ margin: 0 }}>{r.unread}</Tag>}
                     </div>
-                    <Typography.Text type="secondary" ellipsis style={{ fontSize: 12 }}>{r.last_preview || '暂无消息'}</Typography.Text>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                      {r.kind === 'direct' && r.peer && (r.peer.department || r.peer.username) && (
+                        <>
+                          <DeptTag name={r.peer.department} />
+                          {r.peer.username && <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>@{r.peer.username}</span>}
+                        </>
+                      )}
+                      <Typography.Text type="secondary" ellipsis style={{ fontSize: 12, flex: 1, minWidth: 0 }}>{r.last_preview || '暂无消息'}</Typography.Text>
+                    </div>
                   </div>
                 </List.Item>
                 </Dropdown>
@@ -367,7 +412,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
             <Space>
               {detail?.kind === 'direct' ? <UserOutlined /> : (detail?.is_default ? '📢' : <TeamOutlined />)}
               {detail?.kind === 'direct'
-                ? (() => { const peer = detail?.members?.find((m: any) => m.user_id !== me?.id); return peer ? peer.name : '私聊' })()
+                ? (() => { const peer = detail?.members?.find((m: any) => m.user_id !== me?.id); return peer ? dispName(peer.user_id, peer.name) : '私聊' })()
                 : (detail?.name || '选择会话')}
               {detail && detail.kind !== 'direct' && <Tag color={ROLE_LABEL[myRole] === '群主' ? 'gold' : myRole === 'admin' ? 'blue' : 'default'}>{me?.is_admin && !myRole ? '管理员' : (ROLE_LABEL[myRole] || '成员')}</Tag>}
               {detail?.kind === 'direct' && <Tag>私聊</Tag>}
@@ -424,6 +469,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                 {loadingMore && <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-3)' }}>加载中…</div>}
                 {!hasMore && msgs.length > 0 && <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-3)', marginBottom: 8 }}>— 没有更多了 —</div>}
                 {msgs.map((m) => <Bubble key={m.id} m={m} me={me} canAdmin={canAdmin} canPin={canPin}
+                  displayName={dispName(m.sender_id, m.sender_name)}
                   onRevoke={() => revoke(m)} onPin={() => pin(m, !m.pinned)} onReply={() => setReplyTo(m)}
                   onMention={handleMention}
                   onPrivate={() => { if (m.sender_type === 'user' && m.sender_id !== me?.id) startDirect(m.sender_id) }} />)}
@@ -465,11 +511,11 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                           <List size="small" dataSource={atFiltered}
                             locale={{ emptyText: <div style={{ color: 'var(--color-text-3)', fontSize: 12, padding: 8 }}>无匹配成员</div> }}
                             renderItem={(x: any) => (
-                              <List.Item style={{ cursor: 'pointer', padding: '4px 6px' }} onClick={() => handleMention(x.uid, x.name)}>
+                              <List.Item style={{ cursor: 'pointer', padding: '4px 6px' }} onClick={() => handleMention(x.uid, dispName(x.uid, x.name))}>
                                 <Space size={6}>
                                   <Avatar size={20} icon={x.agent ? <RobotOutlined /> : <UserOutlined />}
                                     style={{ background: x.agent ? '#7c3aed' : '#8c8c8c' }} />
-                                  <span style={{ fontSize: 13 }}>{x.name}</span>
+                                  <span style={{ fontSize: 13 }}>{dispName(x.uid, x.name)}</span>
                                   {!x.agent && <DeptTag name={x.department} style={{ fontSize: 10 }} />}
                                   {!x.agent && x.username && <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>@{x.username}</span>}
                                   {x.agent && <Tag color="purple" style={{ margin: 0, fontSize: 10 }}>机器人</Tag>}
@@ -567,6 +613,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
       {/* 成员管理 */}
       <MemberDrawer open={memberOpen} onClose={() => setMemberOpen(false)} detail={detail} users={users} me={me}
         canAdmin={canAdmin} isOwner={myRole === 'owner' || me?.is_admin}
+        dispName={dispName} onRemark={editRemark} remarks={remarks}
         onChanged={() => activeId && openRoom(activeId)}
         onPrivate={(m: any) => { setMemberOpen(false); startDirect(m.user_id) }}
         onLeave={async () => { await chatRoomApi.leaveRoom(detail.id); setMemberOpen(false); setActiveId(null); setDetail(null); loadRooms() }}
@@ -598,9 +645,10 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
 }
 
 /** 单条消息气泡 */
-function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention, onPrivate }: any) {
+function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply, onMention, onPrivate }: any) {
   const mine = m.sender_type === 'user' && m.sender_id === me?.id
   const isBot = m.sender_type === 'agent'
+  const shownName = displayName || m.sender_name
   const canRevoke = mine || canAdmin
   const canPrivate = m.sender_type === 'user' && m.sender_id !== me?.id
   if (m.revoked) {
@@ -618,7 +666,7 @@ function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention, 
       <div style={{ maxWidth: '68%', minWidth: 0 }}>
         <div style={{ fontSize: 12, color: 'var(--color-text-2)', textAlign: mine ? 'right' : 'left', marginBottom: 2 }}>
           {isBot && <Tag color="purple" style={{ marginRight: 4 }}>机器人</Tag>}
-          {m.sender_name}
+          {shownName}
           {!isBot && (m.sender_department || m.sender_username) && (
             <span style={{ marginLeft: 4, display: 'inline-flex', alignItems: 'center', gap: 4, verticalAlign: 'middle' }}>
               <DeptTag name={m.sender_department} />
@@ -681,10 +729,11 @@ function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention, 
   )
 }
 
-function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onChanged, onPrivate, onLeave, onDissolve }: any) {
+function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, dispName, onRemark, remarks, onChanged, onPrivate, onLeave, onDissolve }: any) {
   const [addOpen, setAddOpen] = useState(false)
   const [pick, setPick] = useState<number[]>([])
   const [q, setQ] = useState('')
+  const remarksHas = (uid: number) => !!(uid && remarks && remarks[String(uid)])
   const members: any[] = detail?.members || []
   const isDefault = !!detail?.is_default
   const filtered = useMemo(() => {
@@ -733,9 +782,10 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onC
       <List size="small" dataSource={sorted} renderItem={(m: any) => (
         <List.Item actions={[
           !m.is_agent && m.user_id !== me?.id && <a key="p" onClick={() => onPrivate?.(m)}>私聊</a>,
+          !m.is_agent && m.user_id !== me?.id && <a key="rm" onClick={() => onRemark?.(m.user_id, m.name)}>{remarksHas(m.user_id) ? '改备注' : '备注'}</a>,
           ...(isOwner && m.role !== 'owner' && !m.is_agent ? [
             <a key="r" onClick={() => setRole(m)}>{m.role === 'admin' ? '取消管理' : '设为管理'}</a>,
-            <Popconfirm key="t" title={`转让群主给「${m.name}」？`} onConfirm={() => transfer(m)}><a>转让</a></Popconfirm>,
+            <Popconfirm key="t" title={`转让群主给「${dispName?.(m.user_id, m.name) || m.name}」？`} onConfirm={() => transfer(m)}><a>转让</a></Popconfirm>,
           ] : []),
           ...(isOwner && m.is_agent ? [
             <a key="ar" onClick={() => setRole(m)}>{m.role === 'admin' ? '取消管理' : '设为管理'}</a>,
@@ -744,14 +794,15 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onC
             <a key="m" onClick={() => mute(m)}>{m.muted_until && m.muted_until > Date.now() ? '解除禁言' : '禁言'}</a>,
           ] : []),
           ...(canAdmin && m.role !== 'owner' && !(m.user_id === me?.id) ? [
-            <Popconfirm key="k" title={`把「${m.name}」移出群？`} onConfirm={() => kick(m)}><a>移出</a></Popconfirm>,
+            <Popconfirm key="k" title={`把「${dispName?.(m.user_id, m.name) || m.name}」移出群？`} onConfirm={() => kick(m)}><a>移出</a></Popconfirm>,
           ] : []),
         ].filter(Boolean)}>
           <List.Item.Meta
             avatar={<Avatar size="small" icon={m.is_agent ? <RobotOutlined /> : <UserOutlined />}
               style={{ background: m.role === 'owner' ? '#faad14' : m.is_agent ? '#7c3aed' : '#8c8c8c' }} />}
             title={<Space size={4} wrap>
-              <span>{m.name}</span>
+              <span>{m.is_agent ? m.name : (dispName?.(m.user_id, m.name) || m.name)}</span>
+              {!m.is_agent && remarksHas(m.user_id) && <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>（{m.name}）</span>}
               {m.user_id === me?.id && <Tag>我</Tag>}
               {m.is_agent && <Tag color="purple">机器人</Tag>}
               {m.role === 'owner' && <Tag color="gold">群主</Tag>}

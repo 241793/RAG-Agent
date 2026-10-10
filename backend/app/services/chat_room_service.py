@@ -147,6 +147,7 @@ async def list_rooms(db: AsyncSession, *, tenant_id: int, user_id: int, is_admin
     rooms = (await db.execute(stmt)).scalars().all()
 
     out: list[dict] = []
+    remarks = await get_remarks(db, owner_id=user_id)
     for room in rooms:
         last = (
             await db.execute(
@@ -164,11 +165,24 @@ async def list_rooms(db: AsyncSession, *, tenant_id: int, user_id: int, is_admin
                 )
             )
         ).scalar_one()
-        out.append(_room_brief(room, last=last, unread=int(unread), my_role=(m.role if m else ("owner" if room.owner_id == user_id else ""))))
+        # 私聊：附带对方资料 + 我给他设的备注（备注优先展示）
+        peer = None
+        if room.kind == "direct":
+            peer_id = room.peer_user_id if room.owner_id == user_id else room.owner_id
+            peer = await _user_brief(db, peer_id)
+            if peer:
+                peer["remark"] = remarks.get(peer["user_id"]) or None
+                peer["display"] = peer["remark"] or peer["name"]
+        out.append(_room_brief(
+            room, last=last, unread=int(unread),
+            my_role=(m.role if m else ("owner" if room.owner_id == user_id else "")),
+            peer=peer,
+        ))
     return out
 
 
-def _room_brief(room: ChatRoom, *, last: ChatMessage | None, unread: int, my_role: str) -> dict:
+def _room_brief(room: ChatRoom, *, last: ChatMessage | None, unread: int, my_role: str,
+                peer: dict | None = None) -> dict:
     preview = ""
     if last:
         if last.revoked:
@@ -180,7 +194,7 @@ def _room_brief(room: ChatRoom, *, last: ChatMessage | None, unread: int, my_rol
     return {
         "id": room.id, "name": room.name, "kind": room.kind, "is_default": room.is_default,
         "announcement": room.announcement, "owner_id": room.owner_id, "my_role": my_role,
-        "peer_user_id": room.peer_user_id,
+        "peer_user_id": room.peer_user_id, "peer": peer,
         "last_message_at": room.last_message_at, "last_preview": preview,
         "message_count": room.message_count, "unread": unread,
     }
@@ -270,7 +284,11 @@ async def serialize_message(db: AsyncSession, msg: ChatMessage, *, name_map: dic
 
 
 async def name_map_for(db: AsyncSession, msgs: list[ChatMessage]) -> dict[int, dict]:
-    """构造 {user_id: {name, username, department}} 映射（用于消息序列化）。"""
+    """构造 {user_id: {name, username, department}} 映射（用于消息序列化）。
+
+    注意：私聊备注是「每个观看者各自设置」的，服务端不烘焙进消息（WS 广播会串味），
+    由前端按当前用户的备注映射覆盖展示。
+    """
     from app.models import Department
 
     ids = [m.sender_id for m in msgs if m.sender_type == "user" and m.sender_id]
@@ -289,6 +307,62 @@ async def name_map_for(db: AsyncSession, msgs: list[ChatMessage]) -> dict[int, d
             "department": dept_map.get(u.department_id) if u.department_id else None,
         }
         for u in rows
+    }
+
+
+async def get_remarks(db: AsyncSession, *, owner_id: int) -> dict[int, str]:
+    """某用户设置的全部私聊备注 {peer_id: remark}（仅非空）。"""
+    from app.models import ChatUserRemark
+
+    rows = (
+        await db.execute(select(ChatUserRemark).where(ChatUserRemark.owner_id == owner_id))
+    ).scalars().all()
+    return {r.peer_id: r.remark for r in rows if r.remark}
+
+
+async def set_remark(
+    db: AsyncSession, *, tenant_id: int, owner_id: int, peer_id: int, remark: str,
+) -> str | None:
+    """设置/清除对某人的私聊备注。remark 为空则删除该备注，返回 None。"""
+    from app.models import ChatUserRemark
+
+    text = (remark or "").strip()[:64]
+    row = (
+        await db.execute(
+            select(ChatUserRemark).where(
+                ChatUserRemark.owner_id == owner_id, ChatUserRemark.peer_id == peer_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not text:
+        if row:
+            await db.delete(row)
+            await db.flush()
+        return None
+    if row:
+        row.remark = text
+    else:
+        db.add(ChatUserRemark(tenant_id=tenant_id, owner_id=owner_id, peer_id=peer_id, remark=text))
+    await db.flush()
+    return text
+
+
+async def _user_brief(db: AsyncSession, user_id: int | None) -> dict | None:
+    """某用户的展示信息（姓名/用户名/部门/是否管理员）。"""
+    from app.models import Department
+
+    if not user_id:
+        return None
+    u = await db.get(User, user_id)
+    if not u:
+        return None
+    dept_name = None
+    if u.department_id:
+        d = await db.get(Department, u.department_id)
+        dept_name = d.name if d else None
+    return {
+        "user_id": u.id, "name": u.display_name or u.username, "username": u.username,
+        "department": dept_name, "is_admin": bool(u.is_admin),
     }
 
 

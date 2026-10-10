@@ -500,6 +500,7 @@ export interface ChatRoomBrief {
   announcement?: string | null; owner_id: number; my_role: string
   peer_user_id?: number | null; last_message_at?: number | null
   last_preview?: string; message_count?: number; unread?: number
+  peer?: { user_id: number; name: string; username?: string | null; department?: string | null; is_admin?: boolean; remark?: string | null; display?: string } | null
 }
 export interface ChatMsgItem {
   id: number; room_id: number; sender_id: number | null; sender_type: 'user' | 'agent' | 'system'
@@ -561,6 +562,9 @@ export const chatRoomApi = {
       email?: string | null; phone?: string | null; department_name?: string | null
       is_admin: boolean; roles: string[]; user_type: string; status: string; last_login_at?: string | null
     }>(`/chat/rooms/${roomId}/members/${userId}/profile`).then((r) => r.data),
+  remarks: () => http.get<{ remarks: Record<string, string> }>('/chat/rooms/remarks').then((r) => r.data),
+  setRemark: (peerId: number, remark: string) =>
+    http.put<{ message: string; remark: string | null }>(`/chat/rooms/remarks/${peerId}`, { remark }).then((r) => r.data),
   updateRoom: (roomId: number, data: { name?: string; avatar?: string; announcement?: string }) =>
     http.patch(`/chat/rooms/${roomId}`, data).then((r) => r.data),
   transferOwner: (roomId: number, userId: number) =>
