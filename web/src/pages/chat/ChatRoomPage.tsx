@@ -22,6 +22,15 @@ function fmtTime(ms: number) {
 }
 
 export default function ChatRoomPage() {
+  return (
+    <PageContainer title="企业聊天" subtitle="全员大群 / 群聊 / 私聊 · 支持 @机器人、附件、撤回与置顶">
+      <ChatRoomCore height="calc(100vh - 190px)" />
+    </PageContainer>
+  )
+}
+
+/** 聊天核心 UI（页面与悬浮窗共用）。height 控制容器高度。 */
+export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }: { height?: string; compact?: boolean }) {
   const [rooms, setRooms] = useState<ChatRoomBrief[]>([])
   const [activeId, setActiveId] = useState<number | null>(null)
   const [detail, setDetail] = useState<any>(null)
@@ -223,8 +232,8 @@ export default function ChatRoomPage() {
   ], [detail, me])
 
   return (
-    <PageContainer title="企业聊天" subtitle="全员大群 / 群聊 / 私聊 · 支持 @机器人、附件、撤回与置顶">
-      <div style={{ display: 'flex', gap: 12, height: 'calc(100vh - 190px)', minHeight: 480 }}>
+    <>
+      <div style={{ display: 'flex', gap: 12, height, minHeight: compact ? 320 : 480 }}>
         {/* 左：房间列表 */}
         <Card size="small" style={{ width: 260, flex: '0 0 auto', display: 'flex', flexDirection: 'column' }}
           styles={{ body: { padding: 8, display: 'flex', flexDirection: 'column', height: '100%' } }}
@@ -380,7 +389,7 @@ export default function ChatRoomPage() {
       {/* 机器人 */}
       <BotDrawer open={botOpen} onClose={() => setBotOpen(false)} detail={detail} agents={agents}
         onChanged={() => activeId && openRoom(activeId)} />
-    </PageContainer>
+    </>
   )
 }
 

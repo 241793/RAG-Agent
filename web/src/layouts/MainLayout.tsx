@@ -13,6 +13,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../stores/auth'
 import { ROUTE_PERMS } from '../router/routeMeta'
 import NotificationBell from '../components/NotificationBell'
+import ChatDock from '../components/ChatDock'
 import { rbacApi } from '../api'
 
 const { Header, Sider, Content } = Layout
@@ -270,6 +271,8 @@ export default function MainLayout() {
           <Outlet />
         </Content>
       </Layout>
+      {/* 全局聊天悬浮球：在「企业聊天」页本身不显示，避免与页面内容重复 */}
+      {loc.pathname !== '/chat-room' && (isAdmin || perms.includes('chat:use') || perms.includes('*')) && <ChatDock />}
     </Layout>
   )
 }
