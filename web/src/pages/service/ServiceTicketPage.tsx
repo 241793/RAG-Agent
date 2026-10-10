@@ -6,7 +6,7 @@ import {
 import {
   SendOutlined, UserOutlined, PaperClipOutlined, WechatOutlined, QqOutlined,
   CloudServerOutlined, MessageOutlined, ClockCircleOutlined, BellOutlined, BellFilled,
-  FileTextOutlined, ExclamationCircleOutlined, CustomerServiceOutlined, RobotOutlined, EditOutlined,
+  FileTextOutlined, ExclamationCircleOutlined, CustomerServiceOutlined, RobotOutlined, EditOutlined, DownloadOutlined,
 } from '@ant-design/icons'
 import { serviceTicketApi, chatApi, rbacApi, type ServiceTicketItem, type QuickReplyItem } from '../../api'
 import { errMsg } from '../../api/http'
@@ -310,6 +310,16 @@ export default function ServiceTicketPage() {
             onChange={setStatusFilter}
             options={Object.entries(STATUS).map(([v, m]) => ({ value: v, label: m.label }))} />
           <Can perm="service:manage"><Button onClick={() => setQrOpen(true)}>话术库</Button></Can>
+          <Button icon={<DownloadOutlined />} onClick={() => {
+            const token = localStorage.getItem('access_token') || ''
+            fetch(serviceTicketApi.exportUrl(statusFilter || undefined), { headers: { Authorization: `Bearer ${token}` } })
+              .then((r) => { if (!r.ok) throw new Error('导出失败'); return r.blob() })
+              .then((b) => {
+                const a = document.createElement('a')
+                a.href = URL.createObjectURL(b); a.download = `工单导出_${Date.now()}.csv`
+                a.click(); URL.revokeObjectURL(a.href)
+              }).catch((e) => message.error(errMsg(e)))
+          }}>导出 CSV</Button>
           <Button onClick={load}>刷新</Button>
         </Space>
       }

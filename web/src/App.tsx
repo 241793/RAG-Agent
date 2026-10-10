@@ -48,10 +48,16 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return token ? children : <Navigate to="/login" replace />
 }
 
+/** 登录页守卫：已登录用户不应再看到登录界面（如误点旧通知的 /login 链接）。 */
+function RedirectIfAuthed({ children }: { children: ReactNode }) {
+  const token = localStorage.getItem('access_token')
+  return token ? <Navigate to="/dashboard" replace /> : children
+}
+
 export default function App() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
+      <Route path="/login" element={<RedirectIfAuthed><LoginPage /></RedirectIfAuthed>} />
       <Route
         path="/"
         element={

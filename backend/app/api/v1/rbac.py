@@ -681,8 +681,16 @@ async def delete_dept(
     if children:
         raise ConflictError("请先删除子部门")
     d.is_deleted = True
+    # 该部门下的用户置为「未分配部门」，避免用户挂到已删除部门导致部门级授权/统计异常
+    from sqlalchemy import update as _upd
+
+    moved = await db.execute(
+        _upd(User).where(
+            User.tenant_id == user.tenant_id, User.department_id == dept_id
+        ).values(department_id=None)
+    )
     await db.flush()
-    return {"message": "已删除"}
+    return {"message": "已删除", "unassigned_users": moved.rowcount or 0}
 
 
 # ==================== 用户组 ====================

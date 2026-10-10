@@ -34,6 +34,13 @@ class PasswordChangeRequest(BaseModel):
     new_password: str
 
 
+class ProfileUpdateRequest(BaseModel):
+    """个人资料自助编辑（仅本人可改的字段）。"""
+    display_name: str | None = Field(default=None, max_length=64)
+    email: str | None = Field(default=None, max_length=128)
+    avatar: str | None = Field(default=None, max_length=256)
+
+
 class RoleBrief(BaseModel):
     id: int
     code: str

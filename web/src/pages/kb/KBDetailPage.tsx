@@ -145,6 +145,7 @@ export default function KBDetailPage() {
   const [embModels, setEmbModels] = useState<{ id: number; display_name: string }[]>([])
   const [verDoc, setVerDoc] = useState<Doc | null>(null)
   const [verList, setVerList] = useState<{ id: number; version: number; title: string | null; char_count: number; chunk_count: number; reason: string; created_at: string | null; current: boolean }[]>([])
+  const [verView, setVerView] = useState<{ version: number; content: string | null; chunk_count: number; created_at: string | null } | null>(null)
   const [verLoading, setVerLoading] = useState(false)
   const nav = useNavigate()
   const timer = useRef<any>(null)
@@ -162,6 +163,17 @@ export default function KBDetailPage() {
       await docApi.rollbackVersion(verDoc.id, v)
       message.success(`已回滚到 v${v}`)
       setVerDoc(null); loadDocs(); loadStats()
+    } catch (e) { message.error(errMsg(e)) }
+  }
+
+  const viewVersion = async (v: number) => {
+    if (!verDoc) return
+    try {
+      const d = await docApi.getVersion(verDoc.id, v)
+      setVerView({
+        version: d.version, content: d.content,
+        chunk_count: d.chunk_count, created_at: d.created_at,
+      })
     } catch (e) { message.error(errMsg(e)) }
   }
 
@@ -1055,16 +1067,42 @@ export default function KBDetailPage() {
               render: (v: string) => <Tag>{v === 'reprocess' ? '重新处理' : v === 'reupload' ? '覆盖上传' : '手动'}</Tag> },
             { title: '归档时间', dataIndex: 'created_at', width: 180,
               render: (v: string | null) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
-            { title: '操作', width: 120,
-              render: (_: any, r) => r.current ? <Typography.Text type="secondary">—</Typography.Text> : (
-                canWrite ? (
-                  <Popconfirm title={`回滚到 v${r.version}？当前版本会先被归档`} onConfirm={() => rollbackVersion(r.version)}>
-                    <Button size="small" icon={<HistoryOutlined />}>回滚</Button>
-                  </Popconfirm>
-                ) : <Typography.Text type="secondary">—</Typography.Text>
+            { title: '操作', width: 190,
+              render: (_: any, r) => (
+                <Space>
+                  <Button size="small" icon={<EyeOutlined />} onClick={() => viewVersion(r.version)}>查看</Button>
+                  {r.current ? <Typography.Text type="secondary">—</Typography.Text> : (
+                    canWrite ? (
+                      <Popconfirm title={`回滚到 v${r.version}？当前版本会先被归档`} onConfirm={() => rollbackVersion(r.version)}>
+                        <Button size="small" icon={<HistoryOutlined />}>回滚</Button>
+                      </Popconfirm>
+                    ) : null
+                  )}
+                </Space>
               ) },
           ]}
         />
+      </Drawer>
+
+      {/* 版本内容查看 */}
+      <Drawer title={verView ? `版本内容：v${verView.version}` : '版本内容'} width="60%"
+        open={!!verView} onClose={() => setVerView(null)} destroyOnClose>
+        {verView && (
+          <>
+            <Descriptions size="small" column={3} style={{ marginBottom: 12 }}>
+              <Descriptions.Item label="版本">v{verView.version}</Descriptions.Item>
+              <Descriptions.Item label="分块数">{verView.chunk_count}</Descriptions.Item>
+              <Descriptions.Item label="归档时间">
+                {verView.created_at ? new Date(verView.created_at).toLocaleString('zh-CN') : '-'}
+              </Descriptions.Item>
+            </Descriptions>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>归档正文：</Typography.Text>
+            <pre style={{
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: 'var(--color-bg-subtle)',
+              padding: 12, borderRadius: 6, maxHeight: '66vh', overflow: 'auto', fontSize: 13, marginTop: 6,
+            }}>{verView.content || '(该版本未保存正文，可查看分块快照)'}</pre>
+          </>
+        )}
       </Drawer>
 
       {/* 导入同步配置 */}

@@ -5,7 +5,7 @@ import time
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
@@ -106,9 +106,17 @@ async def delete_provider(
     p = await db.get(ModelProvider, provider_id)
     if not p:
         raise NotFoundError("Provider 不存在")
+    # 级联清理该 Provider 下的模型配置，避免产生指向不存在 Provider 的孤儿配置
+    cfg_count = (
+        await db.execute(
+            select(func.count()).select_from(ModelConfig).where(ModelConfig.provider_id == provider_id)
+        )
+    ).scalar_one()
+    if cfg_count:
+        await db.execute(delete(ModelConfig).where(ModelConfig.provider_id == provider_id))
     await db.delete(p)
     invalidate_cache()
-    return {"message": "已删除"}
+    return {"message": f"已删除（同时清理 {cfg_count} 个关联模型配置）" if cfg_count else "已删除"}
 
 
 @router.post("/{provider_id}/test", response_model=ProviderTestResult)

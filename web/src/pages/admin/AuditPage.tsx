@@ -21,6 +21,8 @@ export default function AuditPage() {
   const [page, setPage] = useState(1)
   const [action, setAction] = useState<string | undefined>()
   const [result, setResult] = useState<string | undefined>()
+  const [resourceType, setResourceType] = useState<string | undefined>()
+  const [resourceId, setResourceId] = useState<string | undefined>()
   const [range, setRange] = useState<any>(null)
   const [detail, setDetail] = useState<AuditLogItem | null>(null)
 
@@ -29,22 +31,45 @@ export default function AuditPage() {
       const params: Record<string, any> = { page, page_size: 20 }
       if (action) params.action = action
       if (result) params.result = result
+      if (resourceType) params.resource_type = resourceType
+      if (resourceId) params.resource_id = resourceId
       if (range?.[0]) params.start = range[0].valueOf()
       if (range?.[1]) params.end = range[1].valueOf()
       const r = await auditApi.list(params)
       setItems(r.items); setTotal(r.total)
     } catch (e) { message.error(errMsg(e)) }
   }
-  useEffect(() => { load() }, [page, action, result, range])
+  useEffect(() => { load() }, [page, action, result, resourceType, resourceId, range])
+
+  // 点某个对象的「对象」列 → 按该对象过滤（追溯它的全部操作）
+  const filterByObject = (r: AuditLogItem) => {
+    if (!r.resource_type) return
+    setResourceType(r.resource_type)
+    setResourceId(r.resource_id != null ? String(r.resource_id) : undefined)
+    setPage(1)
+  }
 
   return (
-    <PageContainer title="审计日志" subtitle="所有写操作与登录行为留痕">
+    <PageContainer title="审计日志" subtitle="所有写操作与登录行为留痕。点击表格「对象」可追溯该对象的全部操作">
       <Card style={{ marginBottom: 16 }} size="small">
         <Space wrap>
           <Input.Search placeholder="按动作前缀过滤，如 user / role / doc"
-            style={{ width: 280 }} allowClear
+            style={{ width: 240 }} allowClear
             onSearch={(v) => { setAction(v || undefined); setPage(1) }} />
-          <Select placeholder="结果" allowClear style={{ width: 120 }}
+          <Select placeholder="对象类型" allowClear style={{ width: 150 }}
+            value={resourceType} onChange={(v) => { setResourceType(v); setPage(1) }}
+            options={[
+              { value: 'user', label: '用户' }, { value: 'user_role', label: '角色授予' },
+              { value: 'role', label: '角色' }, { value: 'department', label: '部门' },
+              { value: 'user_group', label: '用户组' }, { value: 'kb', label: '知识库' },
+              { value: 'document', label: '文档' }, { value: 'agent', label: '智能体' },
+              { value: 'skill', label: '技能' }, { value: 'tool', label: '工具' },
+              { value: 'workflow', label: '工作流' }, { value: 'scheduled_task', label: '定时任务' },
+              { value: 'model_provider', label: '模型 Provider' }, { value: 'system', label: '系统' },
+            ]} />
+          <Input placeholder="对象 ID" style={{ width: 120 }} allowClear
+            value={resourceId} onChange={(e) => { setResourceId(e.target.value || undefined); setPage(1) }} />
+          <Select placeholder="结果" allowClear style={{ width: 110 }}
             value={result} onChange={(v) => { setResult(v); setPage(1) }}
             options={[{ value: 'success', label: '成功' }, { value: 'failure', label: '失败' }]} />
           <DatePicker.RangePicker showTime value={range} onChange={setRange} />
@@ -62,7 +87,14 @@ export default function AuditPage() {
             render: (v: number) => dayjs(v).format('YYYY-MM-DD HH:mm:ss') },
           { title: '操作者', dataIndex: 'actor_name', width: 120, render: (v) => v || '-' },
           { title: '动作', dataIndex: 'action', render: (v: string) => <Tag color={actionColor(v)}>{v}</Tag> },
-          { title: '对象', width: 180, render: (_: any, r: AuditLogItem) => r.resource_type ? `${r.resource_type}#${r.resource_id ?? ''}` : '-' },
+          {
+            title: '对象', width: 180,
+            render: (_: any, r: AuditLogItem) => r.resource_type
+              ? <a onClick={(e) => { e.stopPropagation(); filterByObject(r) }} title="点击追溯该对象的全部操作">
+                {r.resource_type}#{r.resource_id ?? ''}
+              </a>
+              : '-',
+          },
           { title: '结果', dataIndex: 'result', width: 90,
             render: (v: string) => <Tag color={v === 'success' ? 'green' : 'red'}>{v === 'success' ? '成功' : '失败'}</Tag> },
           { title: 'IP', dataIndex: 'ip', width: 130 },

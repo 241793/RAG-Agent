@@ -52,7 +52,9 @@ export default function NotificationBell() {
       try { await notificationApi.markRead([n.id]); setItems((arr) => arr.map((x) => x.id === n.id ? { ...x, read: true } : x)); setUnread((u) => Math.max(0, u - 1)) } catch { /* ignore */ }
     }
     setOpen(false)
-    if (n.link) nav(n.link)
+    // 已登录时不应跳到登录页（历史通知可能残留 /login 链接）→ 兜底跳工作台
+    const target = n.link && n.link !== '/login' ? n.link : '/dashboard'
+    nav(target)
   }
 
   const markAll = async () => {

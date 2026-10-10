@@ -372,8 +372,21 @@ async def delete_kb(
     from sqlalchemy import delete as _del
 
     await db.execute(_del(KBMember).where(KBMember.kb_id == kb_id))
+    # 清理名下文档与分块，避免软删库的文档/分块仍被检索或统计带出（产生脏数据）
+    from app.models import Chunk, Document
+
+    doc_ids = [
+        d for (d,) in (await db.execute(select(Document.id).where(Document.kb_id == kb_id))).all()
+    ]
+    if doc_ids:
+        await db.execute(_del(Chunk).where(Chunk.doc_id.in_(doc_ids)))
+        await db.execute(_del(Document).where(Document.id.in_(doc_ids)))
+    # 清理文档文件夹
+    from app.models import DocumentFolder
+
+    await db.execute(_del(DocumentFolder).where(DocumentFolder.kb_id == kb_id))
     await db.flush()
-    return {"message": "已删除"}
+    return {"message": "已删除", "removed_documents": len(doc_ids)}
 
 
 @router.get("/{kb_id}/members")

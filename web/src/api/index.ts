@@ -191,6 +191,8 @@ export const authApi = {
   login: (username: string, password: string) =>
     http.post('/auth/login', { username, password }).then((r) => r.data),
   me: () => http.get<User>('/auth/me').then((r) => r.data),
+  updateProfile: (data: { display_name?: string; email?: string; avatar?: string }) =>
+    http.patch<User>('/auth/profile', data).then((r) => r.data),
   register: (data: { username: string; password: string; display_name?: string; email?: string; department_id?: number; reason?: string }) =>
     http.post<{ message: string; pending: boolean }>('/auth/register', data).then((r) => r.data),
   registerDepartments: () =>
@@ -1430,6 +1432,8 @@ export interface ServiceTicketItem {
 export const serviceTicketApi = {
   list: (params: { status?: string; assignee_id?: number } = {}) =>
     http.get<ServiceTicketItem[]>('/service-tickets', { params }).then((r) => r.data),
+  exportUrl: (status?: string) =>
+    `${API_BASE}/service-tickets/export${status ? `?status=${encodeURIComponent(status)}` : ''}`,
   get: (id: number) => http.get<ServiceTicketItem>(`/service-tickets/${id}`).then((r) => r.data),
   create: (data: Record<string, any>) => http.post<ServiceTicketItem>('/service-tickets', data).then((r) => r.data),
   reply: (id: number, content: string) =>

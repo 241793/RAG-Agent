@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Button, Card, Col, Descriptions, Form, Input, message, Row, Space, Tag, Typography } from 'antd'
-import { LockOutlined, UserOutlined } from '@ant-design/icons'
+import { Button, Card, Col, Descriptions, Form, Input, message, Modal, Row, Space, Tag, Typography } from 'antd'
+import { EditOutlined, LockOutlined, UserOutlined } from '@ant-design/icons'
 import { authApi } from '../../api'
 import { errMsg } from '../../api/http'
 import { useAuth } from '../../stores/auth'
@@ -34,15 +34,37 @@ export default function AccountPage() {
   const setUser = useAuth((s) => s.setUser)
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
+  const [editProfile, setEditProfile] = useState(false)
+  const [profileForm] = Form.useForm()
+  const [profileSaving, setProfileSaving] = useState(false)
 
   const changePassword = async () => {
     const v = await form.validateFields()
     setSaving(true)
     try {
       await authApi.changePassword(v.old_password, v.new_password)
-      message.success('密码已修改，请牢记新密码')
+      message.success('密码已修改，请重新登录')
       form.resetFields()
+      // 密码修改会吊销旧 token，主动登出并跳登录页
+      setTimeout(() => { useAuth.getState().logout(); window.location.href = '/login' }, 1200)
     } catch (e) { message.error(errMsg(e)) } finally { setSaving(false) }
+  }
+
+  const openProfileEdit = () => {
+    profileForm.setFieldsValue({ display_name: user?.display_name, email: user?.email })
+    setEditProfile(true)
+  }
+
+  const saveProfile = async () => {
+    const v = await profileForm.validateFields().catch(() => null)
+    if (!v) return
+    setProfileSaving(true)
+    try {
+      const u = await authApi.updateProfile(v)
+      setUser(u)
+      message.success('资料已保存')
+      setEditProfile(false)
+    } catch (e) { message.error(errMsg(e)) } finally { setProfileSaving(false) }
   }
 
   const refresh = async () => {
@@ -52,12 +74,14 @@ export default function AccountPage() {
   return (
     <PageContainer
       title="我的账号"
-      subtitle="查看你的资料、角色与权限，并可修改登录密码"
+      subtitle="查看你的资料、角色与权限，可修改姓名/邮箱与登录密码"
       extra={<Button onClick={refresh}>刷新</Button>}
     >
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={14}>
-          <Card title={<Space><UserOutlined />账号资料</Space>} style={{ marginBottom: 16 }}>
+          <Card title={<Space><UserOutlined />账号资料</Space>}
+            extra={<Button size="small" icon={<EditOutlined />} onClick={openProfileEdit}>编辑资料</Button>}
+            style={{ marginBottom: 16 }}>
             <Descriptions column={1} size="small">
               <Descriptions.Item label="用户名">{user?.username}</Descriptions.Item>
               <Descriptions.Item label="姓名">{user?.display_name || '-'}</Descriptions.Item>
@@ -74,6 +98,9 @@ export default function AccountPage() {
                 </Space>
               </Descriptions.Item>
             </Descriptions>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+              用户名、部门与角色由管理员维护；姓名与邮箱可自行修改。
+            </Typography.Paragraph>
           </Card>
 
           <Card title={<Space><LockOutlined />修改密码</Space>}>
@@ -81,7 +108,9 @@ export default function AccountPage() {
               <Form.Item name="old_password" label="原密码" rules={[{ required: true, message: '请输入原密码' }]}>
                 <Input.Password autoComplete="current-password" />
               </Form.Item>
-              <Form.Item name="new_password" label="新密码" rules={[{ required: true, message: '请输入新密码' }, { min: 6, message: '至少 6 位' }]}>
+              <Form.Item name="new_password" label="新密码"
+                rules={[{ required: true, message: '请输入新密码' }, { min: 8, message: '至少 8 位' }]}
+                extra="至少 8 位，需含字母、数字、符号中的至少两类（大小写不限）">
                 <Input.Password autoComplete="new-password" />
               </Form.Item>
               <Form.Item name="confirm" label="确认新密码" dependencies={['new_password']}
@@ -97,6 +126,9 @@ export default function AccountPage() {
                 <Input.Password autoComplete="new-password" />
               </Form.Item>
               <Button type="primary" loading={saving} onClick={changePassword}>保存</Button>
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 12 }}>
+                修改后需重新登录
+              </Typography.Text>
             </Form>
           </Card>
         </Col>
@@ -118,6 +150,21 @@ export default function AccountPage() {
           </Card>
         </Col>
       </Row>
+
+      <Modal title="编辑资料" open={editProfile} onOk={saveProfile} confirmLoading={profileSaving}
+        onCancel={() => setEditProfile(false)} destroyOnClose>
+        <Form form={profileForm} layout="vertical">
+          <Form.Item name="display_name" label="姓名/昵称" rules={[{ required: true, message: '请输入姓名' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="email" label="邮箱" rules={[{ type: 'email', message: '邮箱格式不正确' }]}>
+            <Input placeholder="可选" />
+          </Form.Item>
+        </Form>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          用户名、部门与角色由管理员维护，此处不可修改。
+        </Typography.Text>
+      </Modal>
     </PageContainer>
   )
 }

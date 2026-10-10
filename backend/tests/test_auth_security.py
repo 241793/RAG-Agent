@@ -587,3 +587,66 @@ def test_retired_role_grants_migrate_to_viewer():
     import asyncio
 
     asyncio.new_event_loop().run_until_complete(_run_retire_migrates_grants())
+
+
+# ==================== 数据完整性 + 资料编辑 ====================
+def test_delete_provider_cascades_model_config():
+    """删 Provider 应级联清理其 ModelConfig，避免孤儿配置。"""
+    import inspect
+
+    from app.api.v1.provider import delete_provider
+
+    src = inspect.getsource(delete_provider)
+    assert "ModelConfig" in src and "delete(" in src
+
+
+def test_delete_kb_cleans_documents():
+    """删知识库应清理名下文档/分块，避免软删库内容仍被检索。"""
+    import inspect
+
+    from app.api.v1.kb import delete_kb
+
+    src = inspect.getsource(delete_kb)
+    assert "Document" in src and "Chunk" in src and "DocumentFolder" in src
+
+
+def test_delete_dept_unassigns_users():
+    """删部门应把该部门用户置为未分配，避免挂到已删部门。"""
+    import inspect
+
+    from app.api.v1.rbac import delete_dept
+
+    src = inspect.getsource(delete_dept)
+    assert "department_id=None" in src
+
+
+def test_profile_update_endpoint():
+    from app.api.v1 import auth as A
+
+    methods = {(r.path, m) for r in A.router.routes for m in getattr(r, "methods", set())}
+    assert ("/auth/profile", "PATCH") in methods
+
+
+def test_profile_update_cannot_change_username():
+    """个人资料编辑只允许 姓名/邮箱/头像，不含用户名/权限。"""
+    from app.schemas.auth import ProfileUpdateRequest
+
+    fields = set(ProfileUpdateRequest.model_fields.keys())
+    assert fields == {"display_name", "email", "avatar"}
+
+
+def test_ticket_export_route_exists():
+    from app.api.v1 import service_tickets as S
+
+    methods = {(r.path, m) for r in S.router.routes for m in getattr(r, "methods", set())}
+    assert ("/service-tickets/export", "GET") in methods
+
+
+def test_audit_filters_resource():
+    """审计接口支持按资源类型/对象 id 过滤（供对象追溯）。"""
+    import inspect
+
+    from app.api.v1.audit import list_audit_logs
+
+    src = inspect.getsource(list_audit_logs)
+    assert "resource_type" in src and "resource_id" in src

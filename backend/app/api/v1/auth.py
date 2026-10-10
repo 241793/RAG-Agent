@@ -24,6 +24,7 @@ from app.models import Department, Role, User, UserRole
 from app.schemas.auth import (
     LoginRequest,
     PasswordChangeRequest,
+    ProfileUpdateRequest,
     RefreshRequest,
     RegisterRequest,
     RoleBrief,
@@ -229,6 +230,42 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)) -> T
         access_token=create_access_token(user.id, user.tenant_id, token_version=tv),
         refresh_token=create_refresh_token(user.id, user.tenant_id, tv),
     )
+
+
+@router.patch("/profile", response_model=UserOut)
+async def update_profile(
+    body: ProfileUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    """自助修改个人资料（姓名/邮箱/头像）。仅本人可改，不可改用户名与权限。"""
+    from app.core.errors import ConflictError
+    from app.services.audit_service import record_audit
+
+    patch = body.model_dump(exclude_unset=True)
+    if "email" in patch and patch["email"]:
+        # 邮箱在本租户内唯一
+        exists = (
+            await db.execute(
+                select(User).where(
+                    User.tenant_id == user.tenant_id, User.email == patch["email"], User.id != user.id
+                )
+            )
+        ).scalar_one_or_none()
+        if exists:
+            raise ConflictError("该邮箱已被其他账号使用")
+    for k, v in patch.items():
+        setattr(user, k, v)
+    await db.flush()
+    record_audit(
+        db, action="user.profile_update", resource_type="user", resource_id=user.id,
+        tenant_id=user.tenant_id, actor_id=user.id, actor_name=user.username,
+    )
+    out = UserOut.model_validate(user)
+    if user.department_id:
+        dept = await db.get(Department, user.department_id)
+        out.department_name = dept.name if dept else None
+    return out
 
 
 @router.get("/me", response_model=UserOut)
