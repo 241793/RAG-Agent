@@ -115,7 +115,31 @@ async def list_messages(
             select(Message).where(Message.conversation_id == conv_id).order_by(Message.id.asc())
         )
     ).scalars().all()
-    return [MessageOut.model_validate(r) for r in rows]
+    out = [MessageOut.model_validate(r) for r in rows]
+    # 兜底：历史消息若未记录 artifacts（旧版本生成的文件），按本会话产物 + 文件名
+    # 出现在该条消息内容中回填，保证「生成的文件」区可见、可预览。
+    from app.models import Artifact
+
+    arts = (
+        await db.execute(
+            select(Artifact).where(
+                Artifact.conversation_id == conv_id, Artifact.source == "generated"
+            ).order_by(Artifact.id.asc())
+        )
+    ).scalars().all()
+    if arts:
+        for mo in out:
+            if mo.role != "assistant" or mo.artifacts:
+                continue
+            content = mo.content or ""
+            matched = [
+                {"file_key": a.file_key, "artifact_id": a.id, "name": a.file_name,
+                 "mime": a.mime, "size": a.size}
+                for a in arts if a.file_name and a.file_name in content
+            ]
+            if matched:
+                mo.artifacts = matched
+    return out
 
 
 @router.get("/conversations/{conv_id}/usage")

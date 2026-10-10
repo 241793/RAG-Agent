@@ -256,6 +256,7 @@ async def stream_answer(
     collected = ""
     collected_reasoning = ""
     usage: dict = {}
+    tool_records: list[dict] = []  # 工具调用记录（含生成产物的 data，用于回填 artifacts）
     suspended_action_id: int | None = None
 
     # 工具装配（按权限过滤）：仅当 use_tools 时走 ReAct 循环
@@ -345,6 +346,15 @@ async def stream_answer(
                 elif t == "usage":
                     usage.update(evt.get("usage") or {})
                     yield evt
+                elif t == "tool_result":
+                    # 记录工具结果（含产物 data.artifact_id），供落库回填 artifacts
+                    tool_records.append({
+                        "id": evt.get("id"), "name": evt.get("name"), "arguments": "",
+                        "result": (evt.get("content") or "")[:2000],
+                        "is_error": evt.get("is_error"),
+                        "data": evt.get("data") if isinstance(evt.get("data"), dict) else None,
+                    })
+                    yield evt
                 elif t == "_suspended":
                     suspended_action_id = evt.get("action_id")
                     yield {"type": "done", "message_id": None, "suspended": True}
@@ -383,6 +393,13 @@ async def stream_answer(
 
     norm = normalize_usage(usage)
 
+    # 收集 AI 产物（generate_file 等 → 前端「生成的文件」下载区）
+    artifacts = [
+        {k: r["data"].get(k) for k in ("file_key", "artifact_id", "name", "mime", "size", "url")}
+        for r in tool_records
+        if r.get("data") and r["data"].get("artifact_id")
+    ]
+
     # 落助手消息
     asst = Message(
         tenant_id=ps.tenant_id,
@@ -391,6 +408,8 @@ async def stream_answer(
         content=collected,
         reasoning=collected_reasoning or None,
         citations=[c.model_dump() for c in citations],
+        tool_calls=tool_records or None,
+        artifacts=artifacts or None,
         usage=norm,
         model=rm.model_name,
         latency_ms=latency,
