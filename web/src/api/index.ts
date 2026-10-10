@@ -539,6 +539,13 @@ export const chatRoomApi = {
     http.post(`/chat/rooms/${roomId}/members/${userId}/mute`, { minutes }).then((r) => r.data),
   setAnnouncement: (roomId: number, announcement: string) =>
     http.post(`/chat/rooms/${roomId}/announcement`, { announcement }).then((r) => r.data),
+  updateRoom: (roomId: number, data: { name?: string; avatar?: string; announcement?: string }) =>
+    http.patch(`/chat/rooms/${roomId}`, data).then((r) => r.data),
+  transferOwner: (roomId: number, userId: number) =>
+    http.post(`/chat/rooms/${roomId}/transfer`, { user_id: userId }).then((r) => r.data),
+  leaveRoom: (roomId: number) => http.post(`/chat/rooms/${roomId}/leave`).then((r) => r.data),
+  clearMessages: (roomId: number) => http.post(`/chat/rooms/${roomId}/clear`).then((r) => r.data),
+  dissolveRoom: (roomId: number) => http.post(`/chat/rooms/${roomId}/dissolve`).then((r) => r.data),
   addBot: (roomId: number, agentId: number) =>
     http.post(`/chat/rooms/${roomId}/bots`, { agent_id: agentId }).then((r) => r.data),
   removeBot: (roomId: number, agentId: number) =>

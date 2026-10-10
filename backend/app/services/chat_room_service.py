@@ -55,13 +55,26 @@ async def ensure_default_room(db: AsyncSession, tenant_id: int) -> ChatRoom:
 
 
 async def is_member(db: AsyncSession, *, room_id: int, user_id: int) -> ChatRoomMember | None:
-    return (
+    """是否为成员。默认大群：所有内部用户天然是成员（动态，不依赖成员表）。
+
+    非默认群仍以成员表为准。
+    """
+    m = (
         await db.execute(
             select(ChatRoomMember).where(
                 ChatRoomMember.room_id == room_id, ChatRoomMember.user_id == user_id
             )
         )
     ).scalar_one_or_none()
+    if m:
+        return m
+    # 默认大群：任何内部用户视为成员（构造一个内存对象，不落库）
+    room = await db.get(ChatRoom, room_id)
+    if room and room.is_default and room.tenant_id:
+        u = await db.get(User, user_id)
+        if u and u.tenant_id == room.tenant_id and getattr(u, "user_type", "internal") != "external":
+            return ChatRoomMember(room_id=room_id, user_id=user_id, role="member")
+    return None
 
 
 async def member_role(db: AsyncSession, *, room: ChatRoom, user_id: int, is_admin: bool) -> str:

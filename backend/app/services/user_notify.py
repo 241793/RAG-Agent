@@ -95,15 +95,18 @@ async def notify_user_review_result(
         name = getattr(user, "display_name", None) or user.username
         if approved:
             title = "您的注册申请已通过"
-            body = f"账号「{name}」已通过审核，现在可以登录使用。"
+            body = f"账号「{name}」已通过审核，可以正常使用了。"
             level = "success"
+            # 通过后跳到工作台；不要用 /login（用户已登录，跳登录页会被登出/显示登录界面）
+            link = "/dashboard"
         else:
             title = "您的注册申请未通过"
             body = f"账号「{name}」的注册申请未通过，如有疑问请联系管理员。"
             level = "warning"
+            link = "/account"
         await create_inapp(db, tenant_id=tenant_id, user_id=user.id, msg=NotificationMessage(
             title=title, body=body, level=level, kind="system",
-            link="/login", ref_type="user", ref_id=user.id,
+            link=link, ref_type="user", ref_id=user.id,
         ))
     except Exception:  # noqa: BLE001
         logger.exception("notify_user_review_result_failed", user_id=getattr(user, "id", None))

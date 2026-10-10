@@ -4,12 +4,11 @@ import {
 } from 'antd'
 import {
   SendOutlined, PlusOutlined, TeamOutlined, RobotOutlined, UserOutlined, PaperClipOutlined,
-  PushpinOutlined, DeleteOutlined, MoreOutlined, ReloadOutlined, RollbackOutlined, SoundOutlined,
+  PushpinOutlined, DeleteOutlined, MoreOutlined, ReloadOutlined, RollbackOutlined, EditOutlined,
 } from '@ant-design/icons'
 import { chatRoomApi, rbacApi, agentApi, chatApi, type ChatRoomBrief, type ChatMsgItem } from '../../api'
 import { errMsg } from '../../api/http'
 import AttachmentView from '../../components/AttachmentView'
-import PageContainer from '../../components/PageContainer'
 
 const ROLE_LABEL: Record<string, string> = { owner: '群主', admin: '管理员', member: '成员' }
 
@@ -22,11 +21,8 @@ function fmtTime(ms: number) {
 }
 
 export default function ChatRoomPage() {
-  return (
-    <PageContainer title="企业聊天" subtitle="全员大群 / 群聊 / 私聊 · 支持 @机器人、附件、撤回与置顶">
-      <ChatRoomCore height="calc(100vh - 190px)" />
-    </PageContainer>
-  )
+  // 不套 PageContainer 标题/副标题，让聊天框占满整屏高度（标题信息移到聊天内部展示）
+  return <ChatRoomCore height="calc(100vh - 105px)" />
 }
 
 /** 聊天核心 UI（页面与悬浮窗共用）。height 控制容器高度。 */
@@ -336,7 +332,9 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                 {loadingMore && <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-3)' }}>加载中…</div>}
                 {!hasMore && msgs.length > 0 && <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-3)', marginBottom: 8 }}>— 没有更多了 —</div>}
                 {msgs.map((m) => <Bubble key={m.id} m={m} me={me} canAdmin={canAdmin} canPin={canPin}
-                  onRevoke={() => revoke(m)} onPin={() => pin(m, !m.pinned)} onReply={() => setReplyTo(m)} onMention={handleMention} />)}
+                  onRevoke={() => revoke(m)} onPin={() => pin(m, !m.pinned)} onReply={() => setReplyTo(m)}
+                  onMention={handleMention}
+                  onPrivate={() => { if (m.sender_type === 'user' && m.sender_id !== me?.id) startDirect(m.sender_id) }} />)}
               </div>
 
               {pendingCount > 0 && (
@@ -411,19 +409,51 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                   {detail.kind !== 'direct' && canAdmin && (
                     <Dropdown menu={{
                       items: [
-                        { key: 'members', label: '成员与管理', icon: <UserOutlined /> },
+                        { key: 'photo', label: '查看群相册/文件' },
+                        { type: 'divider' },
+                        { key: 'info', label: '群资料', icon: <EditOutlined /> },
+                        { key: 'members', label: '群成员与管理', icon: <UserOutlined /> },
                         { key: 'bots', label: '机器人', icon: <RobotOutlined /> },
                         { key: 'announcement', label: '设置群公告', icon: <PushpinOutlined /> },
+                        { type: 'divider' },
+                        { key: 'clear', label: '清空聊天记录', danger: true },
                       ],
                       onClick: ({ key }) => {
-                        if (key === 'members') setMemberOpen(true)
+                        if (key === 'info') {
+                          let nm = detail.name, an = detail.announcement || ''
+                          Modal.confirm({
+                            title: '群资料', icon: null, width: 480,
+                            content: (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                                <span style={{ fontSize: 12, color: 'var(--color-text-2)' }}>群名称</span>
+                                <Input defaultValue={nm} disabled={detail.is_default} onChange={(e) => { nm = e.target.value }} />
+                                <span style={{ fontSize: 12, color: 'var(--color-text-2)' }}>群公告</span>
+                                <Input.TextArea defaultValue={an} rows={3} onChange={(e) => { an = e.target.value }} />
+                              </div>
+                            ),
+                            onOk: async () => {
+                              const r = await chatRoomApi.updateRoom(detail.id, { name: nm, announcement: an })
+                              setDetail({ ...detail, name: r.name || nm, announcement: an })
+                              loadRooms(); message.success('已保存')
+                            },
+                          })
+                        } else if (key === 'members') setMemberOpen(true)
                         else if (key === 'bots') setBotOpen(true)
-                        else if (key === 'announcement') {
+                        else if (key === 'photo') {
+                          setMsgs((cur) => cur)  // 相册用消息过滤实现，下个版本可做独立页
+                          message.info('可在聊天中查看历史图片/文件；独立相册后续开放')
+                        } else if (key === 'announcement') {
                           let v = detail.announcement || ''
                           Modal.confirm({
                             title: '设置群公告', icon: null,
                             content: <Input.TextArea defaultValue={v} rows={3} onChange={(e) => { v = e.target.value }} />,
                             onOk: async () => { await chatRoomApi.setAnnouncement(detail.id, v); setDetail({ ...detail, announcement: v }) },
+                          })
+                        } else if (key === 'clear') {
+                          Modal.confirm({
+                            title: '清空聊天记录？', content: '所有消息将被撤回（成员与群结构保留），不可恢复。',
+                            okButtonProps: { danger: true },
+                            onOk: async () => { await chatRoomApi.clearMessages(detail.id); setMsgs([]); message.success('已清空') },
                           })
                         }
                       },
@@ -447,7 +477,10 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
       {/* 成员管理 */}
       <MemberDrawer open={memberOpen} onClose={() => setMemberOpen(false)} detail={detail} users={users} me={me}
         canAdmin={canAdmin} isOwner={myRole === 'owner' || me?.is_admin}
-        onChanged={() => activeId && openRoom(activeId)} />
+        onChanged={() => activeId && openRoom(activeId)}
+        onPrivate={(m: any) => { setMemberOpen(false); startDirect(m.user_id) }}
+        onLeave={async () => { await chatRoomApi.leaveRoom(detail.id); setMemberOpen(false); setActiveId(null); setDetail(null); loadRooms() }}
+        onDissolve={async () => { await chatRoomApi.dissolveRoom(detail.id); setMemberOpen(false); setActiveId(null); setDetail(null); loadRooms() }} />
 
       {/* 机器人 */}
       <BotDrawer open={botOpen} onClose={() => setBotOpen(false)} detail={detail} agents={agents}
@@ -457,10 +490,11 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
 }
 
 /** 单条消息气泡 */
-function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention }: any) {
+function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention, onPrivate }: any) {
   const mine = m.sender_type === 'user' && m.sender_id === me?.id
   const isBot = m.sender_type === 'agent'
   const canRevoke = mine || canAdmin
+  const canPrivate = m.sender_type === 'user' && m.sender_id !== me?.id
   if (m.revoked) {
     return <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-3)', margin: '6px 0' }}>
       「{m.sender_name}」撤回了一条消息
@@ -468,19 +502,23 @@ function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention }
   }
   return (
     <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexDirection: mine ? 'row-reverse' : 'row' }}>
-      <Avatar size={34} icon={isBot ? <RobotOutlined /> : <UserOutlined />}
-        style={{ background: isBot ? '#7c3aed' : (mine ? '#2563eb' : '#8c8c8c'), flexShrink: 0 }} />
+      <Tooltip title={canPrivate ? '点击私聊' : ''}>
+        <Avatar size={34} icon={isBot ? <RobotOutlined /> : <UserOutlined />}
+          onClick={canPrivate ? onPrivate : undefined}
+          style={{ background: isBot ? '#7c3aed' : (mine ? '#2563eb' : '#8c8c8c'), flexShrink: 0, cursor: canPrivate ? 'pointer' : 'default' }} />
+      </Tooltip>
       <div style={{ maxWidth: '68%', minWidth: 0 }}>
         <div style={{ fontSize: 12, color: 'var(--color-text-2)', textAlign: mine ? 'right' : 'left', marginBottom: 2 }}>
           {isBot && <Tag color="purple" style={{ marginRight: 4 }}>机器人</Tag>}
           {m.sender_name} <span style={{ color: 'var(--color-text-3)' }}>{fmtTime(m.created_at)}</span>
           {m.pinned && <PushpinOutlined style={{ color: 'var(--color-warn)', marginLeft: 4 }} />}
         </div>
-        {/* 消息体：右键弹出操作菜单（回复/@/复制/置顶/撤回） */}
+        {/* 消息体：右键弹出操作菜单（回复/@/私聊/复制/置顶/撤回） */}
         <Dropdown trigger={['contextMenu']} menu={{
           items: [
             { key: 'reply', label: '回复' },
             { key: 'at', label: `@ ${m.sender_name}` },
+            ...(canPrivate ? [{ key: 'private', label: '私聊' }] : []),
             { key: 'copy', label: '复制' },
             { type: 'divider' },
             ...(canPin ? [{ key: 'pin', label: m.pinned ? '取消置顶' : '置顶' }] : []),
@@ -489,6 +527,7 @@ function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention }
           onClick: ({ key }) => {
             if (key === 'reply') onReply()
             else if (key === 'at') onMention(m.sender_id, m.sender_name)
+            else if (key === 'private') onPrivate()
             else if (key === 'copy') { navigator.clipboard?.writeText(m.content || ''); message.success('已复制') }
             else if (key === 'pin') onPin()
             else if (key === 'revoke') Modal.confirm({ title: '撤回该消息？', onOk: onRevoke })
@@ -527,34 +566,88 @@ function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention }
   )
 }
 
-function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onChanged }: any) {
+function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onChanged, onPrivate, onLeave, onDissolve }: any) {
   const [addOpen, setAddOpen] = useState(false)
   const [pick, setPick] = useState<number[]>([])
-  const members = detail?.members || []
+  const [q, setQ] = useState('')
+  const members: any[] = detail?.members || []
+  const isDefault = !!detail?.is_default
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    return s ? members.filter((m) => (m.name || '').toLowerCase().includes(s) || (m.username || '').toLowerCase().includes(s)) : members
+  }, [members, q])
+  const roleRank: Record<string, number> = { owner: 0, admin: 1, member: 2 }
+  const sorted = useMemo(() => [...filtered].sort((a, b) => (roleRank[a.role] ?? 9) - (roleRank[b.role] ?? 9)), [filtered])
+  const admins = members.filter((m) => m.role === 'admin').length
+
   const add = async () => {
     try { await chatRoomApi.addMembers(detail.id, pick); message.success('已添加'); setPick([]); setAddOpen(false); onChanged() }
     catch (e) { message.error(errMsg(e)) }
   }
+  const setRole = async (m: any) => {
+    try { await chatRoomApi.setRole(detail.id, m.user_id, m.role === 'admin' ? 'member' : 'admin'); onChanged() }
+    catch (e) { message.error(errMsg(e)) }
+  }
+  const mute = async (m: any) => {
+    const mins = window.prompt(`禁言「${m.name}」多少分钟？（0 = 解除）`, '10')
+    if (mins == null) return
+    try { const r = await chatRoomApi.mute(detail.id, m.user_id, Number(mins) || 0); message.success(r.message || '已操作'); onChanged() }
+    catch (e) { message.error(errMsg(e)) }
+  }
+  const kick = async (m: any) => {
+    try { await chatRoomApi.removeMember(detail.id, m.user_id); onChanged() }
+    catch (e) { message.error(errMsg(e)) }
+  }
+  const transfer = async (m: any) => {
+    try { await chatRoomApi.transferOwner(detail.id, m.user_id); message.success('已转让群主'); onChanged() }
+    catch (e) { message.error(errMsg(e)) }
+  }
+
   return (
-    <Drawer title={`成员管理${detail ? `（${members.length}）` : ''}`} width={460} open={open} onClose={onClose}
-      extra={canAdmin && <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>添加成员</Button>}>
-      <List size="small" dataSource={members} renderItem={(m: any) => (
-        <List.Item actions={canAdmin ? [
-          isOwner && m.role !== 'owner' && (
-            <a key="r" onClick={async () => { await chatRoomApi.setRole(detail.id, m.user_id, m.role === 'admin' ? 'member' : 'admin'); onChanged() }}>
-              {m.role === 'admin' ? '取消管理员' : '设为管理员'}
-            </a>
-          ),
-          m.role !== 'owner' && <a key="m" onClick={async () => {
-            const mins = window.prompt('禁言分钟数（0=解除）', '10'); if (mins == null) return
-            await chatRoomApi.mute(detail.id, m.user_id, Number(mins) || 0); message.success('已操作')
-          }}>禁言</a>,
-          m.role !== 'owner' && <Popconfirm key="d" title="移出该成员？" onConfirm={async () => { await chatRoomApi.removeMember(detail.id, m.user_id); onChanged() }}><a>移出</a></Popconfirm>,
-        ].filter(Boolean) : []}>
-          <List.Item.Meta avatar={<Avatar size="small" icon={<UserOutlined />} />}
-            title={<Space>{m.name}{m.user_id === me?.id && <Tag>我</Tag>}{m.role !== 'member' && <Tag color={m.role === 'owner' ? 'gold' : 'blue'}>{ROLE_LABEL[m.role]}</Tag>}</Space>} />
+    <Drawer title={`群成员（${members.length}）${admins ? ` · 管理员 ${admins}` : ''}`} width={480} open={open} onClose={onClose}
+      extra={canAdmin && !isDefault && <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>添加成员</Button>}>
+      <Input.Search placeholder="搜索成员" allowClear value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 10 }} />
+      <List size="small" dataSource={sorted} renderItem={(m: any) => (
+        <List.Item actions={[
+          m.user_id !== me?.id && <a key="p" onClick={() => onPrivate?.(m)}>私聊</a>,
+          ...(isOwner && m.role !== 'owner' ? [
+            <a key="r" onClick={() => setRole(m)}>{m.role === 'admin' ? '取消管理' : '设为管理'}</a>,
+            <Popconfirm key="t" title={`转让群主给「${m.name}」？`} onConfirm={() => transfer(m)}><a>转让</a></Popconfirm>,
+          ] : []),
+          ...(canAdmin && m.role !== 'owner' && m.user_id !== me?.id ? [
+            <a key="m" onClick={() => mute(m)}>{m.muted_until && m.muted_until > Date.now() ? '解除禁言' : '禁言'}</a>,
+            <Popconfirm key="k" title={`把「${m.name}」移出群？`} onConfirm={() => kick(m)}><a>移出</a></Popconfirm>,
+          ] : []),
+        ].filter(Boolean)}>
+          <List.Item.Meta avatar={<Avatar size="small" icon={<UserOutlined />} style={{ background: m.role === 'owner' ? '#faad14' : '#8c8c8c' }} />}
+            title={<Space size={4}>
+              <span>{m.name}</span>
+              {m.user_id === me?.id && <Tag>我</Tag>}
+              {m.role === 'owner' && <Tag color="gold">群主</Tag>}
+              {m.role === 'admin' && <Tag color="blue">管理员</Tag>}
+              {m.is_admin && <Tag color="geekblue">系统管理员</Tag>}
+              {m.muted_until && m.muted_until > Date.now() && <Tag color="orange">禁言中</Tag>}
+            </Space>} />
         </List.Item>
       )} />
+
+      {!isDefault && (
+        <div style={{ marginTop: 16, borderTop: '1px solid var(--color-border)', paddingTop: 12 }}>
+          <Space direction="vertical" style={{ width: '100%' }} size={8}>
+            {me?.id !== detail?.owner_id && (
+              <Popconfirm title="确定退出该群？" onConfirm={() => onLeave?.()}>
+                <Button danger block>退出群聊</Button>
+              </Popconfirm>
+            )}
+            {(isOwner) && (
+              <Popconfirm title="解散该群？所有成员将看不到该群" onConfirm={() => onDissolve?.()}>
+                <Button danger block>解散该群</Button>
+              </Popconfirm>
+            )}
+          </Space>
+        </div>
+      )}
+
       <Modal title="添加成员" open={addOpen} onOk={add} onCancel={() => setAddOpen(false)} destroyOnClose>
         <Select mode="multiple" style={{ width: '100%' }} placeholder="选择用户" value={pick} onChange={setPick}
           showSearch optionFilterProp="label"

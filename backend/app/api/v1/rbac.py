@@ -287,6 +287,25 @@ async def _grant_default_viewer_role(db: AsyncSession, *, tenant_id: int, user_i
     return True
 
 
+async def _join_default_chat_room(db: AsyncSession, *, tenant_id: int, user_id: int) -> None:
+    """确保租户「全员大群」存在并把该用户加入（幂等）。
+
+    默认大群所有内部用户天然可见，此处显式入表是为了记录角色/已读水位等元数据。
+    """
+    try:
+        from app.models import ChatRoomMember
+        from app.services.chat_room_service import ensure_default_room, is_member
+
+        room = await ensure_default_room(db, tenant_id)
+        if await is_member(db, room_id=room.id, user_id=user_id):
+            return
+        db.add(ChatRoomMember(tenant_id=tenant_id, room_id=room.id, user_id=user_id, role="member"))
+        await db.flush()
+    except Exception:  # noqa: BLE001
+        # 聊天室不可用不应阻断建号
+        pass
+
+
 @router.post("/users/{user_id}/approve")
 @audited("user.approve", "user", id_arg="user_id")
 async def approve_user(
@@ -307,6 +326,8 @@ async def approve_user(
     # 授予基础角色，否则新用户权限集为空会全站 403
     if not u.is_admin:
         await _grant_default_viewer_role(db, tenant_id=u.tenant_id, user_id=u.id)
+    # 全员默认入群
+    await _join_default_chat_room(db, tenant_id=u.tenant_id, user_id=u.id)
     # 通知申请人审核结果（站内，随本事务提交）
     from app.services.user_notify import notify_user_review_result
 
@@ -373,6 +394,8 @@ async def create_user(
     # 自动授予内置「普通用户」角色，避免新用户权限集为空而全站 403
     if not u.is_admin:
         await _grant_default_viewer_role(db, tenant_id=user.tenant_id, user_id=u.id)
+    # 全员默认入群
+    await _join_default_chat_room(db, tenant_id=user.tenant_id, user_id=u.id)
     return u
 
 

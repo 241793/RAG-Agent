@@ -195,6 +195,17 @@ async def register(body: RegisterRequest, request: Request, db: AsyncSession = D
     )
     db.add(u)
     await db.flush()
+    # 全员默认入群（默认大群所有内部用户天然可见；此处显式入表记录元数据）
+    try:
+        from app.models import ChatRoomMember
+        from app.services.chat_room_service import ensure_default_room, is_member
+
+        _room = await ensure_default_room(db, tenant.id)
+        if not await is_member(db, room_id=_room.id, user_id=u.id):
+            db.add(ChatRoomMember(tenant_id=tenant.id, room_id=_room.id, user_id=u.id, role="member"))
+            await db.flush()
+    except Exception:  # noqa: BLE001
+        pass
     await record_audit_async(
         action="user.register", resource_type="user", resource_id=u.id,
         actor_name=body.username, result="success",

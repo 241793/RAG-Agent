@@ -110,22 +110,46 @@ async def room_detail(
 
 
 async def _room_members(db: AsyncSession, room: ChatRoom) -> list[dict]:
+    """成员列表。默认大群 = 全部内部用户（动态），其余群 = 成员表。
+
+    角色来自成员表（默认大群里未显式入表的用户视为普通成员）。
+    """
+    # 成员表中的角色覆盖
     rows = (
         await db.execute(select(ChatRoomMember).where(ChatRoomMember.room_id == room.id))
     ).scalars().all()
-    uids = [m.user_id for m in rows if m.user_id]
-    users = {}
-    if uids:
-        users = {u.id: u for u in (await db.execute(select(User).where(User.id.in_(set(uids))))).scalars().all()}
-    out = []
+    role_map: dict[int, str] = {}
     for m in rows:
-        if not m.user_id:
-            continue
-        u = users.get(m.user_id)
+        if m.user_id:
+            role_map[m.user_id] = m.role
+
+    if room.is_default:
+        # 全员：本租户全部内部用户
+        users = (
+            await db.execute(
+                select(User).where(
+                    User.tenant_id == room.tenant_id,
+                    or_(User.user_type.is_(None), User.user_type != "external"),
+                    or_(User.status.is_(None), User.status == "active"),
+                ).order_by(User.id)
+            )
+        ).scalars().all()
+    else:
+        uids = [m.user_id for m in rows if m.user_id]
+        users = (
+            (await db.execute(select(User).where(User.id.in_(set(uids))))).scalars().all()
+            if uids else []
+        )
+    out = []
+    for u in users:
+        role = role_map.get(u.id, "member")
+        if room.owner_id == u.id:
+            role = "owner"
         out.append({
-            "id": m.id, "user_id": m.user_id, "role": m.role,
-            "name": (u.display_name or u.username) if u else f"#{m.user_id}",
-            "username": u.username if u else None,
+            "id": u.id, "user_id": u.id, "role": role,
+            "name": u.display_name or u.username, "username": u.username,
+            "is_admin": bool(u.is_admin),
+            "muted_until": next((m.muted_until for m in rows if m.user_id == u.id), None),
         })
     return out
 
@@ -407,6 +431,133 @@ async def set_announcement(
     await broadcaster.broadcast_room(tenant_id=room.tenant_id, room_id=room.id,
                                      payload={"type": "announcement", "room_id": room.id, "announcement": room.announcement})
     return {"message": "已更新公告"}
+
+
+# ==================== 群资料 / 群主 / 退群 / 清空（QQ 式）====================
+@router.patch("/{room_id}")
+async def update_room(
+    room_id: int,
+    body: dict,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """修改群资料（名称/头像/公告）。管理员以上。"""
+    room = await _guard_room(db, user, room_id)
+    role = await S.member_role(db, room=room, user_id=user.id, is_admin=bool(user.is_admin))
+    _require_admin_role(role)
+    if "name" in body:
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise ValidationError("群名称不能为空")
+        room.name = name[:128]
+    if "avatar" in body:
+        settings_ = dict(room.settings or {})
+        settings_["avatar"] = (body.get("avatar") or None)
+        room.settings = settings_
+    if "announcement" in body:
+        room.announcement = (body.get("announcement") or "").strip()[:1000] or None
+    await db.flush()
+    await broadcaster.broadcast_room(tenant_id=room.tenant_id, room_id=room.id, payload={
+        "type": "room_updated", "room_id": room.id, "name": room.name, "announcement": room.announcement,
+    })
+    return {"message": "已保存", "name": room.name}
+
+
+@router.post("/{room_id}/transfer")
+async def transfer_owner(
+    room_id: int,
+    body: dict,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """转让群主（仅现任群主或租户管理员）。默认大群不可转让。"""
+    room = await _guard_room(db, user, room_id)
+    if room.is_default:
+        raise PermissionDeniedError("全员大群不支持转让群主")
+    if room.owner_id != user.id and not user.is_admin:
+        raise PermissionDeniedError("仅群主可转让群主")
+    new_uid = int(body.get("user_id") or 0)
+    if not await S.is_member(db, room_id=room_id, user_id=new_uid):
+        raise ConflictError("对方不是群成员")
+    # 原群主降为普通成员，新群主升为 owner
+    old = await db.execute(select(ChatRoomMember).where(
+        ChatRoomMember.room_id == room_id, ChatRoomMember.user_id == room.owner_id))
+    old_m = old.scalar_one_or_none()
+    if old_m:
+        old_m.role = "member"
+    new_m = (await db.execute(select(ChatRoomMember).where(
+        ChatRoomMember.room_id == room_id, ChatRoomMember.user_id == new_uid))).scalar_one_or_none()
+    if new_m:
+        new_m.role = "owner"
+    else:
+        db.add(ChatRoomMember(tenant_id=room.tenant_id, room_id=room_id, user_id=new_uid, role="owner"))
+    room.owner_id = new_uid
+    await db.flush()
+    return {"message": "已转让群主"}
+
+
+@router.post("/{room_id}/leave")
+async def leave_room(
+    room_id: int,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """退出群聊（群主需先转让；全员大群不可退）。"""
+    room = await _guard_room(db, user, room_id)
+    if room.is_default:
+        raise PermissionDeniedError("全员大群不可退出")
+    if room.owner_id == user.id:
+        raise PermissionDeniedError("请先转让群主后再退群")
+    m = await db.execute(select(ChatRoomMember).where(
+        ChatRoomMember.room_id == room_id, ChatRoomMember.user_id == user.id))
+    mm = m.scalar_one_or_none()
+    if mm:
+        await db.delete(mm)
+    await db.flush()
+    return {"message": "已退出群聊"}
+
+
+@router.post("/{room_id}/clear")
+async def clear_messages(
+    room_id: int,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """清空聊天记录（管理员以上；消息软删为占位，保留成员与群结构）。"""
+    room = await _guard_room(db, user, room_id)
+    role = await S.member_role(db, room=room, user_id=user.id, is_admin=bool(user.is_admin))
+    _require_admin_role(role)
+    from sqlalchemy import update as _upd
+
+    await db.execute(
+        _upd(ChatMessage).where(ChatMessage.room_id == room_id, ChatMessage.revoked.is_(False))
+        .values(revoked=True, revoked_by=user.id, revoked_at=_now_ms(), content="", attachments=None)
+    )
+    room.message_count = 0
+    room.last_message_at = _now_ms()
+    await db.flush()
+    await broadcaster.broadcast_room(tenant_id=room.tenant_id, room_id=room.id,
+                                     payload={"type": "cleared", "room_id": room.id})
+    return {"message": "聊天记录已清空"}
+
+
+@router.post("/{room_id}/dissolve")
+async def dissolve_room(
+    room_id: int,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """解散群（仅群主或租户管理员；全员大群不可解散）。"""
+    room = await _guard_room(db, user, room_id)
+    if room.is_default:
+        raise PermissionDeniedError("全员大群不可解散")
+    if room.owner_id != user.id and not user.is_admin:
+        raise PermissionDeniedError("仅群主可解散群")
+    room.status = "archived"
+    await db.flush()
+    await broadcaster.broadcast_room(tenant_id=room.tenant_id, room_id=room.id,
+                                     payload={"type": "dissolved", "room_id": room.id})
+    return {"message": "群已解散"}
 
 
 # ==================== 机器人 ====================
