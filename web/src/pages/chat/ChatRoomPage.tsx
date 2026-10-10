@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Avatar, Button, Card, Drawer, Dropdown, Empty, Input, List, message, Modal, Popconfirm, Popover, Select, Space, Switch, Tag, Tooltip, Typography, Upload,
+  Avatar, Button, Card, Drawer, Dropdown, Empty, Image, Input, List, message, Modal, Popconfirm, Popover, Select, Space, Spin, Switch, Tabs, Tag, Tooltip, Typography, Upload,
 } from 'antd'
 import {
   SendOutlined, PlusOutlined, TeamOutlined, RobotOutlined, UserOutlined, PaperClipOutlined,
@@ -43,6 +43,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   const [newName, setNewName] = useState('')
   const [memberOpen, setMemberOpen] = useState(false)
   const [botOpen, setBotOpen] = useState(false)
+  const [filesOpen, setFilesOpen] = useState(false)
   const [mentionIds, setMentionIds] = useState<number[]>([])
   const [replyTo, setReplyTo] = useState<ChatMsgItem | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
@@ -439,10 +440,8 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                           })
                         } else if (key === 'members') setMemberOpen(true)
                         else if (key === 'bots') setBotOpen(true)
-                        else if (key === 'photo') {
-                          setMsgs((cur) => cur)  // 相册用消息过滤实现，下个版本可做独立页
-                          message.info('可在聊天中查看历史图片/文件；独立相册后续开放')
-                        } else if (key === 'announcement') {
+                        else if (key === 'photo') setFilesOpen(true)
+                        else if (key === 'announcement') {
                           let v = detail.announcement || ''
                           Modal.confirm({
                             title: '设置群公告', icon: null,
@@ -485,6 +484,9 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
       {/* 机器人 */}
       <BotDrawer open={botOpen} onClose={() => setBotOpen(false)} detail={detail} agents={agents}
         onChanged={() => activeId && openRoom(activeId)} />
+
+      {/* 群文件 / 相册 */}
+      <FilesDrawer open={filesOpen} onClose={() => setFilesOpen(false)} detail={detail} />
     </>
   )
 }
@@ -653,6 +655,55 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onC
           showSearch optionFilterProp="label"
           options={users.filter((u: any) => !members.some((m: any) => m.user_id === u.id)).map((u: any) => ({ value: u.id, label: u.label }))} />
       </Modal>
+    </Drawer>
+  )
+}
+
+/** 群文件 / 相册：按类型筛选本群所有带附件的消息。 */
+function FilesDrawer({ open, onClose, detail }: any) {
+  const [tab, setTab] = useState('image')
+  const [items, setItems] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  useEffect(() => {
+    if (!open || !detail?.id) return
+    setLoading(true)
+    chatRoomApi.files(detail.id, tab)
+      .then((r: any[]) => setItems(r))
+      .catch(() => setItems([]))
+      .finally(() => setLoading(false))
+  }, [open, detail?.id, tab])
+  return (
+    <Drawer title="群相册 / 文件" width={520} open={open} onClose={onClose}>
+      <Tabs activeKey={tab} onChange={setTab} items={[
+        { key: 'image', label: '图片' },
+        { key: 'video', label: '视频' },
+        { key: 'audio', label: '音频' },
+        { key: 'file', label: '文件' },
+      ]} />
+      {loading ? <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div> : (
+        items.length === 0 ? <Empty description="暂无内容" /> : (
+          tab === 'image' ? (
+            <Image.PreviewGroup>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8 }}>
+                {items.map((it) => (
+                  <div key={it.message_id + '-' + it.name} style={{ cursor: 'pointer' }}>
+                    <AttachmentView att={it.att} />
+                  </div>
+                ))}
+              </div>
+            </Image.PreviewGroup>
+          ) : (
+            <List size="small" dataSource={items} renderItem={(it: any) => (
+              <List.Item>
+                <List.Item.Meta
+                  title={<span style={{ fontSize: 13 }}>{it.name}</span>}
+                  description={<span style={{ fontSize: 12 }}>{it.sender_name} · {fmtTime(it.created_at)}</span>} />
+                <div style={{ maxWidth: 260 }}><AttachmentView att={it.att} /></div>
+              </List.Item>
+            )} />
+          )
+        )
+      )}
     </Drawer>
   )
 }

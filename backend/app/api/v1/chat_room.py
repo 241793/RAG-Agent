@@ -262,6 +262,65 @@ async def _mentioned_bots(db: AsyncSession, room: ChatRoom, mentions: list[int],
     return hit
 
 
+@router.get("/{room_id}/files")
+async def list_files(
+    room_id: int,
+    kind: str | None = Query(None, description="image / video / audio / file，留空=全部"),
+    limit: int = Query(100, ge=1, le=300),
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """群文件/相册：汇总本群所有带附件的消息（撤回的除外）。"""
+    room = await _guard_room(db, user, room_id)
+    stmt = (
+        select(ChatMessage)
+        .where(
+            ChatMessage.room_id == room.id,
+            ChatMessage.revoked.is_(False),
+            ChatMessage.attachments.is_not(None),
+        )
+        .order_by(ChatMessage.id.desc())
+        .limit(limit)
+    )
+    rows = list((await db.execute(stmt)).scalars().all())
+    nm = await S.name_map_for(db, rows)
+    out: list[dict] = []
+    for m in rows:
+        sender = nm.get(m.sender_id or 0, {})
+        for att in (m.attachments or []):
+            ctype = (att.get("type") or att.get("mime") or "file").lower()
+            cat = _attach_category(ctype, att.get("name") or "")
+            if kind and cat != kind:
+                continue
+            out.append({
+                "message_id": m.id, "created_at": m.created_at,
+                "sender_name": sender.get("name") or "未知",
+                "category": cat,
+                "name": att.get("name") or "附件",
+                "att": att,
+            })
+    return out
+
+
+def _attach_category(content_type: str, name: str = "") -> str:
+    ct = (content_type or "").lower()
+    if ct.startswith("image/"):
+        return "image"
+    if ct.startswith("video/"):
+        return "video"
+    if ct.startswith("audio/"):
+        return "audio"
+    # 回退按扩展名判断
+    ext = (name.rsplit(".", 1)[-1] if "." in name else "").lower()
+    if ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"):
+        return "image"
+    if ext in ("mp4", "webm", "mov", "avi", "mkv"):
+        return "video"
+    if ext in ("mp3", "wav", "ogg", "m4a", "flac", "aac"):
+        return "audio"
+    return "file"
+
+
 @router.post("/{room_id}/messages/{msg_id}/revoke")
 async def revoke_message(
     room_id: int,

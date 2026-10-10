@@ -546,6 +546,8 @@ export const chatRoomApi = {
   leaveRoom: (roomId: number) => http.post(`/chat/rooms/${roomId}/leave`).then((r) => r.data),
   clearMessages: (roomId: number) => http.post(`/chat/rooms/${roomId}/clear`).then((r) => r.data),
   dissolveRoom: (roomId: number) => http.post(`/chat/rooms/${roomId}/dissolve`).then((r) => r.data),
+  files: (roomId: number, kind?: string) =>
+    http.get(`/chat/rooms/${roomId}/files`, { params: kind ? { kind } : {} }).then((r) => r.data),
   addBot: (roomId: number, agentId: number) =>
     http.post(`/chat/rooms/${roomId}/bots`, { agent_id: agentId }).then((r) => r.data),
   removeBot: (roomId: number, agentId: number) =>
