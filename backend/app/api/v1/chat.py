@@ -160,6 +160,21 @@ async def list_messages(
                     "file_key": a.file_key, "artifact_id": a.id, "name": a.file_name,
                     "mime": a.mime, "size": a.size,
                 }]
+    # 过滤掉物理文件已丢失的产物，避免前端渲染出点开即 404 的下载/预览链接
+    from app.ingest.storage import get_storage as _gs
+
+    storage = _gs()
+    for mo in out:
+        if not mo.artifacts:
+            continue
+        kept = []
+        for a in mo.artifacts:
+            try:
+                if a.get("file_key") and storage.path(a["file_key"]).is_file():
+                    kept.append(a)
+            except Exception:  # noqa: BLE001
+                continue
+        mo.artifacts = kept or None
     return out
 
 

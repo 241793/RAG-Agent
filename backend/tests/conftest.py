@@ -17,6 +17,8 @@ _TEST_DB = BACKEND_DIR / "data" / "test_rag.db"
 if _TEST_DB.exists():
     _TEST_DB.unlink()
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TEST_DB.as_posix()}"
+# 独立测试文件目录：否则测试里的 storage.delete 会删掉真实 data/files 下用户的产物
+os.environ["STORAGE_LOCAL_DIR"] = str(BACKEND_DIR / "data" / "test_files")
 os.environ["EMBEDDING_DIM"] = "64"
 os.environ["TASK_BACKEND"] = "memory"
 
