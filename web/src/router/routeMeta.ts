@@ -3,6 +3,7 @@ export const ROUTE_PERMS: Record<string, string> = {
   '/dashboard': '',
   '/account': '',
   '/chat': 'chat:use',
+  '/chat-room': 'chat:use',
   '/kb': 'kb:read',
   '/retrieval': 'retrieval:query',
   '/todo': 'chat:use',

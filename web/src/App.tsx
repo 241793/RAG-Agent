@@ -9,6 +9,7 @@ import EvalPage from './pages/kb/EvalPage'
 import TodoPage from './pages/todo/TodoPage'
 import ApprovalPage from './pages/approvals/ApprovalPage'
 import ChatPage from './pages/chat/ChatPage'
+import ChatRoomPage from './pages/chat/ChatRoomPage'
 import ModelPage from './pages/admin/ModelPage'
 import RolePage from './pages/admin/RolePage'
 import UserPage from './pages/admin/UserPage'
@@ -76,6 +77,7 @@ export default function App() {
         <Route path="todo" element={<TodoPage />} />
         <Route path="approvals" element={<RequirePermission perm={ROUTE_PERMS['/approvals']}><ApprovalPage /></RequirePermission>} />
         <Route path="chat" element={<RequirePermission perm={ROUTE_PERMS['/chat']}><ChatPage /></RequirePermission>} />
+        <Route path="chat-room" element={<RequirePermission perm="chat:use"><ChatRoomPage /></RequirePermission>} />
         <Route path="agents" element={<RequirePermission perm={ROUTE_PERMS['/agents']}><AgentListPage /></RequirePermission>} />
         <Route path="agents/:id/chat" element={<RequirePermission perm={ROUTE_PERMS['/agents']}><AgentChatPage /></RequirePermission>} />
         <Route path="agents/:id/edit" element={<RequirePermission perm="agent:edit"><AgentEditPage /></RequirePermission>} />

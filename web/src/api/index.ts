@@ -494,6 +494,62 @@ export async function streamChat(
   }
 }
 
+// ---- 企业聊天室 ----
+export interface ChatRoomBrief {
+  id: number; name: string; kind: 'group' | 'direct'; is_default: boolean
+  announcement?: string | null; owner_id: number; my_role: string
+  peer_user_id?: number | null; last_message_at?: number | null
+  last_preview?: string; message_count?: number; unread?: number
+}
+export interface ChatMsgItem {
+  id: number; room_id: number; sender_id: number | null; sender_type: 'user' | 'agent' | 'system'
+  sender_name: string; sender_is_agent?: boolean; content: string; content_type?: string
+  attachments?: any[] | null; mentions?: number[] | null; reply_to_id?: number | null
+  pinned: boolean; revoked: boolean; revoked_by?: number | null; created_at: number
+}
+export const chatRoomApi = {
+  list: () => http.get<ChatRoomBrief[]>('/chat/rooms').then((r) => r.data),
+  create: (data: { name: string; announcement?: string; member_ids?: number[] }) =>
+    http.post('/chat/rooms', data).then((r) => r.data),
+  direct: (userId: number) => http.post<{ id: number; kind: string }>('/chat/rooms/direct', { user_id: userId }).then((r) => r.data),
+  detail: (roomId: number) => http.get<{
+    id: number; name: string; kind: string; is_default: boolean; announcement?: string | null
+    owner_id: number; my_role: string; peer_user_id?: number | null
+    members: { id: number; user_id: number; role: string; name: string; username?: string | null }[]
+    bots: { member_id: number; agent_id: number; name: string }[]
+    pinned: ChatMsgItem[]
+  }>(`/chat/rooms/${roomId}`).then((r) => r.data),
+  messages: (roomId: number, beforeId?: number, limit = 30) =>
+    http.get<{ items: ChatMsgItem[]; has_more: boolean }>(`/chat/rooms/${roomId}/messages`,
+      { params: { before_id: beforeId, limit } }).then((r) => r.data),
+  send: (roomId: number, data: { content?: string; attachments?: any[]; mentions?: number[]; reply_to_id?: number | null }) =>
+    http.post<ChatMsgItem>(`/chat/rooms/${roomId}/messages`, data).then((r) => r.data),
+  revoke: (roomId: number, msgId: number) =>
+    http.post(`/chat/rooms/${roomId}/messages/${msgId}/revoke`).then((r) => r.data),
+  pin: (roomId: number, msgId: number, pinned = true) =>
+    http.post(`/chat/rooms/${roomId}/messages/${msgId}/pin`, { pinned }).then((r) => r.data),
+  read: (roomId: number) => http.post(`/chat/rooms/${roomId}/read`).then((r) => r.data),
+  addMembers: (roomId: number, userIds: number[]) =>
+    http.post(`/chat/rooms/${roomId}/members`, { user_ids: userIds }).then((r) => r.data),
+  setRole: (roomId: number, userId: number, role: string) =>
+    http.post(`/chat/rooms/${roomId}/members/${userId}/role`, { role }).then((r) => r.data),
+  removeMember: (roomId: number, userId: number) =>
+    http.delete(`/chat/rooms/${roomId}/members/${userId}`).then((r) => r.data),
+  mute: (roomId: number, userId: number, minutes: number) =>
+    http.post(`/chat/rooms/${roomId}/members/${userId}/mute`, { minutes }).then((r) => r.data),
+  setAnnouncement: (roomId: number, announcement: string) =>
+    http.post(`/chat/rooms/${roomId}/announcement`, { announcement }).then((r) => r.data),
+  addBot: (roomId: number, agentId: number) =>
+    http.post(`/chat/rooms/${roomId}/bots`, { agent_id: agentId }).then((r) => r.data),
+  removeBot: (roomId: number, agentId: number) =>
+    http.delete(`/chat/rooms/${roomId}/bots/${agentId}`).then((r) => r.data),
+  wsUrl: () => {
+    const token = localStorage.getItem('access_token') || ''
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+    return `${proto}://${location.host}/api/v1/chat/rooms/ws?token=${encodeURIComponent(token)}`
+  },
+}
+
 // ---- RBAC ----
 export interface Role {
   id: number

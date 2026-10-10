@@ -61,6 +61,7 @@ export default function MainLayout() {
   const groups: (NavItem | NavGroup)[] = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '工作台', tip: '概览、趋势与快捷入口' },
     { key: '/chat', icon: <CommentOutlined />, label: '智能问答', tip: '直接向知识库提问，支持引用溯源、多模型、图片/文件' },
+    { key: '/chat-room', icon: <TeamOutlined />, label: '企业聊天', tip: '与同事聊天：全员大群/群聊/私聊，支持 @机器人、附件、撤回置顶' },
     { key: '/kb', icon: <DatabaseOutlined />, label: '知识库', tip: '上传/录入资料，构建可检索的知识' },
     { key: '/service-tickets', icon: <CustomerServiceOutlined />, label: '客服工单', perm: 'service:read', tip: '处理外部渠道进来的客户会话与工单' },
     { key: '/records', icon: <FormOutlined />, label: '智能录单', perm: 'record:read', tip: '用 AI 从文本中抽取结构化成表单数据' },

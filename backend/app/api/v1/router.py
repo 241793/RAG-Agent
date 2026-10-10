@@ -8,6 +8,7 @@ from app.api.v1 import (
     auth,
     channels,
     chat,
+    chat_room,
     document,
     email_sources,
     eval as eval_api,
@@ -46,6 +47,7 @@ api_router.include_router(eval_api.router)
 api_router.include_router(event_subscriptions.router)
 api_router.include_router(retrieval.router)
 api_router.include_router(chat.router)
+api_router.include_router(chat_room.router)
 api_router.include_router(provider.router)
 api_router.include_router(rbac.router)
 api_router.include_router(agents.router)
