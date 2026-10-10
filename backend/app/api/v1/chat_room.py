@@ -175,6 +175,12 @@ async def _room_members(db: AsyncSession, room: ChatRoom) -> list[dict]:
             (await db.execute(select(User).where(User.id.in_(set(uids))))).scalars().all()
             if uids else []
         )
+    # 部门名称映射（成员列表展示用）
+    dept_ids = {u.department_id for u in users if u.department_id}
+    dept_map: dict[int, str] = {}
+    if dept_ids:
+        depts = (await db.execute(select(Department).where(Department.id.in_(dept_ids)))).scalars().all()
+        dept_map = {d.id: d.name for d in depts}
     out = []
     for u in users:
         role = role_map.get(u.id, "member")
@@ -183,6 +189,7 @@ async def _room_members(db: AsyncSession, room: ChatRoom) -> list[dict]:
         out.append({
             "id": u.id, "user_id": u.id, "role": role,
             "name": u.display_name or u.username, "username": u.username,
+            "department": dept_map.get(u.department_id) if u.department_id else None,
             "is_admin": bool(u.is_admin), "is_agent": False,
             "muted_until": next((m.muted_until for m in rows if m.user_id == u.id), None),
         })
@@ -193,7 +200,7 @@ async def _room_members(db: AsyncSession, room: ChatRoom) -> list[dict]:
         ag = await db.get(Agent, m.agent_id)
         out.append({
             "id": m.agent_id, "user_id": None, "agent_id": m.agent_id, "role": m.role or "member",
-            "name": ag.name if ag else f"机器人#{m.agent_id}", "username": None,
+            "name": ag.name if ag else f"机器人#{m.agent_id}", "username": None, "department": None,
             "is_admin": False, "is_agent": True, "muted_until": m.muted_until,
         })
     return out

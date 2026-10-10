@@ -248,7 +248,7 @@ async def can_revoke(db: AsyncSession, *, room: ChatRoom, msg: ChatMessage, acto
 
 
 async def serialize_message(db: AsyncSession, msg: ChatMessage, *, name_map: dict[int, dict] | None = None) -> dict:
-    """把消息序列化成前端结构（含发送者名/头像，撤回占位）。"""
+    """把消息序列化成前端结构（含发送者名/用户名/部门/头像，撤回占位）。"""
     nm = name_map or {}
     sender = nm.get(msg.sender_id or 0, {}) if msg.sender_type == "user" else {}
     if msg.sender_type == "agent":
@@ -257,6 +257,8 @@ async def serialize_message(db: AsyncSession, msg: ChatMessage, *, name_map: dic
     return {
         "id": msg.id, "room_id": msg.room_id, "sender_id": msg.sender_id,
         "sender_type": msg.sender_type, "sender_name": sender.get("name") or "未知",
+        "sender_username": sender.get("username"),
+        "sender_department": sender.get("department"),
         "sender_is_agent": bool(sender.get("is_agent")),
         "content": "" if msg.revoked else msg.content,
         "content_type": msg.content_type,
@@ -268,11 +270,26 @@ async def serialize_message(db: AsyncSession, msg: ChatMessage, *, name_map: dic
 
 
 async def name_map_for(db: AsyncSession, msgs: list[ChatMessage]) -> dict[int, dict]:
+    """构造 {user_id: {name, username, department}} 映射（用于消息序列化）。"""
+    from app.models import Department
+
     ids = [m.sender_id for m in msgs if m.sender_type == "user" and m.sender_id]
     if not ids:
         return {}
     rows = (await db.execute(select(User).where(User.id.in_(set(ids))))).scalars().all()
-    return {u.id: {"name": u.display_name or u.username, "username": u.username} for u in rows}
+    dept_ids = {u.department_id for u in rows if u.department_id}
+    dept_map: dict[int, str] = {}
+    if dept_ids:
+        depts = (await db.execute(select(Department).where(Department.id.in_(dept_ids)))).scalars().all()
+        dept_map = {d.id: d.name for d in depts}
+    return {
+        u.id: {
+            "name": u.display_name or u.username,
+            "username": u.username,
+            "department": dept_map.get(u.department_id) if u.department_id else None,
+        }
+        for u in rows
+    }
 
 
 async def search_messages(

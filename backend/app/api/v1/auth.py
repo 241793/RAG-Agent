@@ -272,7 +272,12 @@ async def update_profile(
         db, action="user.profile_update", resource_type="user", resource_id=user.id,
         tenant_id=user.tenant_id, actor_id=user.id, actor_name=user.username,
     )
+    # 返回完整的用户视图（含权限/角色），避免前端 setUser 后权限被清空
+    from app.middleware.auth_dep import get_user_permission_codes
+
     out = UserOut.model_validate(user)
+    out.permissions = sorted(await get_user_permission_codes(db, user))
+    out.roles = await _user_roles(db, user)
     if user.department_id:
         dept = await db.get(Department, user.department_id)
         out.department_name = dept.name if dept else None

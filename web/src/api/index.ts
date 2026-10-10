@@ -503,7 +503,8 @@ export interface ChatRoomBrief {
 }
 export interface ChatMsgItem {
   id: number; room_id: number; sender_id: number | null; sender_type: 'user' | 'agent' | 'system'
-  sender_name: string; sender_is_agent?: boolean; content: string; content_type?: string
+  sender_name: string; sender_username?: string | null; sender_department?: string | null
+  sender_is_agent?: boolean; content: string; content_type?: string
   attachments?: any[] | null; mentions?: number[] | null; reply_to_id?: number | null
   pinned: boolean; revoked: boolean; revoked_by?: number | null; created_at: number
 }
@@ -515,7 +516,7 @@ export const chatRoomApi = {
   detail: (roomId: number) => http.get<{
     id: number; name: string; kind: string; is_default: boolean; announcement?: string | null
     owner_id: number; my_role: string; peer_user_id?: number | null
-    members: { id: number; user_id: number | null; agent_id?: number | null; role: string; name: string; username?: string | null; is_admin?: boolean; is_agent?: boolean; muted_until?: number | null }[]
+    members: { id: number; user_id: number | null; agent_id?: number | null; role: string; name: string; username?: string | null; department?: string | null; is_admin?: boolean; is_agent?: boolean; muted_until?: number | null }[]
     bots: { member_id: number; agent_id: number; name: string }[]
     announcements?: { id: number; content: string; pinned: boolean; created_by?: number | null; created_by_name?: string; created_at?: number | null }[]
     mute_all?: boolean

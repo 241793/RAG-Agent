@@ -274,12 +274,15 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   // 可 @ 对象：成员（已含机器人，is_agent 标记）。QQ 也允许 @ 自己。
   const mentionable = useMemo(() => {
     const seen = new Set<string>()
-    const out: { uid: number; name: string; agent: boolean; role: string }[] = []
+    const out: { uid: number; name: string; agent: boolean; role: string; department?: string | null; username?: string | null }[] = []
     for (const m of (detail?.members || [])) {
       const key = m.is_agent ? `a${m.agent_id}` : `u${m.user_id}`
       if (seen.has(key)) continue
       seen.add(key)
-      out.push({ uid: m.is_agent ? m.agent_id : m.user_id, name: m.name, agent: !!m.is_agent, role: m.role })
+      out.push({
+        uid: m.is_agent ? m.agent_id : m.user_id, name: m.name, agent: !!m.is_agent, role: m.role,
+        department: m.department, username: m.username,
+      })
     }
     // 兜底：detail.bots 中未进入 members 的机器
     for (const b of (detail?.bots || [])) {
@@ -292,7 +295,8 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   }, [detail])
   const atFiltered = useMemo(() => {
     const q = atQuery.trim().toLowerCase()
-    return mentionable.filter((x) => !q || x.name.toLowerCase().includes(q))
+    return mentionable.filter((x) => !q || x.name.toLowerCase().includes(q)
+      || (x.username || '').toLowerCase().includes(q) || (x.department || '').toLowerCase().includes(q))
   }, [mentionable, atQuery])
 
   // 输入框内容变化：检测光标前是否有 "@xxx" → 打开/过滤 @ 选择器
@@ -352,9 +356,17 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
           title={
             <Space>
               {detail?.kind === 'direct' ? <UserOutlined /> : (detail?.is_default ? '📢' : <TeamOutlined />)}
-              {detail?.name || '选择会话'}
-              {detail && <Tag color={ROLE_LABEL[myRole] === '群主' ? 'gold' : myRole === 'admin' ? 'blue' : 'default'}>{me?.is_admin && !myRole ? '管理员' : (ROLE_LABEL[myRole] || '成员')}</Tag>}
+              {detail?.kind === 'direct'
+                ? (() => { const peer = detail?.members?.find((m: any) => m.user_id !== me?.id); return peer ? peer.name : '私聊' })()
+                : (detail?.name || '选择会话')}
+              {detail && detail.kind !== 'direct' && <Tag color={ROLE_LABEL[myRole] === '群主' ? 'gold' : myRole === 'admin' ? 'blue' : 'default'}>{me?.is_admin && !myRole ? '管理员' : (ROLE_LABEL[myRole] || '成员')}</Tag>}
               {detail?.kind === 'direct' && <Tag>私聊</Tag>}
+              {detail?.kind === 'direct' && (() => {
+                const peer = detail?.members?.find((m: any) => m.user_id !== me?.id)
+                if (!peer) return null
+                const sub = `${peer.department || ''}${peer.department && peer.username ? ' · ' : ''}${peer.username ? '@' + peer.username : ''}`
+                return sub ? <Typography.Text type="secondary" style={{ fontSize: 12 }}>{sub}</Typography.Text> : null
+              })()}
             </Space>
           }
           extra={
@@ -442,10 +454,15 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                             locale={{ emptyText: <div style={{ color: 'var(--color-text-3)', fontSize: 12, padding: 8 }}>无匹配成员</div> }}
                             renderItem={(x: any) => (
                               <List.Item style={{ cursor: 'pointer', padding: '4px 6px' }} onClick={() => handleMention(x.uid, x.name)}>
-                                <Space>
+                                <Space size={6}>
                                   <Avatar size={20} icon={x.agent ? <RobotOutlined /> : <UserOutlined />}
                                     style={{ background: x.agent ? '#7c3aed' : '#8c8c8c' }} />
                                   <span style={{ fontSize: 13 }}>{x.name}</span>
+                                  {!x.agent && (x.department || x.username) && (
+                                    <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>
+                                      {x.department || ''}{x.department && x.username ? ' · ' : ''}{x.username ? `@${x.username}` : ''}
+                                    </span>
+                                  )}
                                   {x.agent && <Tag color="purple" style={{ margin: 0, fontSize: 10 }}>机器人</Tag>}
                                   {x.uid === me?.id && <Tag style={{ margin: 0, fontSize: 10 }}>我</Tag>}
                                 </Space>
@@ -592,7 +609,13 @@ function Bubble({ m, me, canAdmin, canPin, onRevoke, onPin, onReply, onMention, 
       <div style={{ maxWidth: '68%', minWidth: 0 }}>
         <div style={{ fontSize: 12, color: 'var(--color-text-2)', textAlign: mine ? 'right' : 'left', marginBottom: 2 }}>
           {isBot && <Tag color="purple" style={{ marginRight: 4 }}>机器人</Tag>}
-          {m.sender_name} <span style={{ color: 'var(--color-text-3)' }}>{fmtTime(m.created_at)}</span>
+          {m.sender_name}
+          {!isBot && (
+            <span style={{ color: 'var(--color-text-3)', marginLeft: 4 }}>
+              {m.sender_department ? `${m.sender_department} · ` : ''}{m.sender_username ? `@${m.sender_username}` : ''}
+            </span>
+          )}
+          {' '}<span style={{ color: 'var(--color-text-3)' }}>{fmtTime(m.created_at)}</span>
           {m.pinned && <PushpinOutlined style={{ color: 'var(--color-warn)', marginLeft: 4 }} />}
         </div>
         {/* 消息体：右键弹出操作菜单（回复/@/私聊/复制/置顶/撤回） */}
@@ -717,7 +740,7 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onC
           <List.Item.Meta
             avatar={<Avatar size="small" icon={m.is_agent ? <RobotOutlined /> : <UserOutlined />}
               style={{ background: m.role === 'owner' ? '#faad14' : m.is_agent ? '#7c3aed' : '#8c8c8c' }} />}
-            title={<Space size={4}>
+            title={<Space size={4} wrap>
               <span>{m.name}</span>
               {m.user_id === me?.id && <Tag>我</Tag>}
               {m.is_agent && <Tag color="purple">机器人</Tag>}
@@ -725,7 +748,12 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, onC
               {m.role === 'admin' && <Tag color="blue">管理员</Tag>}
               {m.is_admin && <Tag color="geekblue">系统管理员</Tag>}
               {m.muted_until && m.muted_until > Date.now() && <Tag color="orange">禁言中</Tag>}
-            </Space>} />
+            </Space>}
+            description={!m.is_agent && (m.department || m.username) ? (
+              <span style={{ fontSize: 12, color: 'var(--color-text-3)' }}>
+                {m.department || ''}{m.department && m.username ? ' · ' : ''}{m.username ? `@${m.username}` : ''}
+              </span>
+            ) : undefined} />
         </List.Item>
       )} />
 
@@ -904,6 +932,11 @@ function SearchDrawer({ open, onClose, detail, onJump }: any) {
               <List.Item.Meta
                 avatar={<Avatar size="small" icon={m.sender_is_agent ? <RobotOutlined /> : <UserOutlined />} />}
                 title={<Space size={6}><span style={{ fontSize: 13 }}>{m.sender_name}</span>
+                  {!m.sender_is_agent && (m.sender_department || m.sender_username) && (
+                    <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>
+                      {m.sender_department || ''}{m.sender_department && m.sender_username ? ' · ' : ''}{m.sender_username ? `@${m.sender_username}` : ''}
+                    </span>
+                  )}
                   <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>{fmtTime(m.created_at)}</span></Space>}
                 description={<span style={{ fontSize: 13 }}>{m.content?.slice(0, 100)}{m.attachments ? ' [附件]' : ''}</span>} />
             </List.Item>
