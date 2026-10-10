@@ -261,6 +261,30 @@ async def can_revoke(db: AsyncSession, *, room: ChatRoom, msg: ChatMessage, acto
     return msg.sender_id == actor_id and msg.sender_type == "user"
 
 
+async def read_receipt(db: AsyncSession, *, room: ChatRoom, msgs: list[ChatMessage]) -> dict[int, dict]:
+    """已读回执：返回每条消息「被多少人读过 / 谁没读」。
+
+    实现：用成员表的 last_read_at 水位判断——某成员的水位 >= 消息时间即视为已读。
+    返回 {msg_id: {"read_by": [uid...], "unread_by": [uid...], "read_count": n}}
+    """
+    rows = (
+        await db.execute(select(ChatRoomMember).where(ChatRoomMember.room_id == room.id))
+    ).scalars().all()
+    # 人类成员的水位（默认大群里没显式入表的不算，避免把全员当未读）
+    levels: dict[int, int] = {}
+    for m in rows:
+        if m.user_id and m.last_read_at:
+            levels[m.user_id] = int(m.last_read_at)
+    out: dict[int, dict] = {}
+    for msg in msgs:
+        if msg.revoked:
+            continue
+        read_by = [uid for uid, ts in levels.items() if ts >= msg.created_at]
+        unread_by = [uid for uid in levels if uid not in read_by]
+        out[msg.id] = {"read_by": read_by, "unread_by": unread_by, "read_count": len(read_by)}
+    return out
+
+
 async def serialize_message(db: AsyncSession, msg: ChatMessage, *, name_map: dict[int, dict] | None = None) -> dict:
     """把消息序列化成前端结构（含发送者名/用户名/部门/头像，撤回占位）。"""
     nm = name_map or {}

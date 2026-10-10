@@ -33,6 +33,33 @@ function fmtTime(ms: number) {
   return sameDay ? hm : `${d.getMonth() + 1}-${d.getDate()} ${hm}`
 }
 
+/** 完整时间：今天显示"今天 HH:MM"，昨天"昨天 HH:MM"，更早"M月D日 HH:MM" */
+function fmtFullTime(ms: number) {
+  const d = new Date(ms)
+  const now = new Date()
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const day = (x: Date) => x.getFullYear() * 10000 + x.getMonth() * 100 + x.getDate()
+  const diff = day(now) - day(d)
+  if (diff === 0) return `今天 ${hm}`
+  if (diff === 1) return `昨天 ${hm}`
+  if (now.getFullYear() === d.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()} ${hm}`
+}
+
+/** 在线状态绿点（带 Tooltip 说明） */
+function OnlineDot({ online, size = 8 }: { online?: boolean; size?: number }) {
+  return (
+    <Tooltip title={online ? '在线' : '离线'}>
+      <span style={{
+        display: 'inline-block', width: size, height: size, borderRadius: '50%',
+        background: online ? '#52c41a' : '#d9d9d9',
+        boxShadow: online ? '0 0 0 2px rgba(82,196,26,0.18)' : undefined,
+        flexShrink: 0,
+      }} />
+    </Tooltip>
+  )
+}
+
 export default function ChatRoomPage() {
   // 不套 PageContainer 标题/副标题，让聊天框占满整屏高度（标题信息移到聊天内部展示）
   return <ChatRoomCore height="calc(100vh - 105px)" />
@@ -68,6 +95,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   const [atOpen, setAtOpen] = useState(false)   // @ 选择器
   const [atQuery, setAtQuery] = useState('')
   const [remarks, setRemarks] = useState<Record<string, string>>({})  // 私聊备注 {peerId: remark}
+  const [onlineMap, setOnlineMap] = useState<Record<number, boolean>>({})  // 在线状态 {userId: bool}
 
   const listRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<any>(null)
@@ -139,6 +167,10 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
       const [d, h] = await Promise.all([chatRoomApi.detail(id), chatRoomApi.messages(id, undefined, 30)])
       setDetail(d)
       setMsgs(h.items); setHasMore(h.has_more)
+      // 同步在线状态（成员列表带 online 字段）
+      const om: Record<number, boolean> = {}
+      for (const m of (d.members || [])) if (m.user_id) om[m.user_id] = !!m.online
+      setOnlineMap((prev) => ({ ...prev, ...om }))
       chatRoomApi.read(id).catch(() => {})
       setRooms((rs) => rs.map((r) => r.id === id ? { ...r, unread: 0 } : r))
       requestAnimationFrame(() => scrollBottom())
@@ -193,6 +225,11 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   }, [])
 
   const handleWs = (d: any) => {
+    // 在线状态变化（成员上/下线）→ 更新绿点
+    if (d.type === 'presence' && d.user_id) {
+      setOnlineMap((m) => ({ ...m, [d.user_id]: !!d.online }))
+      return
+    }
     if (d.type === 'message') {
       const m: ChatMsgItem = d.message
       // 更新房间列表预览
@@ -279,6 +316,11 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   const myRole = detail?.my_role || ''
   const canAdmin = myRole === 'owner' || myRole === 'admin' || me?.is_admin
   const canPin = canAdmin
+  // 已读回执：群聊按人类成员数作为分母；私聊固定 2 人（自己+对方）
+  const readTotal = detail?.kind === 'direct'
+    ? 2
+    : (detail?.members || []).filter((m: any) => !m.is_agent).length
+  const showRead = !!detail
 
   const createRoom = async () => {
     if (!newName.trim()) { message.warning('请输入群名称'); return }
@@ -453,6 +495,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                 const peer = detail?.members?.find((m: any) => m.user_id !== me?.id)
                 if (!peer) return null
                 return <>
+                  <OnlineDot online={peer.online ?? onlineMap?.[peer.user_id]} size={9} />
                   <DeptTag name={peer.department} />
                   {peer.username && <Typography.Text type="secondary" style={{ fontSize: 12 }}>@{peer.username}</Typography.Text>}
                 </>
@@ -506,6 +549,8 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                 {!hasMore && msgs.length > 0 && <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-3)', marginBottom: 8 }}>— 没有更多了 —</div>}
                 {msgs.map((m) => <Bubble key={m.id} m={m} me={me} canAdmin={canAdmin} canPin={canPin}
                   displayName={dispName(m.sender_id, m.sender_name)}
+                  onlineMap={onlineMap}
+                  readTotal={readTotal} showRead={showRead}
                   onRevoke={() => revoke(m)} onPin={() => pin(m, !m.pinned)} onReply={() => setReplyTo(m)}
                   onMention={handleMention}
                   onProfile={() => setProfileUid(m.sender_id)}
@@ -684,12 +729,24 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
 }
 
 /** 单条消息气泡 */
-function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply, onMention, onPrivate, onProfile }: any) {
+function Bubble({ m, me, canAdmin, canPin, displayName, onlineMap, readTotal, showRead, onRevoke, onPin, onReply, onMention, onPrivate, onProfile }: any) {
   const mine = m.sender_type === 'user' && m.sender_id === me?.id
   const isBot = m.sender_type === 'agent'
   const shownName = displayName || m.sender_name
   const canRevoke = mine || canAdmin
   const canPrivate = m.sender_type === 'user' && m.sender_id !== me?.id
+  const online = !isBot && !!onlineMap?.[m.sender_id]
+  // 已读状态：自己发的消息才展示（群聊里知道对方看没看）
+  const readTip = mine && !isBot && showRead
+    ? (() => {
+        const n = m.read_count ?? (m.read_by || []).length
+        const total = (readTotal ?? 0)
+        if (total <= 1) return null        // 只有自己，无从判断
+        if (n >= total) return { text: '已读', color: '#52c41a' }
+        const left = Math.max(0, total - n)
+        return { text: `未读 ${left} 人`, color: 'var(--color-text-3)' }
+      })()
+    : null
   if (m.revoked) {
     return <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-3)', margin: '6px 0' }}>
       「{m.sender_name}」撤回了一条消息
@@ -697,10 +754,18 @@ function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply
   }
   return (
     <div id={`msg-${m.id}`} style={{ display: 'flex', gap: 8, marginBottom: 12, flexDirection: mine ? 'row-reverse' : 'row' }}>
-      <Tooltip title={m.sender_type === 'user' ? '点击查看资料' : ''}>
-        <Avatar size={34} icon={isBot ? <RobotOutlined /> : <UserOutlined />}
-          onClick={m.sender_type === 'user' ? onProfile : undefined}
-          style={{ background: isBot ? '#7c3aed' : (mine ? '#2563eb' : '#8c8c8c'), flexShrink: 0, cursor: m.sender_type === 'user' ? 'pointer' : 'default' }} />
+      <Tooltip title={m.sender_type === 'user' ? (online ? '在线 · 点击看资料' : '离线 · 点击看资料') : ''}>
+        <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
+          <Avatar size={34} icon={isBot ? <RobotOutlined /> : <UserOutlined />}
+            onClick={m.sender_type === 'user' ? onProfile : undefined}
+            style={{ background: isBot ? '#7c3aed' : (mine ? '#2563eb' : '#8c8c8c'), cursor: m.sender_type === 'user' ? 'pointer' : 'default' }} />
+          {m.sender_type === 'user' && (
+            <span style={{
+              position: 'absolute', right: -1, bottom: -1, lineHeight: 0,
+              padding: 2, borderRadius: '50%', background: 'var(--color-bg, #fff)',
+            }}><OnlineDot online={online} size={9} /></span>
+          )}
+        </span>
       </Tooltip>
       <div style={{ maxWidth: '68%', minWidth: 0 }}>
         <div style={{ fontSize: 12, color: 'var(--color-text-2)', textAlign: mine ? 'right' : 'left', marginBottom: 2 }}>
@@ -712,7 +777,7 @@ function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply
               {m.sender_username && <span style={{ color: 'var(--color-text-3)' }}>@{m.sender_username}</span>}
             </span>
           )}
-          {' '}<span style={{ color: 'var(--color-text-3)' }}>{fmtTime(m.created_at)}</span>
+          {' '}<span style={{ color: 'var(--color-text-3)' }}>{fmtFullTime(m.created_at)}</span>
           {m.pinned && <PushpinOutlined style={{ color: 'var(--color-warn)', marginLeft: 4 }} />}
         </div>
         {/* 消息体：右键弹出操作菜单（回复/@/私聊/复制/置顶/撤回） */}
@@ -747,7 +812,12 @@ function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply
           </div>
         </Dropdown>
         <div style={{ fontSize: 12, textAlign: mine ? 'right' : 'left', marginTop: 2 }}>
-          <Space size={8}>
+          <Space size={8} wrap>
+            {readTip && (
+              <Tooltip title={`${(m.read_by || []).length} 人已读${(m.unread_by || []).length ? `，${(m.unread_by || []).length} 人未读` : ''}`}>
+                <span style={{ color: readTip.color }}>{readTip.text}</span>
+              </Tooltip>
+            )}
             <a onClick={onReply}>回复</a>
             <Dropdown trigger={['click']} menu={{
               items: [
@@ -844,6 +914,7 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, dis
               style={{ background: m.role === 'owner' ? '#faad14' : m.is_agent ? '#7c3aed' : '#8c8c8c', cursor: !m.is_agent ? 'pointer' : 'default' }} />}
             title={<Space size={4} wrap>
               <span>{m.is_agent ? m.name : (dispName?.(m.user_id, m.name) || m.name)}</span>
+              {!m.is_agent && <OnlineDot online={m.online} size={8} />}
               {!m.is_agent && remarksHas(m.user_id) && <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>（{m.name}）</span>}
               {m.user_id === me?.id && <Tag>我</Tag>}
               {m.is_agent && <Tag color="purple">机器人</Tag>}

@@ -73,5 +73,18 @@ class ChatBroadcaster:
     def online_in_room(self, tenant_id: int, room_id: int) -> int:
         return len(self._rooms.get((tenant_id, room_id), set()))
 
+    def online_user_ids(self) -> set[int]:
+        """当前有 WS 连接的全部 user_id（用于在线状态绿点）。"""
+        return {uid for uid, conns in self._users.items() if conns}
+
+    def online_user_ids_in_room(self, tenant_id: int, room_id: int) -> set[int]:
+        """当前在该房间内在线的 user_id。"""
+        conns = self._rooms.get((tenant_id, room_id), set())
+        out: set[int] = set()
+        for uid, us in self._users.items():
+            if conns & us:
+                out.add(uid)
+        return out
+
 
 broadcaster = ChatBroadcaster()

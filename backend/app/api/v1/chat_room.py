@@ -210,6 +210,8 @@ async def _room_members(db: AsyncSession, room: ChatRoom) -> list[dict]:
     if dept_ids:
         depts = (await db.execute(select(Department).where(Department.id.in_(dept_ids)))).scalars().all()
         dept_map = {d.id: d.name for d in depts}
+    # 在线用户（WS 连接）
+    online_ids = broadcaster.online_user_ids()
     out = []
     for u in users:
         role = role_map.get(u.id, "member")
@@ -220,6 +222,7 @@ async def _room_members(db: AsyncSession, room: ChatRoom) -> list[dict]:
             "name": u.display_name or u.username, "username": u.username,
             "department": dept_map.get(u.department_id) if u.department_id else None,
             "is_admin": bool(u.is_admin), "is_agent": False,
+            "online": u.id in online_ids,
             "muted_until": next((m.muted_until for m in rows if m.user_id == u.id), None),
         })
     # 机器人成员（agent_id 行），附角色/禁言
@@ -268,6 +271,13 @@ async def list_messages(
     rows.reverse()  # 返回按时间正序，便于前端直接 append
     nm = await S.name_map_for(db, rows)
     items = [await S.serialize_message(db, m, name_map=nm) for m in rows]
+    # 已读回执（仅群聊有意义；私聊也返回，前端自行决定是否展示）
+    receipts = await S.read_receipt(db, room=room, msgs=rows)
+    for it in items:
+        r = receipts.get(it["id"])
+        it["read_by"] = r["read_by"] if r else []
+        it["unread_by"] = r["unread_by"] if r else []
+        it["read_count"] = r["read_count"] if r else 0
     # 标记已读
     m = await S.is_member(db, room_id=room_id, user_id=user.id)
     if m:
@@ -988,13 +998,16 @@ async def chat_ws(ws: WebSocket, token: str = Query("")):
         return
     await ws.accept()
     joined: set[int] = set()
+    tid = user.tenant_id
     try:
         # 连上时把该用户可见的房间全部订阅（含后续新建的通过 refresh 消息加入）
         async with AsyncSessionLocal() as db:
-            rooms = await S.list_rooms(db, tenant_id=user.tenant_id, user_id=user.id, is_admin=bool(user.is_admin))
+            rooms = await S.list_rooms(db, tenant_id=tid, user_id=user.id, is_admin=bool(user.is_admin))
         for r in rooms:
-            await broadcaster.join(tenant_id=user.tenant_id, room_id=r["id"], user_id=user.id, ws=ws)
+            await broadcaster.join(tenant_id=tid, room_id=r["id"], user_id=user.id, ws=ws)
             joined.add(r["id"])
+        # 上线：把在线名单推给相关房间
+        await _push_presence(tid, list(joined), user.id, online=True)
         await ws.send_json({"type": "ready", "room_ids": list(joined)})
         while True:
             data = await ws.receive_json()
@@ -1009,9 +1022,10 @@ async def chat_ws(ws: WebSocket, token: str = Query("")):
                         ok = room and room.tenant_id == user.tenant_id and await S.can_access(
                             db, room=room, user_id=user.id, is_admin=bool(user.is_admin))
                     if ok:
-                        await broadcaster.join(tenant_id=user.tenant_id, room_id=rid, user_id=user.id, ws=ws)
+                        await broadcaster.join(tenant_id=tid, room_id=rid, user_id=user.id, ws=ws)
                         joined.add(rid)
                         await ws.send_json({"type": "subscribed", "room_id": rid})
+                        await _push_presence(tid, [rid], user.id, online=True)
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001
@@ -1020,4 +1034,19 @@ async def chat_ws(ws: WebSocket, token: str = Query("")):
         get_logger("chat_ws").exception("ws_error", user_id=user.id)
     finally:
         for rid in joined:
-            await broadcaster.leave(tenant_id=user.tenant_id, room_id=rid, user_id=user.id, ws=ws)
+            await broadcaster.leave(tenant_id=tid, room_id=rid, user_id=user.id, ws=ws)
+        # 只有在没有其它连接时才算真正离线（同一用户可能开多个标签页）
+        if user.id not in broadcaster.online_user_ids() and joined:
+            await _push_presence(tid, list(joined), user.id, online=False)
+
+
+async def _push_presence(tenant_id: int, room_ids: list[int], user_id: int, *, online: bool) -> None:
+    """把某用户上/下线事件推给相关房间，前端据此显示在线绿点。"""
+    for rid in room_ids or []:
+        try:
+            await broadcaster.broadcast_room(
+                tenant_id=tenant_id, room_id=rid,
+                payload={"type": "presence", "room_id": rid, "user_id": user_id, "online": online},
+            )
+        except Exception:  # noqa: BLE001
+            pass
