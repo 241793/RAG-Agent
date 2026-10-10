@@ -546,14 +546,17 @@ class _WriteToolMixin:
 class GenerateFileTool(_WriteToolMixin):
     name = "generate_file"
     description = (
+        "**仅在用户明确要求得到一个文件（下载 / 保存本地 / 导出 / 发附件）时才调用本工具。**\n"
+        "若用户只是想看效果、要一段代码、要演示（如「帮我写个页面」「做个动画」「画个图表」），"
+        "请直接输出 ```html 代码块（前端自带「预览」按钮，点击即可看渲染结果），**不要调用本工具**。\n"
         "根据内容生成文件供用户下载。**按 filename 的扩展名自动判断格式**，无需手动指定。\n"
         "支持任意常见类型：\n"
         "- 办公文档：.docx / .pdf（content 传 markdown，会自动排版）、"
         ".xlsx（用 rows 传二维数组）、.pptx（用 slides 传 [{title,bullets}]）\n"
         "- 网页/代码/文本：.html / .svg / .json / .js / .css / .xml / .py / .md / .csv / .txt 等"
         "（content 传原文，原样写出）\n"
-        "调用示例：要生成一个网页动画，就传 filename=\"anim.html\"（不要用 .txt），"
-        "content 放完整 HTML/SVG 源码。"
+        "调用示例：用户说「生成动画文件发给我」时才调用本工具，传 filename=\"anim.html\""
+        "（不要用 .txt），content 放完整 HTML/SVG 源码。"
     )
     required_permission = "file:write"
     parameters = {

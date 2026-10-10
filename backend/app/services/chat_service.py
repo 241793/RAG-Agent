@@ -18,6 +18,19 @@ from app.services.retrieval_service import retrieve, to_citations
 
 logger = get_logger("chat")
 
+# 工具侧意图分流：用户要「看效果」→ 输出 ```html 代码块（前端自带预览，零副作用）；
+# 只有明确要「文件/下载/导出」时才调用 generate_file。避免把「写个页面」误判成要文件。
+FILE_INTENT_RULE = (
+    "【重要·禁止空口声称·先判断用户要「效果」还是「文件」】\n"
+    "1) 用户要效果/要一段代码（「帮我写个页面」「做个演示」「画个图表」「这段怎么实现」）："
+    "直接把完整代码放进 ```html 代码块，代码块自带「预览」按钮，点击即可看到渲染结果——"
+    "**这种情况不要调用 generate_file**。\n"
+    "2) 只有用户明确要文件（「生成/发我一个文件」「下载」「保存本地」「导出 docx/pdf/xlsx」）："
+    "才必须真的调用 generate_file 生成，绝不能只写「已生成 xxx.html」而不调工具——"
+    "那样界面不会出现任何文件，等于没做；生成后文件会出现在「生成的文件」区。\n"
+    "拿不准走 1)，并在末尾问一句是否需要导出文件。"
+)
+
 # 防幻觉核心：要求明确区分【知识库资料】与【模型自身知识】，不得混淆来源。
 SYSTEM_PROMPT = """你是企业知识助手。回答时**必须明确区分**两类信息来源，绝不可混淆：
 
@@ -251,14 +264,9 @@ async def stream_answer(
         images=images, use_retrieval=use_retrieval, history=history, summary=summary,
     )
 
-    # 防「嘴上说不调工具」：要文件必须真的调用 generate_file 生成出来
+    # 防「嘴上说不调工具」：先判断用户要「效果」还是「文件」，两者分流
     if use_tools:
-        messages.append(ChatMessage(role="system", content=(
-            "【重要·禁止空口声称】当用户要文件（网页/简历/报告/动画/表格等）时，**必须真的调用 "
-            "generate_file 工具**生成文件，绝不能只在回复里写「已生成 xxx.html」而不调工具——"
-            "那样界面上不会出现任何文件，等于没做。调用后文件会自动出现在「生成的文件」区，"
-            "用户可直接预览或下载。"
-        )))
+        messages.append(ChatMessage(role="system", content=FILE_INTENT_RULE))
 
     llm, rm = await get_llm(db, tenant_id=ps.tenant_id, config_id=model_config_id)
     temp = temperature if temperature is not None else 0.2
@@ -542,6 +550,10 @@ async def resume_answer(
         )
     except Exception:  # noqa: BLE001
         logger.exception("resume_resolve_tools_failed")
+
+    # 与首次一致：注入「要看效果还是要文件」的分流规则（须在 tools 装配之后判断）
+    if tools:
+        messages.append(ChatMessage(role="system", content=FILE_INTENT_RULE))
 
     collected = ""
     collected_reasoning = ""
