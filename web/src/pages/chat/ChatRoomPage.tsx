@@ -5,11 +5,13 @@ import {
 import {
   SendOutlined, PlusOutlined, TeamOutlined, RobotOutlined, UserOutlined, PaperClipOutlined,
   PushpinOutlined, MoreOutlined, ReloadOutlined, EditOutlined,
-  SearchOutlined, ProfileOutlined, FolderOutlined, AudioMutedOutlined, MailOutlined, PhoneOutlined, ApartmentOutlined,
+  SearchOutlined, ProfileOutlined, FolderOutlined, AudioMutedOutlined, MailOutlined, PhoneOutlined, ApartmentOutlined, InboxOutlined,
 } from '@ant-design/icons'
+import { useFileDrop } from '../../hooks/useFileDrop'
 import { chatRoomApi, rbacApi, agentApi, chatApi, authApi, scheduledApi, type ChatRoomBrief, type ChatMsgItem } from '../../api'
 import { errMsg } from '../../api/http'
 import AttachmentView from '../../components/AttachmentView'
+import MarkdownBody from '../../components/MarkdownBody'
 
 const ROLE_LABEL: Record<string, string> = { owner: '群主', admin: '管理员', member: '成员' }
 
@@ -228,6 +230,21 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
     return false
   }
 
+  /** 批量上传（拖入/多选）：逐个上传，失败的不影响其它 */
+  const uploadFiles = async (files: File[]) => {
+    let ok = 0
+    for (const f of files) {
+      try {
+        const att = await chatApi.uploadAttachment(f)
+        setPendingAtts((a) => [...a, att])
+        ok += 1
+      } catch (e) { message.error(`${f.name}：${errMsg(e)}`) }
+    }
+    if (ok) message.success(`已添加 ${ok} 个附件`)
+  }
+
+  const drop = useFileDrop(uploadFiles)
+
   const send = async () => {
     if (!activeId) return
     const content = input.trim()
@@ -352,7 +369,23 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
 
   return (
     <>
-      <div style={{ display: 'flex', gap: 12, height, minHeight: compact ? 320 : 480 }}>
+      <div
+        {...drop.dropProps}
+        style={{ display: 'flex', gap: 12, height, minHeight: compact ? 320 : 480, position: 'relative' }}
+      >
+        {/* 拖入文件遮罩 */}
+        {drop.dragging && (
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 50, borderRadius: 8, pointerEvents: 'none',
+            border: '2px dashed var(--color-primary, #2563eb)',
+            background: 'rgba(37,99,235,0.08)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexDirection: 'column', gap: 6, color: 'var(--color-primary, #2563eb)', fontSize: 14,
+          }}>
+            <InboxOutlined style={{ fontSize: 40 }} />
+            <span>松开即可添加到附件</span>
+          </div>
+        )}
         {/* 左：房间列表 */}
         <Card size="small" style={{ width: 260, flex: '0 0 auto', display: 'flex', flexDirection: 'column' }}
           styles={{ body: { padding: 8, display: 'flex', flexDirection: 'column', height: '100%' } }}
@@ -533,7 +566,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                     <Tooltip title="提到某人（也可在输入框直接打 @）"><Button icon={<Typography.Text>@</Typography.Text>} /></Tooltip>
                   </Popover>
                   <Upload beforeUpload={doUpload} showUploadList={false} multiple>
-                    <Tooltip title="发送附件（图片/视频/音频/文件）"><Button icon={<PaperClipOutlined />} /></Tooltip>
+                    <Tooltip title="发送附件（图片/视频/音频/文件），也可直接把文件拖进来"><Button icon={<PaperClipOutlined />} /></Tooltip>
                   </Upload>
                   <Input.TextArea ref={taRef} autoSize={{ minRows: 1, maxRows: 4 }} value={input}
                     onChange={(e) => onInputChange(e.target.value)}
@@ -707,9 +740,9 @@ function Bubble({ m, me, canAdmin, canPin, displayName, onRevoke, onPin, onReply
           <div style={{
             background: mine ? 'var(--color-primary-soft)' : 'var(--color-bg-subtle)',
             border: '1px solid var(--color-border)', borderRadius: 8, padding: '6px 10px',
-            whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 14, cursor: 'context-menu',
+            fontSize: 14, cursor: 'context-menu', maxWidth: '100%',
           }}>
-            {m.content}
+            <MarkdownBody content={m.content || ''} />
             {m.attachments?.map((a: any, i: number) => <AttachmentView key={i} att={a} />)}
           </div>
         </Dropdown>

@@ -7,8 +7,9 @@ import {
   SendOutlined, UserOutlined, RobotOutlined, ClearOutlined, PlusOutlined, DeleteOutlined,
   StopOutlined, ReloadOutlined, CopyOutlined, LikeOutlined, DislikeOutlined, PaperClipOutlined,
   SettingOutlined, EditOutlined, UnorderedListOutlined, ArrowDownOutlined, ToolOutlined, MoreOutlined,
-  LoadingOutlined,
+  LoadingOutlined, InboxOutlined,
 } from '@ant-design/icons'
+import { useFileDrop } from '../../hooks/useFileDrop'
 import { useSearchParams } from 'react-router-dom'
 import {
   chatApi, docApi, kbApi, providerApi, streamChat, usageApi,
@@ -332,6 +333,23 @@ export default function ChatPage() {
     return false
   }
 
+  /** 批量上传（拖入/多选）：逐个上传，失败的不影响其它 */
+  const uploadFiles = async (files: File[]) => {
+    let ok = 0
+    for (const f of files) {
+      try {
+        const kind = f.type.startsWith('image/') ? 'image'
+          : f.type.startsWith('video/') || f.type.startsWith('audio/') ? 'video' : 'document'
+        const att = await chatApi.uploadAttachment(f, { kind, kbId: kind === 'document' ? docKb : undefined })
+        setPendingAtts((a) => [...a, att])
+        ok += 1
+      } catch (e) { message.error(`${f.name}：${errMsg(e)}`) }
+    }
+    if (ok) message.success(`已添加 ${ok} 个附件`)
+  }
+
+  const drop = useFileDrop(uploadFiles)
+
   const runStream = async (payload: any, handlers: StreamHandlers, url?: string, key: string = curKey) => {
     const ctrl = new AbortController()
     abortMap.current.set(key, ctrl)
@@ -542,7 +560,23 @@ export default function ChatPage() {
   }
 
   return (
-    <div style={{ display: 'flex', gap: 12, height: 'calc(100vh - 112px)' }}>
+    <div
+      {...drop.dropProps}
+      style={{ display: 'flex', gap: 12, height: 'calc(100vh - 112px)', position: 'relative' }}
+    >
+      {/* 拖入文件遮罩 */}
+      {drop.dragging && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 50, borderRadius: 8, pointerEvents: 'none',
+          border: '2px dashed var(--color-primary, #2563eb)',
+          background: 'rgba(37,99,235,0.08)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexDirection: 'column', gap: 6, color: 'var(--color-primary, #2563eb)', fontSize: 14,
+        }}>
+          <InboxOutlined style={{ fontSize: 40 }} />
+          <span>松开即可添加到附件</span>
+        </div>
+      )}
       {/* 历史会话侧栏 */}
       <div style={{ width: 220, flex: '0 0 auto', display: 'flex', flexDirection: 'column' }}>
         {canReadAll && (
@@ -816,7 +850,7 @@ export default function ChatPage() {
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
             <Upload beforeUpload={doUpload} showUploadList={false} multiple
               accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.csv,.txt,.md,image/*,video/*">
-              <Tooltip title="上传图片/文档/视频"><Button icon={<PaperClipOutlined />} /></Tooltip>
+              <Tooltip title="上传图片/文档/视频，也可直接把文件拖进来"><Button icon={<PaperClipOutlined />} /></Tooltip>
             </Upload>
             {kbs.length > 0 && (
               <Select size="small" style={{ width: 150 }} placeholder="文档入库到（可空）" allowClear
