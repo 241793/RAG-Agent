@@ -689,7 +689,7 @@ export default function KBDetailPage() {
                 <Alert type="info" showIcon style={{ marginTop: 12 }}
                   message="该知识库在检索时实时调用外部系统，结果与本地库一起排序融合；修改连接配置请在「编辑知识库」中进行。" />
 
-                <Divider orientation="left" style={{ marginTop: 20 }}>导入同步</Divider>
+                <Divider titlePlacement="left" style={{ marginTop: 20 }}>导入同步</Divider>
                 <Alert type="warning" showIcon style={{ marginBottom: 12 }}
                   message="实时检索依赖远端可用与响应速度；「导入同步」把远端内容一次性拉取并落本地索引，之后检索走本地、更快更稳，且可与本地内容一起重排。重复同步按来源去重，不会产生重复文档。" />
                 {syncSt ? (

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Avatar, Button, Card, Descriptions, Divider, Drawer, Dropdown, Empty, Image, Input, InputNumber, List, message, Modal, Popconfirm, Popover, Select, Space, Spin, Switch, Tabs, Tag, Tooltip, Typography, Upload,
+  Alert, Avatar, Button, Card, Descriptions, Divider, Drawer, Dropdown, Empty, Form, Image, Input, InputNumber, List, message, Modal, Popconfirm, Popover, Select, Space, Spin, Switch, Tabs, Tag, Tooltip, Typography, Upload,
 } from 'antd'
 import {
   SendOutlined, PlusOutlined, TeamOutlined, RobotOutlined, UserOutlined, PaperClipOutlined,
-  PushpinOutlined, DeleteOutlined, MoreOutlined, ReloadOutlined, RollbackOutlined, EditOutlined,
+  PushpinOutlined, MoreOutlined, ReloadOutlined, EditOutlined,
   SearchOutlined, ProfileOutlined, FolderOutlined, AudioMutedOutlined, MailOutlined, PhoneOutlined, ApartmentOutlined,
 } from '@ant-design/icons'
 import { chatRoomApi, rbacApi, agentApi, chatApi, authApi, scheduledApi, type ChatRoomBrief, type ChatMsgItem } from '../../api'
@@ -476,7 +476,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                   onRevoke={() => revoke(m)} onPin={() => pin(m, !m.pinned)} onReply={() => setReplyTo(m)}
                   onMention={handleMention}
                   onProfile={() => setProfileUid(m.sender_id)}
-                  onPrivate={() => { if (m.sender_type === 'user' && m.sender_id !== me?.id) startDirect(m.sender_id) }} />)}
+                  onPrivate={() => { if (m.sender_type === 'user' && m.sender_id && m.sender_id !== me?.id) startDirect(m.sender_id) }} />)}
               </div>
 
               {pendingCount > 0 && (
@@ -641,7 +641,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
 
       {/* 聊天记录搜索 */}
       <SearchDrawer open={searchOpen} onClose={() => setSearchOpen(false)} detail={detail}
-        onJump={(mid) => { const el = document.getElementById(`msg-${mid}`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }} />
+        onJump={(mid: number) => { const el = document.getElementById(`msg-${mid}`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }} />
 
       {/* 成员资料卡 */}
       <ProfileDrawer open={profileUid != null} onClose={() => setProfileUid(null)} roomId={detail?.id} userId={profileUid}
@@ -1208,13 +1208,13 @@ function GroupBotDrawer({ open, onClose, detail, onChanged }: any) {
                 </Button></span>} />
           )}
 
-          <Divider orientation="left" style={{ margin: '8px 0' }}>一键订阅</Divider>
+          <Divider titlePlacement="left" style={{ margin: '8px 0' }}>一键订阅</Divider>
           <Space wrap>
             {PRESETS.map((p) => <Button key={p.key} size="small" onClick={() => subscribe(p)}>{p.label}</Button>)}
             <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={openNewTask}>自定义任务</Button>
           </Space>
 
-          <Divider orientation="left" style={{ margin: '16px 0 8px' }}>本群定时任务</Divider>
+          <Divider titlePlacement="left" style={{ margin: '16px 0 8px' }}>本群定时任务</Divider>
           {loading ? <div style={{ textAlign: 'center', padding: 16 }}><Spin /></div> : (
             tasks.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无群定时任务" /> : (
               <List size="small" dataSource={tasks} renderItem={(t: any) => (

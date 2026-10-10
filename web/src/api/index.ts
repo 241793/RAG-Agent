@@ -31,7 +31,7 @@ export interface KB {
   source_type?: 'local' | 'external' | 'entry'
   index_mode?: 'vector' | 'keyword'
   connector_kind?: string | null
-  embedding_model_id?: number
+  embedding_model_id?: number | null
   chunk_strategy?: Record<string, any>
   settings?: Record<string, any>
   doc_count: number
