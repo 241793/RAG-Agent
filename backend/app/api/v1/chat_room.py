@@ -278,6 +278,59 @@ async def list_messages(
     rows.reverse()  # 返回按时间正序，便于前端直接 append
     nm = await S.name_map_for(db, rows)
     items = [await S.serialize_message(db, m, name_map=nm) for m in rows]
+    # 兜底：旧版本机器人生成的文件只写了「已生成 xxx」文本、没挂附件，
+    # 此处按「产物创建时间落在该消息时间附近 + 文件名出现在消息内容里」补挂，
+    # 让历史消息里的文件也能显示/预览。
+    need = any(
+        (m.sender_type == "agent") and not m.attachments and m.content and ("已生成" in m.content or "生成了" in m.content)
+        for m in rows
+    )
+    if need:
+        from app.models import Artifact
+
+        arts = (
+            await db.execute(
+                select(Artifact).where(
+                    Artifact.tenant_id == room.tenant_id, Artifact.source == "generated"
+                ).order_by(Artifact.id.asc())
+            )
+        ).scalars().all()
+        used: set[int] = set()
+        for m in rows:
+            for a in (m.attachments or []):
+                if a.get("artifact_id"):
+                    used.add(a["artifact_id"])
+
+        def _ats(a) -> int:
+            try:
+                dt = a.created_at
+                if dt is None:
+                    return 0
+                if dt.tzinfo is None:
+                    from datetime import timezone as _tz
+                    dt = dt.replace(tzinfo=_tz.utc)
+                return int(dt.timestamp() * 1000)
+            except Exception:  # noqa: BLE001
+                return 0
+
+        for a in arts:
+            if a.id in used or not a.file_name:
+                continue
+            ats = _ats(a)
+            # 归属：时间上第一条 created_at >= 产物时间 的 agent 消息
+            target = next((m for m in rows if m.sender_type == "agent" and m.created_at >= ats), None)
+            if target is None:
+                continue
+            if a.file_name not in (target.content or ""):
+                continue
+            target.attachments = list(target.attachments or []) + [{
+                "artifact_id": a.id, "file_key": a.file_key, "name": a.file_name,
+                "mime": a.mime, "size": a.size,
+            }]
+            used.add(a.id)
+        # attachments 变了，重新序列化受影响项
+        items = [await S.serialize_message(db, m, name_map=nm) for m in rows]
+
     # 已读回执（仅群聊有意义；私聊也返回，前端自行决定是否展示）
     receipts = await S.read_receipt(db, room=room, msgs=rows)
     for it in items:

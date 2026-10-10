@@ -258,6 +258,12 @@ class AgentRunner:
             "回答要简洁：群里是快节奏场景，优先给结论，再给必要细节；"
             "除非被要求，否则控制在 200 字以内。"
         )
+        # 防「嘴上说不调工具」：生成文件必须真的调用 generate_file
+        lines.append(
+            "【重要·禁止空口声称】当用户要文件（网页/简历/报告/动画等）时，**必须真的调用 "
+            "generate_file 工具**把文件生成出来，绝不能只在回复里写「已生成 xxx.html」而不调工具——"
+            "那样群里根本不会出现文件，等于没做。调用后文件会自动作为附件出现在你的消息里。"
+        )
         return "\n".join(lines)
 
     async def run(self, query: str, mode_id: int | None = None) -> AsyncIterator[dict]:

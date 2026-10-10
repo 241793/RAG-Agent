@@ -80,12 +80,23 @@ async def _run_bot(room_id: int, agent_id: int, content: str, asker_id: int) -> 
             query = "你好"
 
         text = ""
+        # 收集本次运行产生的产物（generate_file 等），稍后挂到群消息上
+        artifacts: list[dict] = []
         try:
             async for evt in runner.run(query):
                 if evt.get("type") == "delta":
                     text += evt.get("text", "")
                 elif evt.get("type") == "error":
                     text = text or "（机器人处理出错）"
+                elif evt.get("type") == "tool_result":
+                    d = evt.get("data")
+                    if isinstance(d, dict) and d.get("artifact_id"):
+                        artifacts.append({
+                            "artifact_id": d.get("artifact_id"),
+                            "file_key": d.get("file_key"),
+                            "name": d.get("name"), "mime": d.get("mime"),
+                            "size": d.get("size"), "type": d.get("type"),
+                        })
         except Exception as e:  # noqa: BLE001
             logger.warning("chat_bot_run_error", err=str(e)[:200])
             text = text or "（机器人暂时无法回答）"
@@ -93,11 +104,12 @@ async def _run_bot(room_id: int, agent_id: int, content: str, asker_id: int) -> 
         if not text.strip():
             text = "（我没有得到有效回答）"
 
-        # 落库 + 广播，回复 @ 提问者
+        # 落库 + 广播，回复 @ 提问者；产物一并作为消息附件（前端可预览/下载）
         asker_name = asker.display_name or asker.username
         msg = await S.post_message(
             db, room=room, sender_id=agent_id, sender_type="agent",
             content=f"@{asker_name} {text}", mentions=[asker_id],
+            attachments=artifacts or None,
         )
         await db.flush()
         out = await S.serialize_message(db, msg)

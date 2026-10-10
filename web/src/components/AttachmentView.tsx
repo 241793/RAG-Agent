@@ -148,9 +148,12 @@ export default function AttachmentView({ att, artifact = false }: { att: AttLike
     )
   }
 
-  return (kind === 'image' || kind === 'video' || kind === 'pdf')
-    ? <div>{body}</div>
+  // 有自定义 body 的类型直接渲染 body（含 HTML 弹框/文本抽屉/媒体/PDF）；
+  // 只有完全无交互的其它类型才退回简版 fileCard
+  const plain = kind !== 'image' && kind !== 'video' && kind !== 'pdf' && !isHtml && kind !== 'text'
+  return plain
+    ? fileCard
     : (artifact
         ? <Card size="small" style={{ marginTop: 4, display: 'inline-block' }}>{body}</Card>
-        : fileCard)
+        : <div>{body}</div>)
 }

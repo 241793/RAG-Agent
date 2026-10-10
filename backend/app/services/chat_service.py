@@ -251,6 +251,15 @@ async def stream_answer(
         images=images, use_retrieval=use_retrieval, history=history, summary=summary,
     )
 
+    # 防「嘴上说不调工具」：要文件必须真的调用 generate_file 生成出来
+    if use_tools:
+        messages.append(ChatMessage(role="system", content=(
+            "【重要·禁止空口声称】当用户要文件（网页/简历/报告/动画/表格等）时，**必须真的调用 "
+            "generate_file 工具**生成文件，绝不能只在回复里写「已生成 xxx.html」而不调工具——"
+            "那样界面上不会出现任何文件，等于没做。调用后文件会自动出现在「生成的文件」区，"
+            "用户可直接预览或下载。"
+        )))
+
     llm, rm = await get_llm(db, tenant_id=ps.tenant_id, config_id=model_config_id)
     temp = temperature if temperature is not None else 0.2
     collected = ""
