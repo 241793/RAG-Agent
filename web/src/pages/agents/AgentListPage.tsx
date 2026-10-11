@@ -61,6 +61,11 @@ export default function AgentListPage() {
   }
 
   const chatConfigs = configs.filter((c) => c.purpose === 'chat')
+  // 内置智能体置顶展示，其余按创建时间倒序
+  const sortedAgents = [...agents].sort((a, b) => {
+    if (!!a.is_builtin !== !!b.is_builtin) return a.is_builtin ? -1 : 1
+    return String(b.created_at || '').localeCompare(String(a.created_at || ''))
+  })
 
   return (
     <PageContainer
@@ -71,11 +76,12 @@ export default function AgentListPage() {
         <EmptyState description="暂无智能体，点击右上角创建" actionText={canEdit ? '新建智能体' : undefined} onAction={() => setOpen(true)} />
       ) : (
         <Row gutter={[16, 16]}>
-          {agents.map((a) => (
+          {sortedAgents.map((a) => (
             <Col key={a.id} xs={24} sm={12} md={8} lg={6}>
               <Card
                 hoverable
-                title={<Space><RobotOutlined />{a.name}</Space>}
+                className="app-card"
+                title={<Space><RobotOutlined />{a.name}{a.is_builtin && <Tag color="gold" style={{ marginInlineEnd: 0 }}>内置</Tag>}</Space>}
                 extra={<Tag color={a.type === 'workflow' ? 'purple' : 'blue'}>{a.type === 'workflow' ? '工作流' : '工具Agent'}</Tag>}
                 actions={[
                   a.type === 'workflow' ? (
@@ -94,7 +100,8 @@ export default function AgentListPage() {
                         onClick={async () => { await agentApi.publish(a.id); message.success('已发布'); load() }} /> : null),
                   canEdit ? <CopyOutlined key="clone" title="复制"
                     onClick={async () => { await agentApi.clone(a.id); message.success('已复制'); load() }} /> : null,
-                  canEdit ? (
+                  // 内置智能体不可删除
+                  canEdit && !a.is_builtin ? (
                     <Popconfirm key="del" title="删除该智能体？" onConfirm={async () => { await agentApi.remove(a.id); load() }}>
                       <DeleteOutlined />
                     </Popconfirm>

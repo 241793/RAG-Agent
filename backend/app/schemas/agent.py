@@ -53,6 +53,7 @@ class AgentOut(BaseModel):
     status: str
     visibility: str
     owner_id: int | None = None
+    is_builtin: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}

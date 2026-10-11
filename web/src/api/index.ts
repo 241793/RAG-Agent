@@ -708,6 +708,7 @@ export interface Agent {
   status: string
   visibility: string
   owner_id?: number
+  is_builtin?: boolean
   created_at: string
 }
 export interface AgentMode {

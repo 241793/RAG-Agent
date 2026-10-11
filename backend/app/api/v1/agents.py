@@ -131,6 +131,10 @@ async def delete_agent(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     a = await _get_agent(db, agent_id, user.tenant_id)
+    if getattr(a, "is_builtin", False):
+        from app.core.errors import ConflictError
+
+        raise ConflictError("内置智能体不可删除")
     await db.delete(a)
     await db.flush()
     return {"message": "已删除"}

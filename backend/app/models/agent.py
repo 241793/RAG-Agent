@@ -44,6 +44,8 @@ class Agent(Base, IdMixin, TimestampMixin, TenantMixin):
     status: Mapped[str] = mapped_column(String(16), default="draft")  # draft|published|disabled
     visibility: Mapped[str] = mapped_column(String(16), default="private")  # private|tenant
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 平台内置智能体：随系统播种、列表置顶、禁止删除（对话模型仍由界面选择，不预置）
+    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
 
 class AgentMode(Base, IdMixin, TimestampMixin, TenantMixin):

@@ -6,6 +6,7 @@ import {
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, WechatOutlined,
   QqOutlined, CloudServerOutlined, TeamOutlined, ExperimentOutlined, QrcodeOutlined, LinkOutlined,
+  EyeOutlined, EyeInvisibleOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { agentApi, channelApi, kbApi, type Agent, type ChannelItem, type KB } from '../../api'
@@ -61,8 +62,16 @@ export default function ChannelListPage() {
   const [scanChannel, setScanChannel] = useState<ChannelItem | null>(null)
   const [formScan, setFormScan] = useState(false)
   const [wxToken, setWxToken] = useState('')  // 微信 token（扫码回填；渲染时同步到表单）
+  // Token 明文显隐（默认遮罩，点击眼睛查看）
+  const [showToken, setShowToken] = useState<Record<number, boolean>>({})
   const hasPermission = useAuth((s) => s.hasPermission)
   const canManage = hasPermission('channel:manage')
+
+  /** 取某渠道的 token 及其真实长度（token 可能是任意键名，按常见键探测） */
+  const tokenOf = (c: ChannelItem): string => {
+    const cfg = (c.config || {}) as Record<string, any>
+    return String(cfg.token ?? cfg.bot_token ?? cfg.access_token ?? '')
+  }
 
   const load = async () => {
     setLoading(true)
@@ -176,6 +185,37 @@ export default function ChannelListPage() {
                           : '自动（全部有权库）'}
                     </Descriptions.Item>
                     <Descriptions.Item label="指令前缀"><code>{c.command_prefix}</code></Descriptions.Item>
+                    {/* Token：显示真实长度，可点眼睛切换明文（仅 channel:manage 可查看） */}
+                    <Descriptions.Item label="Token">
+                      {(() => {
+                        const tk = tokenOf(c)
+                        if (!tk) {
+                          return <Tag color="default">未配置</Tag>
+                        }
+                        const len = tk.length
+                        const visible = !!showToken[c.id]
+                        const masked = len <= 8
+                          ? '•'.repeat(len)
+                          : `${tk.slice(0, 4)}${'•'.repeat(Math.min(12, len - 8))}${tk.slice(-4)}`
+                        return (
+                          <Space size={6} wrap>
+                            <Tag color="blue" data-testid={`token-len-${c.id}`}>{len} 位</Tag>
+                            <Typography.Text code copyable={canManage ? { text: tk, tooltips: ['复制 token', '已复制'] } : false}
+                              style={{ fontSize: 12, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'middle' }}>
+                              {canManage && visible ? tk : masked}
+                            </Typography.Text>
+                            {canManage && (
+                              <Button size="small" type="text"
+                                icon={visible ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+                                data-testid={`token-toggle-${c.id}`}
+                                onClick={() => setShowToken((m) => ({ ...m, [c.id]: !m[c.id] }))}>
+                                {visible ? '隐藏' : '查看'}
+                              </Button>
+                            )}
+                          </Space>
+                        )
+                      })()}
+                    </Descriptions.Item>
                   </Descriptions>
                   {c.last_error && <Alert type="error" showIcon style={{ marginTop: 8 }} message={c.last_error} />}
                 </Card>
