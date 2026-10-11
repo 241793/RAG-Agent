@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.db import AsyncSessionLocal, get_db
 from app.core.errors import NotFoundError, PermissionDeniedError, ValidationError
+from app.ingest.storage import get_storage
 from app.middleware.auth_dep import get_current_user, require_permission
 from app.models import (
     Agent,
@@ -440,6 +441,7 @@ async def list_files(
     rows = list((await db.execute(stmt)).scalars().all())
     nm = await S.name_map_for(db, rows)
     out: list[dict] = []
+    storage = get_storage()
     for m in rows:
         sender = nm.get(m.sender_id or 0, {})
         for att in (m.attachments or []):
@@ -447,6 +449,14 @@ async def list_files(
             cat = _attach_category(ctype, att.get("name") or "")
             if kind and cat != kind:
                 continue
+            # 物理文件已丢失的附件不展示（点了也是 404）
+            fk = att.get("file_key")
+            if fk:
+                try:
+                    if not storage.path(fk).is_file():
+                        continue
+                except Exception:  # noqa: BLE001
+                    continue
             out.append({
                 "message_id": m.id, "created_at": m.created_at,
                 "sender_name": sender.get("name") or "未知",
@@ -455,6 +465,71 @@ async def list_files(
                 "att": att,
             })
     return out
+
+
+@router.delete("/{room_id}/files/{message_id}")
+async def delete_file(
+    room_id: int,
+    message_id: int,
+    file_key: str = Query("", description="要删除的附件 file_key"),
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """删除群文件：从消息附件里摘除并删除磁盘文件；管理员或附件发送者可操作。
+
+    附件删完后消息本身保留（若已无内容则软撤回，避免出现空白气泡）。
+    """
+    room = await _guard_room(db, user, room_id)
+    msg = await db.get(ChatMessage, message_id)
+    if not msg or msg.room_id != room.id:
+        raise NotFoundError("消息不存在")
+    role = await S.member_role(db, room=room, user_id=user.id, is_admin=bool(user.is_admin))
+    is_owner_or_admin = role in ("owner", "admin")
+    # 发送者本人可删自己的附件（机器人消息按管理员权限判定）
+    if msg.sender_type == "user" and not is_owner_or_admin and msg.sender_id != user.id:
+        raise PermissionDeniedError("只有管理员或发送者本人可删除该文件")
+
+    atts = list(msg.attachments or [])
+    target = next((a for a in atts if (a.get("file_key") or "") == file_key), None)
+    if file_key and target is None:
+        raise NotFoundError("附件不存在")
+    to_del = [target] if target else atts
+    # 从消息里摘除
+    rest = [a for a in atts if a not in to_del]
+    msg.attachments = rest or None
+    # 附件全删且无正文 → 软撤回，避免留下空白气泡
+    if not rest and not (msg.content or "").strip():
+        msg.revoked = True
+        msg.revoked_by = user.id
+        msg.revoked_at = _now_ms()
+    await db.flush()
+    # 删磁盘文件（artifact 记录同步清理）
+    storage = get_storage()
+    n = 0
+    for a in to_del:
+        fk = a.get("file_key")
+        if not fk:
+            continue
+        try:
+            storage.delete(fk)
+            n += 1
+        except Exception:  # noqa: BLE001
+            pass
+        aid = a.get("artifact_id")
+        if aid:
+            from app.models import Artifact
+
+            art = await db.get(Artifact, int(aid))
+            if art:
+                await db.delete(art)
+    await db.flush()
+    # 广播变更，让其它端刷新
+    await broadcaster.broadcast_room(tenant_id=room.tenant_id, room_id=room.id, payload={
+        "type": "revoke" if msg.revoked else "file_deleted",
+        "room_id": room.id, "message_id": msg.id,
+        "revoked_by": user.id if msg.revoked else None,
+    })
+    return {"message": f"已删除 {n} 个文件", "deleted": n}
 
 
 def _attach_category(content_type: str, name: str = "") -> str:

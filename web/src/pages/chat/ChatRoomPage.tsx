@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Avatar, Button, Card, Descriptions, Divider, Drawer, Dropdown, Empty, Form, Image, Input, InputNumber, List, message, Modal, Popconfirm, Popover, Select, Space, Spin, Switch, Tabs, Tag, Tooltip, Typography, Upload,
+  Alert, Avatar, Button, Card, Descriptions, Divider, Drawer, Dropdown, Empty, Form, Image, Input, InputNumber, List, message, Modal, notification, Popconfirm, Popover, Select, Space, Spin, Switch, Tabs, Tag, Tooltip, Typography, Upload,
 } from 'antd'
 import {
   SendOutlined, PlusOutlined, TeamOutlined, RobotOutlined, UserOutlined, PaperClipOutlined,
   PushpinOutlined, MoreOutlined, ReloadOutlined, EditOutlined,
-  SearchOutlined, ProfileOutlined, FolderOutlined, AudioMutedOutlined, MailOutlined, PhoneOutlined, ApartmentOutlined, InboxOutlined,
+  SearchOutlined, ProfileOutlined, FolderOutlined, AudioMutedOutlined, MailOutlined, PhoneOutlined, ApartmentOutlined, InboxOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import { useFileDrop } from '../../hooks/useFileDrop'
 import { chatRoomApi, rbacApi, agentApi, chatApi, authApi, scheduledApi, type ChatRoomBrief, type ChatMsgItem } from '../../api'
@@ -96,6 +96,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   const [atQuery, setAtQuery] = useState('')
   const [remarks, setRemarks] = useState<Record<string, string>>({})  // 私聊备注 {peerId: remark}
   const [onlineMap, setOnlineMap] = useState<Record<number, boolean>>({})  // 在线状态 {userId: bool}
+  const [mentions, setMentions] = useState<any[]>([])  // 未读的 @我 提醒
 
   const listRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<any>(null)
@@ -103,7 +104,14 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   const activeIdRef = useRef<number | null>(null)
   const atBottomRef = useRef(true)
   const reconnectRef = useRef<any>(null)
+  // WS 回调里读最新值用（避免闭包过期）
+  const meRef = useRef<any>(null)
+  const roomsRef = useRef<any[]>([])
+  const jumpToMessageRef = useRef<((mid: number) => void) | null>(null)
+  const openRoomRef = useRef<((id: number, jumpMid?: number) => void) | null>(null)
 
+  meRef.current = me
+  roomsRef.current = rooms
   activeIdRef.current = activeId
 
   // 拉当前用户 / 可选成员 / 智能体 / 私聊备注
@@ -159,7 +167,7 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
   }
   useEffect(() => { loadRooms() }, [])
 
-  const openRoom = async (id: number) => {
+  const openRoom = async (id: number, jumpMid?: number) => {
     setActiveId(id)
     setMsgs([]); setReplyTo(null); setPendingAtts([])
     setAutoScroll(true); atBottomRef.current = true; setPendingCount(0)
@@ -173,7 +181,11 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
       setOnlineMap((prev) => ({ ...prev, ...om }))
       chatRoomApi.read(id).catch(() => {})
       setRooms((rs) => rs.map((r) => r.id === id ? { ...r, unread: 0 } : r))
-      requestAnimationFrame(() => scrollBottom())
+      // 有跳转目标则定位，否则滚到底
+      requestAnimationFrame(() => {
+        if (jumpMid) setTimeout(() => jumpToMessage(jumpMid), 250)
+        else scrollBottom()
+      })
       // 让后端把这个房间加入 WS 订阅（新建群后需要）
       wsRef.current?.readyState === WebSocket.OPEN && wsRef.current.send(JSON.stringify({ type: 'subscribe', room_id: id }))
     } catch (e) { message.error(errMsg(e)) }
@@ -203,6 +215,42 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
       requestAnimationFrame(() => { if (el) el.scrollTop = el.scrollHeight - prevH })
     } catch (e) { message.error(errMsg(e)) } finally { setLoadingMore(false) }
   }
+
+  /** 定位到某条消息：不在当前列表则先向前翻历史，再滚动并高亮 */
+  const jumpToMessage = async (mid: number) => {
+    const scrollTo = () => {
+      const el = document.getElementById(`msg-${mid}`)
+      if (!el) return false
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      // 短暂高亮，便于识别
+      const box = el.querySelector('div')
+      if (box) {
+        const old = (box as HTMLElement).style.boxShadow
+        ;(box as HTMLElement).style.boxShadow = '0 0 0 2px var(--color-primary, #2563eb)'
+        setTimeout(() => { (box as HTMLElement).style.boxShadow = old }, 1600)
+      }
+      return true
+    }
+    if (scrollTo()) return
+    if (!activeId) return
+    // 不在已加载范围：向前翻，最多翻 10 页
+    try {
+      for (let i = 0; i < 10 && hasMore; i++) {
+        const before = msgs.length ? msgs[0].id : undefined
+        const r = await chatRoomApi.messages(activeId, before, 50)
+        setMsgs((m) => [...r.items, ...m])
+        setHasMore(r.has_more)
+        await new Promise((res) => setTimeout(res, 60))
+        if (r.items.some((x) => x.id === mid)) break
+        if (!r.has_more) break
+      }
+      await new Promise((res) => setTimeout(res, 120))
+      if (!scrollTo()) message.info('该消息已不在可加载范围内')
+    } catch (e) { message.error(errMsg(e)) }
+  }
+  // 供 WS 回调（闭包可能过期）使用
+  jumpToMessageRef.current = jumpToMessage
+  openRoomRef.current = openRoom
 
   // WebSocket 实时
   useEffect(() => {
@@ -236,6 +284,29 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
       setRooms((rs) => rs.map((r) => r.id === d.room_id
         ? { ...r, last_message_at: m.created_at, last_preview: m.content?.slice(0, 60) || (m.attachments ? '[附件]' : ''), unread: (r.id === activeIdRef.current ? 0 : (r.unread || 0) + 1) }
         : r))
+      // @我提示：mentions 混存 user_id 与 agent_id，仅在人类发送者@了我的 user_id 时算命中
+      const myId: number | undefined = meRef.current?.id
+      const mentionsMe = m.sender_type === 'user' && !!myId
+        && m.sender_id !== myId
+        && Array.isArray(m.mentions) && m.mentions.includes(myId)
+      if (mentionsMe) {
+        setMentions((prev) => prev.some((x) => x.msg_id === m.id) ? prev : [...prev, {
+          msg_id: m.id, room_id: d.room_id,
+          room_name: (roomsRef.current.find((r) => r.id === d.room_id)?.name) || '群聊',
+          sender_name: m.sender_name, content: (m.content || '').slice(0, 80),
+        }])
+        // 桌面/页面内轻提示
+        notification.open({
+          message: `${m.sender_name} 在「${roomsRef.current.find((r) => r.id === d.room_id)?.name || '群聊'}」提到了你`,
+          description: (m.content || '').slice(0, 120) || '[附件]',
+          placement: 'bottomRight',
+          onClick: () => {
+            setMentions((prev) => prev.filter((x) => x.msg_id !== m.id))
+            if (activeIdRef.current === d.room_id) jumpToMessageRef.current?.(m.id)
+            else openRoomRef.current?.(d.room_id, m.id)
+          },
+        })
+      }
       if (d.room_id === activeIdRef.current) {
         setMsgs((cur) => cur.some((x) => x.id === m.id) ? cur : [...cur, m])
         if (atBottomRef.current) requestAnimationFrame(() => scrollBottom())
@@ -598,11 +669,59 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                   <AudioMutedOutlined /> 全员禁言中{canAdmin ? '（管理员可发言）' : '，暂时无法发言'}
                 </div>
               )}
-              {/* 置顶消息 */}
+              {/* @我 提醒（未读的提及，点击定位） */}
+              {mentions.length > 0 && (
+                <div style={{ margin: '0 12px 8px', borderRadius: 4, overflow: 'hidden', border: '1px solid var(--color-warn, #faad14)' }}>
+                  {mentions.map((x: any, idx: number) => (
+                    <div key={x.msg_id}
+                      onClick={() => {
+                        setMentions((prev) => prev.filter((p) => p.msg_id !== x.msg_id))
+                        if (activeIdRef.current === x.room_id) jumpToMessage(x.msg_id)
+                        else openRoom(x.room_id, x.msg_id)
+                      }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px',
+                        background: 'var(--color-warn-soft, #fffbe6)', fontSize: 12, cursor: 'pointer',
+                        borderTop: idx === 0 ? undefined : '1px solid var(--color-border)',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-primary-soft)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--color-warn-soft, #fffbe6)')}>
+                      <span style={{ flexShrink: 0 }}>@</span>
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <b>{x.sender_name}</b> 提到了你：{x.content || '[附件]'}
+                      </span>
+                      <Button size="small" type="text" onClick={(e) => {
+                        e.stopPropagation()
+                        setMentions((prev) => prev.filter((p) => p.msg_id !== x.msg_id))
+                      }}>忽略</Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* 置顶消息（QQ 式：公告下方，每条一行，点击定位；管理员可取消置顶） */}
               {detail.pinned?.length > 0 && (
-                <div style={{ margin: '0 12px 8px', padding: '4px 10px', borderLeft: '3px solid var(--color-warn)', background: 'var(--color-bg-subtle)', fontSize: 12, borderRadius: 4 }}>
-                  {detail.pinned.slice(0, 2).map((p: ChatMsgItem) => (
-                    <div key={p.id}><PushpinOutlined /> <b>{p.sender_name}</b>：{p.content?.slice(0, 60)}</div>
+                <div style={{ margin: '0 12px 8px', borderRadius: 4, overflow: 'hidden', border: '1px solid var(--color-border)' }}>
+                  {detail.pinned.map((p: ChatMsgItem, idx: number) => (
+                    <div key={p.id}
+                      onClick={() => jumpToMessage(p.id)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px',
+                        background: 'var(--color-bg-subtle)', fontSize: 12, cursor: 'pointer',
+                        borderTop: idx === 0 ? undefined : '1px solid var(--color-border)',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-primary-soft)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--color-bg-subtle)')}>
+                      <PushpinOutlined style={{ color: 'var(--color-warn)', flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <b>{dispName(p.sender_id, p.sender_name)}</b>：{(p.content || (p.attachments ? '[附件]' : '')).slice(0, 80)}
+                      </span>
+                      {canAdmin && (
+                        <Tooltip title="取消置顶">
+                          <Button size="small" type="text" icon={<PushpinOutlined />}
+                            onClick={(e) => { e.stopPropagation(); pin(p, false) }} />
+                        </Tooltip>
+                      )}
+                    </div>
                   ))}
                 </div>
               )}
@@ -723,7 +842,8 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
         onChanged={() => activeId && openRoom(activeId)} />
 
       {/* 群文件 / 相册 */}
-      <FilesDrawer open={filesOpen} onClose={() => setFilesOpen(false)} detail={detail} />
+      <FilesDrawer open={filesOpen} onClose={() => setFilesOpen(false)} detail={detail} me={me} canAdmin={canAdmin}
+        onChanged={() => activeId && openRoom(activeId)} />
 
       {/* 群公告 */}
       <AnnouncementDrawer open={annOpen} onClose={() => setAnnOpen(false)} detail={detail}
@@ -971,18 +1091,36 @@ function MemberDrawer({ open, onClose, detail, users, me, canAdmin, isOwner, dis
 }
 
 /** 群文件 / 相册：按类型筛选本群所有带附件的消息。 */
-function FilesDrawer({ open, onClose, detail }: any) {
+function FilesDrawer({ open, onClose, detail, me, canAdmin, onChanged }: any) {
   const [tab, setTab] = useState('image')
   const [items, setItems] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
-  useEffect(() => {
-    if (!open || !detail?.id) return
+  const load = () => {
+    if (!detail?.id) return
     setLoading(true)
     chatRoomApi.files(detail.id, tab)
       .then((r: any[]) => setItems(r))
       .catch(() => setItems([]))
       .finally(() => setLoading(false))
-  }, [open, detail?.id, tab])
+  }
+  useEffect(() => { if (open) load() /* eslint-disable-next-line */ }, [open, detail?.id, tab])
+
+  /** 删除文件（管理员 或 自己发的） */
+  const remove = (it: any) => {
+    Modal.confirm({
+      title: `删除「${it.name}」？`,
+      content: '文件将从群文件与对应消息中移除，不可恢复。',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          const r = await chatRoomApi.deleteFile(detail.id, it.message_id, it.att?.file_key || '')
+          message.success(r.message || '已删除')
+          load(); onChanged?.()
+        } catch (e) { message.error(errMsg(e)) }
+      },
+    })
+  }
+
   return (
     <Drawer title="群相册 / 文件" width={520} open={open} onClose={onClose}>
       <Tabs activeKey={tab} onChange={setTab} items={[
@@ -992,23 +1130,30 @@ function FilesDrawer({ open, onClose, detail }: any) {
         { key: 'file', label: '文件' },
       ]} />
       {loading ? <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div> : (
-        items.length === 0 ? <Empty description="暂无内容" /> : (
+        items.length === 0 ? <Empty description="暂无内容（已丢失的文件已自动隐藏）" /> : (
           tab === 'image' ? (
             <Image.PreviewGroup>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8 }}>
                 {items.map((it) => (
-                  <div key={it.message_id + '-' + it.name} style={{ cursor: 'pointer' }}>
+                  <div key={it.message_id + '-' + it.name} style={{ position: 'relative' }}>
                     <AttachmentView att={it.att} />
+                    <Button size="small" danger type="text" icon={<DeleteOutlined />}
+                      style={{ position: 'absolute', right: -6, top: -6 }}
+                      onClick={() => remove(it)} />
                   </div>
                 ))}
               </div>
             </Image.PreviewGroup>
           ) : (
             <List size="small" dataSource={items} renderItem={(it: any) => (
-              <List.Item>
+              <List.Item actions={[
+                <Popconfirm key="d" title="删除该文件？" onConfirm={() => remove(it)}>
+                  <a style={{ color: 'var(--color-error)' }}>删除</a>
+                </Popconfirm>,
+              ]}>
                 <List.Item.Meta
                   title={<span style={{ fontSize: 13 }}>{it.name}</span>}
-                  description={<span style={{ fontSize: 12 }}>{it.sender_name} · {fmtTime(it.created_at)}</span>} />
+                  description={<span style={{ fontSize: 12 }}>{it.sender_name} · {fmtFullTime(it.created_at)}</span>} />
                 <div style={{ maxWidth: 260 }}><AttachmentView att={it.att} /></div>
               </List.Item>
             )} />
