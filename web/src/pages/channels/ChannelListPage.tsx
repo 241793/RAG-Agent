@@ -290,15 +290,17 @@ export default function ChannelListPage() {
               </Form.Item>
             )
           ))}
-          <Form.Item name="reply_mode" label="回复模式" extra="不选知识库/智能体时 = 纯聊天（和「智能问答」一样用模型自身知识回答）">
-            <Select options={[
+          {/* 以下枚举均可「不选」（allowClear），清空后后端归一为默认值 */}
+          <Form.Item name="reply_mode" label="回复模式"
+            extra="不选知识库/智能体时 = 纯聊天（和「智能问答」一样用模型自身知识回答）">
+            <Select allowClear placeholder="不选 = 知识库问答（默认）" options={[
               { value: 'rag', label: '知识库问答（可选知识库，不选则纯聊天）' },
               { value: 'agent', label: '智能体（选定智能体后由其回答）' },
             ]} />
           </Form.Item>
           <Form.Item name="service_mode" label="服务模式"
             extra="只答=纯咨询，用户说「转人工」也当普通问题；客服=识别转人工关键词并生成工单，由客服跟进">
-            <Select options={[
+            <Select allowClear placeholder="不选 = 只答（默认）" options={[
               { value: 'qa', label: '只答（纯咨询，不转人工）' },
               { value: 'support', label: '客服（可转人工建工单）' },
             ]} />
@@ -314,8 +316,8 @@ export default function ChannelListPage() {
             ]} />
           </Form.Item>
           <Form.Item name="kb_mode" label="检索范围"
-            extra="与「智能问答」一致：自动=按该渠道用户权限检索其全部有权知识库">
-            <Select options={[
+            extra="与「智能问答」一致：自动=按该渠道用户权限检索其全部有权知识库；不选 = 自动（默认）">
+            <Select allowClear placeholder="不选 = 自动（默认）" options={[
               { value: 'auto', label: '自动（全部有权知识库）' },
               { value: 'custom', label: '指定知识库' },
               { value: 'off', label: '不检索（纯聊天）' },
@@ -334,7 +336,9 @@ export default function ChannelListPage() {
             <Select allowClear placeholder="不选 = 不使用智能体"
               options={agents.map((a) => ({ value: a.id, label: a.name }))} />
           </Form.Item>
-          <Form.Item name="command_prefix" label="指令前缀"><Input style={{ width: 100 }} /></Form.Item>
+          <Form.Item name="command_prefix" label="指令前缀" extra="留空 = 默认 /（如不想启用指令，可自定义为不常用的前缀如 ##）">
+            <Input style={{ width: 100 }} placeholder="/" allowClear />
+          </Form.Item>
           <Form.Item name="greeting" label="欢迎语（用户首次对话时发送）"><Input.TextArea rows={2} /></Form.Item>
           <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
         </Form>

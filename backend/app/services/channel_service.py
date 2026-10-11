@@ -13,20 +13,45 @@ _SECRET_KEYS = ("secret", "token", "password", "app_secret", "encoding_aes_key",
 
 
 def encrypt_config(cfg: dict | None, existing: dict | None = None) -> dict | None:
-    """加密渠道配置中的敏感字段；已加密则保留，空值沿用旧密文。"""
+    """加密渠道配置中的敏感字段。
+
+    三种取值语义（区分「未改动」与「明确清空」，否则用户清空后无法保存）：
+    - 掩码占位 "••••"（前端回显的原样值）或键缺省 → 沿用旧密文（未改动）
+    - "" / None → 明确清空该字段（删除）
+    - 其它明文 → 加密保存
+    """
+
+    def _placeholder(v: object) -> bool:
+        # mask_config 的回显占位："••••"
+        return isinstance(v, str) and v.strip().strip("•") == "" and "•" in (v or "")
+
     if not cfg:
         return cfg
     out = dict(cfg)
+    handled: set[str] = set()  # 本次显式提交过的敏感键（含显式清空，避免被 existing 回填覆盖）
     for k in list(out.keys()):
         if not any(s in k.lower() for s in _SECRET_KEYS):
             continue
+        handled.add(k)
         v = out[k]
         if isinstance(v, str) and v.startswith("enc:"):
-            continue
-        if (v is None or v == "") and existing and existing.get(k):
-            out[k] = existing[k]  # 未改动，沿用旧值
+            continue  # 已是密文，原样保留
+        if _placeholder(v):
+            if existing and existing.get(k):
+                out[k] = existing[k]  # 未改动，沿用旧值
+            else:
+                out.pop(k, None)
         elif v:
             out[k] = encrypt(v)
+        elif v is None or v == "":
+            out.pop(k, None)  # 明确清空
+    # 仅回填本次**未提交**的既有敏感字段（显式清空的键不回填，否则清空无法生效）
+    if existing:
+        for k, ev in existing.items():
+            if k in out or k in handled:
+                continue
+            if any(s in k.lower() for s in _SECRET_KEYS):
+                out[k] = ev
     return out
 
 

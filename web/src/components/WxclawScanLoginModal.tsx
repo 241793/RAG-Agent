@@ -70,8 +70,9 @@ export default function WxclawScanLoginModal({ channelId, open, channelName, onC
             message.success('扫码成功，token 已获取，请确认后保存')
             clearInterval(timer.current)
             onToken?.(r.token, r.bot_id)
-            // 不自动关闭：让用户看到 token 已回填；仅在已存渠道模式自动关
+            // 扫码成功即关闭：token 已回填并 toast 提示，无需停留在二维码页
             if (channelId != null) onSuccess?.()
+            onClose()
           }
         }
       } catch { /* 忽略轮询错误 */ }

@@ -29,13 +29,20 @@ class ChannelIn(BaseModel):
     enabled: bool = True
     default_tenant_id: int | None = None
     default_kb_ids: list[int] | None = None
-    kb_mode: str = "auto"  # auto | custom | off
-    service_mode: str = "qa"  # qa=只答 | support=客服（可转人工）
+    # 以下枚举允许传 null/空串表示「不选」→ 归一为默认值（见 _norm_choice）
+    kb_mode: str | None = None  # auto | custom | off
+    service_mode: str | None = None  # qa=只答 | support=客服（可转人工）
     default_lang: str | None = None  # 默认回答语言（zh/en/ja/...，空=自动）
     default_agent_id: int | None = None
-    reply_mode: str = "rag"  # rag | agent
-    command_prefix: str = "/"
+    reply_mode: str | None = None  # rag | agent
+    command_prefix: str | None = None
     greeting: str | None = None
+
+
+def _norm_choice(v: str | None, allowed: tuple[str, ...], default: str) -> str:
+    """归一枚举：空/空串/非法值 → 默认值（允许前端“不选”）。"""
+    s = (v or "").strip()
+    return s if s in allowed else default
 
 
 def _to_out(c: Channel) -> dict:
@@ -109,10 +116,14 @@ async def create_channel(
         tenant_id=user.tenant_id, kind=body.kind, name=body.name,
         config=encrypt_config(body.config), enabled=body.enabled,
         default_tenant_id=body.default_tenant_id or user.tenant_id,
-        default_kb_ids=body.default_kb_ids, kb_mode=body.kb_mode,
-        service_mode=body.service_mode, default_lang=body.default_lang,
+        default_kb_ids=body.default_kb_ids,
+        kb_mode=_norm_choice(body.kb_mode, ("auto", "custom", "off"), "auto"),
+        service_mode=_norm_choice(body.service_mode, ("qa", "support"), "qa"),
+        default_lang=(body.default_lang or "").strip() or None,
         default_agent_id=body.default_agent_id,
-        reply_mode=body.reply_mode, command_prefix=body.command_prefix, greeting=body.greeting,
+        reply_mode=_norm_choice(body.reply_mode, ("rag", "agent"), "rag"),
+        command_prefix=(body.command_prefix or "").strip() or "/",
+        greeting=(body.greeting or "").strip() or None,
     )
     db.add(c)
     await db.flush()
@@ -139,13 +150,13 @@ async def update_channel(
     c.enabled = body.enabled
     c.default_tenant_id = body.default_tenant_id or user.tenant_id
     c.default_kb_ids = body.default_kb_ids
-    c.kb_mode = body.kb_mode
-    c.service_mode = body.service_mode
-    c.default_lang = body.default_lang
+    c.kb_mode = _norm_choice(body.kb_mode, ("auto", "custom", "off"), "auto")
+    c.service_mode = _norm_choice(body.service_mode, ("qa", "support"), "qa")
+    c.default_lang = (body.default_lang or "").strip() or None
     c.default_agent_id = body.default_agent_id
-    c.reply_mode = body.reply_mode
-    c.command_prefix = body.command_prefix
-    c.greeting = body.greeting
+    c.reply_mode = _norm_choice(body.reply_mode, ("rag", "agent"), "rag")
+    c.command_prefix = (body.command_prefix or "").strip() or "/"
+    c.greeting = (body.greeting or "").strip() or None
     await db.flush()
     await db.commit()
     from app.channels.manager import channel_manager
