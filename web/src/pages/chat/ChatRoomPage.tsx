@@ -5,7 +5,7 @@ import {
 import {
   SendOutlined, PlusOutlined, TeamOutlined, RobotOutlined, UserOutlined, PaperClipOutlined,
   PushpinOutlined, MoreOutlined, ReloadOutlined, EditOutlined,
-  SearchOutlined, ProfileOutlined, FolderOutlined, AudioMutedOutlined, MailOutlined, PhoneOutlined, ApartmentOutlined, InboxOutlined, DeleteOutlined,
+  SearchOutlined, ProfileOutlined, FolderOutlined, AudioMutedOutlined, MailOutlined, PhoneOutlined, ApartmentOutlined, InboxOutlined, DeleteOutlined, SoundOutlined,
 } from '@ant-design/icons'
 import { useFileDrop } from '../../hooks/useFileDrop'
 import { chatRoomApi, rbacApi, agentApi, chatApi, authApi, scheduledApi, type ChatRoomBrief, type ChatMsgItem } from '../../api'
@@ -663,68 +663,94 @@ export function ChatRoomCore({ height = 'calc(100vh - 190px)', compact = false }
                   {detail.announcements.length === 1 && <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>（点击查看全部）</Typography.Text>}
                 </div>
               )}
-              {/* 全员禁言提示 */}
-              {(detail as any).mute_all && (
-                <div style={{ margin: '0 12px 8px', padding: '4px 10px', background: 'var(--color-error-soft, #fff1f0)', color: 'var(--color-error, #cf1322)', borderRadius: 6, fontSize: 12 }}>
-                  <AudioMutedOutlined /> 全员禁言中{canAdmin ? '（管理员可发言）' : '，暂时无法发言'}
-                </div>
-              )}
-              {/* @我 提醒（未读的提及，点击定位） */}
-              {mentions.length > 0 && (
-                <div style={{ margin: '0 12px 8px', borderRadius: 4, overflow: 'hidden', border: '1px solid var(--color-warn, #faad14)' }}>
-                  {mentions.map((x: any, idx: number) => (
-                    <div key={x.msg_id}
-                      onClick={() => {
-                        setMentions((prev) => prev.filter((p) => p.msg_id !== x.msg_id))
-                        if (activeIdRef.current === x.room_id) jumpToMessage(x.msg_id)
-                        else openRoom(x.room_id, x.msg_id)
-                      }}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px',
-                        background: 'var(--color-warn-soft, #fffbe6)', fontSize: 12, cursor: 'pointer',
-                        borderTop: idx === 0 ? undefined : '1px solid var(--color-border)',
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-primary-soft)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--color-warn-soft, #fffbe6)')}>
-                      <span style={{ flexShrink: 0 }}>@</span>
-                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        <b>{x.sender_name}</b> 提到了你：{x.content || '[附件]'}
-                      </span>
-                      <Button size="small" type="text" onClick={(e) => {
+              {/* 统一状态提示胶囊条：公告 / 禁言 / @我 / 置顶，单行紧凑展示 */}
+              <div style={{
+                margin: '0 12px 8px', display: 'flex', alignItems: 'center', gap: 6,
+                flexWrap: 'wrap', minHeight: 0,
+              }}>
+                {((detail.announcements || []).length > 0) && (
+                  <span
+                    onClick={() => setAnnOpen(true)}
+                    title="点击查看全部公告"
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                      padding: '2px 8px', borderRadius: 9999, fontSize: 12, maxWidth: '46%',
+                      background: 'var(--color-warn-soft)', border: '1px solid var(--color-warn-border)',
+                      color: 'var(--color-warn)',
+                    }}>
+                    <SoundOutlined style={{ flexShrink: 0 }} />
+                    <span style={{
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {detail.announcements[0].content}
+                      {detail.announcements.length > 1 && `（共 ${detail.announcements.length} 条）`}
+                    </span>
+                  </span>
+                )}
+                {(detail as any).mute_all && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 8px',
+                    borderRadius: 9999, fontSize: 12,
+                    background: 'var(--color-error-soft)', border: '1px solid var(--color-error-border)',
+                    color: 'var(--color-error)',
+                  }}>
+                    <AudioMutedOutlined />
+                    全员禁言{canAdmin ? '（你可发言）' : ''}
+                  </span>
+                )}
+                {mentions.map((x: any) => (
+                  <span key={x.msg_id}
+                    onClick={() => {
+                      setMentions((prev) => prev.filter((p) => p.msg_id !== x.msg_id))
+                      if (activeIdRef.current === x.room_id) jumpToMessage(x.msg_id)
+                      else openRoom(x.room_id, x.msg_id)
+                    }}
+                    title={`${x.sender_name} 在「${x.room_name}」提到了你，点击定位`}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                      padding: '2px 8px', borderRadius: 9999, fontSize: 12, maxWidth: '46%',
+                      background: 'var(--color-primary-subtle)', border: '1px solid var(--color-primary-border)',
+                      color: 'var(--color-primary)',
+                    }}>
+                    <span style={{ flexShrink: 0 }}>@</span>
+                    <span style={{
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>{x.sender_name} 提到了你</span>
+                    <Button size="small" type="text" style={{ height: 18, padding: '0 2px', fontSize: 11 }}
+                      onClick={(e) => {
                         e.stopPropagation()
                         setMentions((prev) => prev.filter((p) => p.msg_id !== x.msg_id))
                       }}>忽略</Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {/* 置顶消息（QQ 式：公告下方，每条一行，点击定位；管理员可取消置顶） */}
-              {detail.pinned?.length > 0 && (
-                <div style={{ margin: '0 12px 8px', borderRadius: 4, overflow: 'hidden', border: '1px solid var(--color-border)' }}>
-                  {detail.pinned.map((p: ChatMsgItem, idx: number) => (
-                    <div key={p.id}
-                      onClick={() => jumpToMessage(p.id)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px',
-                        background: 'var(--color-bg-subtle)', fontSize: 12, cursor: 'pointer',
-                        borderTop: idx === 0 ? undefined : '1px solid var(--color-border)',
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-primary-soft)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--color-bg-subtle)')}>
-                      <PushpinOutlined style={{ color: 'var(--color-warn)', flexShrink: 0 }} />
-                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        <b>{dispName(p.sender_id, p.sender_name)}</b>：{(p.content || (p.attachments ? '[附件]' : '')).slice(0, 80)}
-                      </span>
-                      {canAdmin && (
-                        <Tooltip title="取消置顶">
-                          <Button size="small" type="text" icon={<PushpinOutlined />}
-                            onClick={(e) => { e.stopPropagation(); pin(p, false) }} />
-                        </Tooltip>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
+                  </span>
+                ))}
+                {(detail.pinned || []).slice(0, 2).map((p: ChatMsgItem) => (
+                  <span key={p.id}
+                    onClick={() => jumpToMessage(p.id)}
+                    title="点击定位到该消息"
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                      padding: '2px 8px', borderRadius: 9999, fontSize: 12, maxWidth: '46%',
+                      background: 'var(--color-bg-subtle)', border: '1px solid var(--color-border)',
+                      color: 'var(--color-text-secondary)',
+                    }}>
+                    <PushpinOutlined style={{ flexShrink: 0, color: 'var(--color-warn)' }} />
+                    <span style={{
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {dispName(p.sender_id, p.sender_name)}：{(p.content || (p.attachments ? '[附件]' : '')).slice(0, 24)}
+                    </span>
+                    {canAdmin && (
+                      <Button size="small" type="text" icon={<PushpinOutlined />} style={{ height: 18, padding: '0 2px' }}
+                        onClick={(e) => { e.stopPropagation(); pin(p, false) }} />
+                    )}
+                  </span>
+                ))}
+                {(detail.pinned || []).length > 2 && (
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    还有 {(detail.pinned || []).length - 2} 条置顶
+                  </Typography.Text>
+                )}
+              </div>
 
               <div ref={listRef} onScroll={onScroll} style={{ flex: 1, overflowY: 'auto', padding: '8px 12px', minHeight: 0, position: 'relative' }}>
                 {loadingMore && <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--color-text-3)' }}>加载中…</div>}

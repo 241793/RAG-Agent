@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, Col, Row, Statistic, List, Tag, Button, Space, Typography, message, Skeleton, Timeline, Badge, Modal, Empty } from 'antd'
+import { Card, Col, Row, Statistic, List, Tag, Button, Space, Typography, message, Skeleton, Timeline, Badge, Modal, Empty, Divider } from 'antd'
 import {
   DatabaseOutlined, FileTextOutlined, ThunderboltOutlined, ApiOutlined,
   MessageOutlined, RobotOutlined, ExperimentOutlined, ArrowRightOutlined, BellOutlined, ClockCircleOutlined,
@@ -10,6 +10,9 @@ import { usageApi, chatApi, providerApi, kbApi, auditApi, notificationApi, type 
 import { errMsg } from '../../api/http'
 import { useAuth } from '../../stores/auth'
 import Chart from '../../components/Chart'
+import PageContainer from '../../components/PageContainer'
+import EmptyState from '../../components/EmptyState'
+import { DRAWER_SIZE } from '../../theme/layoutConstants'
 
 export default function DashboardPage() {
   const nav = useNavigate()
@@ -57,27 +60,50 @@ export default function DashboardPage() {
   const docTotal = kbs.reduce((s, k) => s + (k.doc_count || 0), 0)
   const chartOption: any = {
     grid: { left: 40, right: 20, top: 24, bottom: 30 },
-    tooltip: { trigger: 'axis' },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(255,255,255,0.96)',
+      borderColor: 'var(--color-border)',
+      borderWidth: 1,
+      padding: [8, 12],
+      textStyle: { color: 'var(--color-text-body)', fontSize: 12 },
+      extraCssText: 'box-shadow: 0 4px 12px rgba(15,23,42,0.1); border-radius: 8px;',
+    },
     xAxis: {
       type: 'category',
       data: (usage?.by_day || []).map((d: any) => d.date.slice(5)),
-      axisLine: { lineStyle: { color: '#e5e7eb' } },
-      axisLabel: { color: '#9ca3af' },
+      axisLine: { lineStyle: { color: '#e2e8f0' } },
+      axisLabel: { color: '#94a3b8', fontSize: 11 },
+      axisTick: { show: false },
     },
-    yAxis: { type: 'value', splitLine: { lineStyle: { color: '#f0f2f5' } }, axisLabel: { color: '#9ca3af' } },
+    yAxis: {
+      type: 'value',
+      splitLine: { lineStyle: { color: '#f1f5f9' } },
+      axisLabel: { color: '#94a3b8', fontSize: 11 },
+    },
     series: [{
       data: (usage?.by_day || []).map((d: any) => d.calls),
-      type: 'line', smooth: true, symbol: 'circle', symbolSize: 6,
-      itemStyle: { color: '#2563eb' }, lineStyle: { width: 2.5, color: '#2563eb' },
-      areaStyle: { color: 'rgba(37,99,235,0.08)' },
+      type: 'line', smooth: 0.35, symbol: 'circle', symbolSize: 6,
+      itemStyle: { color: 'var(--color-primary)' },
+      lineStyle: { width: 2, color: 'var(--color-primary)' },
+      areaStyle: {
+        color: {
+          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: 'rgba(37,99,235,0.14)' },
+            { offset: 1, color: 'rgba(37,99,235,0.01)' },
+          ],
+        },
+      },
     }],
   }
 
+  // 数据指标卡：统一主色微调，避免红橙绿紫高饱和拼色
   const statCards = [
-    { title: '知识库', value: kbs.length, icon: <DatabaseOutlined />, color: '#2563eb', bg: '#eff4ff' },
-    { title: '文档', value: docTotal, icon: <FileTextOutlined />, color: '#7c3aed', bg: '#f5f0ff' },
-    { title: '近30天调用', value: usage?.total?.calls || 0, icon: <ThunderboltOutlined />, color: '#16a34a', bg: '#effaf3' },
-    ...(canModel ? [{ title: '模型 Provider', value: providers.length, icon: <ApiOutlined />, color: '#ea580c', bg: '#fff4ed' }] : []),
+    { title: '知识库', value: kbs.length, icon: <DatabaseOutlined /> },
+    { title: '文档总量', value: docTotal, icon: <FileTextOutlined /> },
+    { title: '近 30 天调用', value: usage?.total?.calls || 0, icon: <ThunderboltOutlined /> },
+    ...(canModel ? [{ title: '模型 Provider', value: providers.length, icon: <ApiOutlined /> }] : []),
   ]
 
   const quickLinks = [
@@ -103,22 +129,42 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="page-container">
-      <div style={{ marginBottom: 20 }}>
-        <h2 className="page-title">👋 你好，{user?.display_name || user?.username}</h2>
-        <div className="page-subtitle">今天是 {dayjs().format('YYYY年MM月DD日 dddd')}，欢迎回到企业 RAG 知识库</div>
-      </div>
-
-      {/* 概览卡片 */}
+    <PageContainer
+      title={`你好，${user?.display_name || user?.username}`}
+      subtitle={`今天是 ${dayjs().format('YYYY年MM月DD日 dddd')}，欢迎回到企业 RAG 知识库`}
+      extra={
+        <Space size={10}>
+          <Button icon={<BellOutlined />} onClick={openNotifications}>
+            通知
+            {unread > 0 && <Badge count={unread} size="small" style={{ marginLeft: 6 }} />}
+          </Button>
+          <Button type="primary" icon={<MessageOutlined />} onClick={() => nav('/chat')}>
+            开始问答
+          </Button>
+        </Space>
+      }
+    >
+      {/* 概览指标卡 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         {statCards.map((s) => (
           <Col key={s.title} xs={12} sm={12} md={6}>
             <Card className="stat-card" bordered={false} styles={{ body: { padding: 20 } }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Statistic title={s.title} value={s.value} valueStyle={{ fontSize: 26, fontWeight: 600 }} />
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{
+                    fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)',
+                    letterSpacing: '0.02em', marginBottom: 6,
+                  }}>{s.title}</div>
+                  <div style={{
+                    fontSize: 28, fontWeight: 600, color: 'var(--color-text-title)',
+                    lineHeight: 1.2, letterSpacing: '-0.02em',
+                  }}>{s.value}</div>
+                </div>
                 <div style={{
-                  width: 44, height: 44, borderRadius: 10, background: s.bg, color: s.color,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20,
+                  width: 40, height: 40, borderRadius: 10,
+                  background: 'var(--color-primary-subtle)', color: 'var(--color-primary)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 18, flexShrink: 0,
                 }}>{s.icon}</div>
               </div>
             </Card>
@@ -130,9 +176,18 @@ export default function DashboardPage() {
         {/* 趋势图 */}
         <Col xs={24} lg={16}>
           <Card title="近 30 天调用趋势" bordered={false} styles={{ body: { paddingTop: 8 } }}>
-            {(usage?.by_day || []).length
-              ? <Chart option={chartOption} height={300} />
-              : <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af' }}>暂无调用数据</div>}
+            {(usage?.by_day || []).length ? (
+              <Chart option={chartOption} height={300} />
+            ) : (
+              <EmptyState
+                icon={<ThunderboltOutlined />}
+                title="暂无调用数据"
+                description="发起问答或运行定时任务后，这里会展示近 30 天的调用趋势"
+                action={<Button type="primary" onClick={() => nav('/chat')}>去发起问答</Button>}
+                compact
+                style={{ height: 300 }}
+              />
+            )}
           </Card>
         </Col>
 
@@ -142,10 +197,35 @@ export default function DashboardPage() {
             <Row gutter={[12, 12]}>
               {quickLinks.map((q) => (
                 <Col span={12} key={q.label}>
-                  <Button block size="large" icon={q.icon} onClick={() => nav(q.to)}
-                    style={{ height: 64, display: 'flex', flexDirection: 'column', gap: 4, justifyContent: 'center' }}>
-                    {q.label}
-                  </Button>
+                  <div
+                    onClick={() => nav(q.to)}
+                    style={{
+                      cursor: 'pointer', padding: '12px 14px', borderRadius: 10,
+                      border: '1px solid var(--color-border)', background: 'var(--color-bg-surface)',
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      transition: 'border-color 0.2s, box-shadow 0.2s, transform 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--color-primary-border)'
+                      e.currentTarget.style.boxShadow = 'var(--shadow-hover)'
+                      e.currentTarget.style.transform = 'translateY(-1px)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--color-border)'
+                      e.currentTarget.style.boxShadow = 'none'
+                      e.currentTarget.style.transform = 'none'
+                    }}
+                  >
+                    <div style={{
+                      width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+                      background: 'var(--color-primary-subtle)', color: 'var(--color-primary)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14,
+                    }}>{q.icon}</div>
+                    <span style={{
+                      fontSize: 13, fontWeight: 500, color: 'var(--color-text-body)',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>{q.label}</span>
+                  </div>
                 </Col>
               ))}
             </Row>
@@ -158,7 +238,7 @@ export default function DashboardPage() {
                 <span style={{ fontSize: 13 }}>{p.name}</span>
                 <Tag color={p.api_key_set ? 'green' : 'default'}>{p.api_key_set ? '已配置' : '未配置'}</Tag>
               </div>
-            )) : <Typography.Text type="secondary">暂无 Provider，去「模型管理」添加</Typography.Text>}
+            )) : <EmptyState icon={<ApiOutlined />} description="暂无 Provider" compact />}
           </Card>
           <Card
             title={<Space><ThunderboltOutlined />工具调用（近30天）</Space>} bordered={false}
@@ -171,8 +251,8 @@ export default function DashboardPage() {
                   <Col span={8}><Statistic title="总调用" value={toolStats.total} valueStyle={{ fontSize: 18 }} /></Col>
                   <Col span={8}><Statistic title="成功率"
                     value={toolStats.success_rate == null ? '—' : `${Math.round(toolStats.success_rate * 100)}%`}
-                    valueStyle={{ fontSize: 18, color: (toolStats.success_rate ?? 1) >= 0.9 ? '#16a34a' : '#ea580c' }} /></Col>
-                  <Col span={8}><Statistic title="失败" value={toolStats.failure} valueStyle={{ fontSize: 18, color: toolStats.failure ? '#dc2626' : undefined }} /></Col>
+                    valueStyle={{ fontSize: 18, color: (toolStats.success_rate ?? 1) >= 0.9 ? 'var(--color-success)' : 'var(--color-warn)' }} /></Col>
+                  <Col span={8}><Statistic title="失败" value={toolStats.failure} valueStyle={{ fontSize: 18, color: toolStats.failure ? 'var(--color-error)' : undefined }} /></Col>
                 </Row>
                 {(toolStats.by_tool || []).slice(0, 5).map((t: any) => (
                   <div key={t.tool} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13 }}>
@@ -187,7 +267,7 @@ export default function DashboardPage() {
                   </div>
                 ))}
               </>
-            ) : <Typography.Text type="secondary">暂无工具调用记录（AI 调用平台工具后在此统计）</Typography.Text>}
+            ) : <EmptyState icon={<ThunderboltOutlined />} description="暂无工具调用记录（AI 调用平台工具后在此统计）" compact />}
           </Card>
         </Col>
       </Row>
@@ -212,7 +292,7 @@ export default function DashboardPage() {
                   ),
                 }))}
               />
-            ) : <Typography.Text type="secondary">暂无活动记录</Typography.Text>}
+            ) : <EmptyState icon={<ClockCircleOutlined />} description="暂无活动记录" compact />}
           </Card>
         </Col>
 
@@ -225,7 +305,7 @@ export default function DashboardPage() {
             {unread > 0 ? (
               <div>
                 <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-                  你有 <b style={{ color: '#2563eb' }}>{unread}</b> 条未读消息通知（任务完成、工作流结果等）。
+                  你有 <b style={{ color: 'var(--color-primary)' }}>{unread}</b> 条未读消息通知（任务完成、工作流结果等）。
                 </Typography.Paragraph>
                 <Button type="primary" onClick={openNotifications}>查看消息</Button>
                 <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>（也可点击右上角铃铛）</Typography.Text>
@@ -246,7 +326,7 @@ export default function DashboardPage() {
             renderItem={(c) => (
               <List.Item style={{ cursor: 'pointer' }} onClick={() => nav(`/chat?conv=${c.id}`)}>
                 <Space>
-                  <MessageOutlined style={{ color: '#2563eb' }} />
+                  <MessageOutlined style={{ color: 'var(--color-primary)' }} />
                   <span>{c.title || '未命名'}</span>
                 </Space>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -255,12 +335,12 @@ export default function DashboardPage() {
               </List.Item>
             )}
           />
-        ) : <Typography.Text type="secondary">还没有对话，去「智能问答」开始吧</Typography.Text>}
+        ) : <EmptyState icon={<MessageOutlined />} description="还没有对话" actionText="开始问答" onAction={() => nav('/chat')} compact />}
       </Card>
 
-      <Modal title="消息通知" open={notifOpen} onCancel={() => setNotifOpen(false)} footer={null} width={640}>
+      <Modal title="消息通知" open={notifOpen} onCancel={() => setNotifOpen(false)} footer={null} width={DRAWER_SIZE.MD}>
         {notifications.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无消息" />
+          <EmptyState icon={<BellOutlined />} title="暂无消息" description="任务完成或工作流结果会在这里通知你" />
         ) : (
           <List
             dataSource={notifications}
@@ -282,11 +362,13 @@ export default function DashboardPage() {
                   {!n.read && <Badge status="processing" />}
                 </Space>
                 {n.body && (
-                  <Typography.Paragraph style={{ fontSize: 12, color: '#8c8c8c', margin: '2px 0 0' }}>
+                  <Typography.Paragraph style={{
+                    fontSize: 12, color: 'var(--color-text-secondary)', margin: '2px 0 0', lineHeight: 1.6,
+                  }}>
                     {n.body}
                   </Typography.Paragraph>
                 )}
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   {n.created_at ? dayjs(n.created_at).format('MM-DD HH:mm') : ''}
                 </Typography.Text>
               </List.Item>
@@ -294,6 +376,6 @@ export default function DashboardPage() {
           />
         )}
       </Modal>
-    </div>
+    </PageContainer>
   )
 }

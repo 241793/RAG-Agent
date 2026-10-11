@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Collapse, Divider, Drawer, Dropdown, Empty, Input, List, message, Modal, Select, Slider,
-  Space, Switch, Tag, Tooltip, Typography, Upload,
+  Button, Card, Collapse, Divider, Drawer, Dropdown, Empty, Input, List, message, Modal, Select, Segmented, Slider,
+  Space, Switch, Tag, Tooltip, Typography, Upload, Avatar,
 } from 'antd'
 import {
   SendOutlined, UserOutlined, RobotOutlined, ClearOutlined, PlusOutlined, DeleteOutlined,
@@ -43,7 +43,7 @@ interface Msg {
 }
 
 export default function ChatPage() {
-  const { hasPermission } = useAuth()
+  const { hasPermission, user } = useAuth()
   const [searchParams] = useSearchParams()
   const [kbs, setKbs] = useState<KB[]>([])
   const [selectedKbs, setSelectedKbs] = useState<number[]>([])
@@ -595,12 +595,12 @@ export default function ChatPage() {
           <Button type="primary" icon={<PlusOutlined />} block onClick={newConversation} style={{ marginBottom: 8 }}>新对话</Button>
         )}
         {viewUser && <Tag color="orange" style={{ marginBottom: 8 }}>只读：查看他人会话</Tag>}
-        <div style={{ flex: 1, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 6 }}>
+        <div style={{ flex: 1, overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)' }}>
           <List
             size="small" dataSource={convs} locale={{ emptyText: '暂无历史' }}
             renderItem={(c: any) => (
               <List.Item
-                style={{ cursor: 'pointer', background: c.id === convId ? '#e6f4ff' : undefined, padding: '6px 10px' }}
+                style={{ cursor: 'pointer', background: c.id === convId ? 'var(--color-primary-subtle)' : undefined, padding: '6px 10px', borderRadius: 'var(--radius-md)' }}
                 onClick={() => openConversation(c.id)}
                 actions={viewUser ? [] : [
                   <Dropdown key="more" trigger={['click']} menu={{
@@ -627,7 +627,7 @@ export default function ChatPage() {
                 ]}
               >
                 <Typography.Text ellipsis style={{ fontSize: 13 }}>
-                  {streamingKeys.has(String(c.id)) && <LoadingOutlined style={{ color: '#1677ff', marginRight: 4 }} />}
+                  {streamingKeys.has(String(c.id)) && <LoadingOutlined style={{ color: 'var(--color-primary)', marginRight: 4 }} />}
                   {c.title || '未命名'}{viewUser && c.owner_name ? ` · ${c.owner_name}` : ''}
                 </Typography.Text>
               </List.Item>
@@ -638,43 +638,99 @@ export default function ChatPage() {
 
       {/* 主对话区 */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <Space style={{ marginBottom: 8 }} wrap>
-          <span>模型：</span>
-          <Select style={{ width: 200 }} value={modelId} onChange={changeModel}
-            options={models.map((m) => ({ value: m.id, label: m.display_name || m.model_name }))} />
-          <span>检索范围：</span>
-          <Select value={retrievalMode} style={{ width: 200 }}
-            onChange={(v) => { setRetrievalMode(v); localStorage.setItem('chat_retrieval_mode', v) }}
+        {/* 结构化控制栏：模型 | 检索模式 | 工具与视图 */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, flexWrap: 'wrap',
+          padding: '6px 10px', borderRadius: 10,
+          background: 'var(--color-bg-surface)', border: '1px solid var(--color-border)',
+        }}>
+          {/* 左侧：模型 */}
+          <Space size={6}>
+            <Typography.Text style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>模型</Typography.Text>
+            <Select
+              size="small" style={{ width: 190 }} value={modelId} onChange={changeModel}
+              options={models.map((m) => ({ value: m.id, label: m.display_name || m.model_name }))} />
+          </Space>
+          <Divider type="vertical" style={{ margin: 0, height: 18, borderColor: 'var(--color-border)' }} />
+          {/* 中段：检索模式 */}
+          <Segmented
+            size="small" value={retrievalMode}
+            onChange={(v: any) => { setRetrievalMode(v); localStorage.setItem('chat_retrieval_mode', v) }}
             options={[
-              { value: 'auto', label: '自动（全部有权库）' },
+              { value: 'auto', label: '全库检索' },
               { value: 'custom', label: '指定知识库' },
-              { value: 'off', label: '不检索（纯聊天）' },
+              { value: 'off', label: '不检索' },
             ]} />
           {retrievalMode === 'custom' && (
-            <Select mode="multiple" style={{ minWidth: 240 }} placeholder="选择知识库"
+            <Select mode="multiple" size="small" style={{ minWidth: 220 }} placeholder="选择知识库"
               value={selectedKbs}
               onChange={(v) => { setSelectedKbs(v); localStorage.setItem('chat_selected_kbs', JSON.stringify(v)) }}
               options={kbs.map((k) => ({ value: k.id, label: k.name }))} />
           )}
-          <Tooltip title="允许 AI 调用平台工具（查用量/建库/传文档等，按你的权限）">
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <Switch size="small" checked={aiTools} onChange={setAiTools} />AI 操作
-            </span>
-          </Tooltip>
-          {aiTools && (
-            <Tooltip title="开启后写操作（建库/删除等）免确认直接执行；关闭则需逐条确认（选择会被记住）">
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <Switch size="small" checked={autoWrite} onChange={(v) => {
-                  setAutoWrite(v)
-                  localStorage.setItem('chat_auto_write', v ? '1' : '0')
-                }} />免确认
-              </span>
+          {/* 右侧：工具与视图 */}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Tooltip title="参数设置（温度等）">
+              <Button size="small" type={showParams ? 'primary' : 'text'} icon={<SettingOutlined />} onClick={() => setShowParams((s) => !s)} />
             </Tooltip>
-          )}
-          <Tooltip title="参数设置"><Button icon={<SettingOutlined />} onClick={() => setShowParams((s) => !s)} /></Tooltip>
-          {msgs.length >= 4 && <Tooltip title="对话目录"><Button icon={<UnorderedListOutlined />} onClick={() => setOutlineOpen(true)}>目录</Button></Tooltip>}
-          {!viewUser && <Button icon={<ClearOutlined />} onClick={newConversation}>清空</Button>}
-        </Space>
+            {msgs.length >= 4 && (
+              <Tooltip title="对话目录">
+                <Button size="small" type="text" icon={<UnorderedListOutlined />} onClick={() => setOutlineOpen(true)} />
+              </Tooltip>
+            )}
+            {!viewUser && (
+              <Tooltip title="清空当前对话">
+                <Button size="small" type="text" icon={<ClearOutlined />} onClick={newConversation} />
+              </Tooltip>
+            )}
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  { key: 'aiTools', label: 'AI 操作（调用平台工具）', type: 'aiTools' },
+                  ...(aiTools ? [{ key: 'autoWrite', label: '免确认执行写操作' }, { key: 'toolsTip' }, { type: 'divider' }, { key: 'autoTip' }] : []),
+                ],
+              }}
+              dropdownRender={() => (
+                <div style={{
+                  background: '#fff', borderRadius: 10, padding: 12, minWidth: 260,
+                  border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-floating)',
+                }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: aiTools ? 10 : 0,
+                  }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>AI 操作</div>
+                      <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                        允许 AI 调用平台工具（查用量/建库/传文档等）
+                      </div>
+                    </div>
+                    <Switch size="small" checked={aiTools} onChange={setAiTools} />
+                  </div>
+                  {aiTools && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      paddingTop: 10, borderTop: '1px solid var(--color-border-subtle)' }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 500 }}>免确认</div>
+                        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                          写操作直接执行（选择会被记住）
+                        </div>
+                      </div>
+                      <Switch size="small" checked={autoWrite} onChange={(v) => {
+                        setAutoWrite(v)
+                        localStorage.setItem('chat_auto_write', v ? '1' : '0')
+                      }} />
+                    </div>
+                  )}
+                </div>
+              )}
+            >
+              <Tooltip title="AI 工具与确认设置">
+                <Button size="small" type="text" icon={<ToolOutlined />} />
+              </Tooltip>
+            </Dropdown>
+          </div>
+        </div>
 
         {showParams && (
           <Card size="small" style={{ marginBottom: 8 }}>
@@ -695,13 +751,27 @@ export default function ChatPage() {
                 display: 'flex', gap: 10, marginBottom: 18,
                 flexDirection: m.role === 'user' ? 'row-reverse' : 'row',
                 borderRadius: 8, transition: 'background 0.3s',
-                background: highlightIdx === i ? '#fffbe6' : undefined,
+                background: highlightIdx === i ? 'var(--color-warn-soft)' : undefined,
                 padding: highlightIdx === i ? '6px 8px' : undefined,
               }}>
-                <div style={{ flex: '0 0 auto', paddingTop: 4 }}>
-                  {m.role === 'user' ? <UserOutlined /> : <RobotOutlined style={{ color: '#1677ff' }} />}
+                <div style={{ flex: '0 0 auto', paddingTop: 2 }}>
+                  {m.role === 'user'
+                    ? <Avatar size={28} style={{ background: 'linear-gradient(135deg,#2563eb,#3b82f6)' }}>
+                        {(user?.display_name || user?.username || 'U').slice(0, 1).toUpperCase()}
+                      </Avatar>
+                    : <Avatar size={28} style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)' }} icon={<RobotOutlined />} />}
                 </div>
-                <Card size="small" style={{ maxWidth: '80%', background: m.role === 'user' ? '#e6f4ff' : '#fff' }}>
+                <Card
+                  size="small"
+                  style={{
+                    maxWidth: '80%',
+                    borderRadius: 12,
+                    background: m.role === 'user' ? 'var(--color-primary-subtle)' : 'var(--color-bg-surface)',
+                    border: `1px solid ${m.role === 'user' ? 'var(--color-primary-border)' : 'var(--color-border)'}`,
+                    boxShadow: 'var(--shadow-card)',
+                  }}
+                  styles={{ body: { padding: '10px 14px' } }}
+                >
                   {m.role === 'assistant' && <ReasoningBlock reasoning={m.reasoning} streaming={m.streaming} />}
                   {m.role === 'assistant' && (m.steps || []).length > 0 && (
                     <Collapse
@@ -727,7 +797,7 @@ export default function ChatPage() {
                     <AttachmentView key={a.file_key} att={a} />
                   ))}
                   {(m.artifacts || []).length > 0 && (
-                    <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid #f0f0f0' }}>
+                    <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid var(--color-border-subtle)' }}>
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>生成的文件：</Typography.Text>
                       <div style={{ marginTop: 4 }}>
                         {m.artifacts!.map((a) => (
@@ -816,13 +886,13 @@ export default function ChatPage() {
         {/* 用量统计条 */}
         <div style={{
           display: 'flex', gap: 18, alignItems: 'center', padding: '5px 10px', marginTop: 8,
-          borderTop: '1px solid #f0f0f0', fontSize: 12, color: '#8c8c8c', background: '#fafafa', borderRadius: 6,
+          borderTop: '1px solid var(--color-border-subtle)', fontSize: 12, color: 'var(--color-text-secondary)', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-md)',
         }}>
-          <span>本会话累计：<b style={{ color: '#595959' }}>{convUsage ? `${convUsage.total_tokens} tokens` : '-'}</b>
+          <span>本会话累计：<b style={{ color: 'var(--color-text-body)' }}>{convUsage ? `${convUsage.total_tokens} tokens` : '-'}</b>
             {convUsage ? ` / ${convUsage.calls} 次` : ''}</span>
-          <span>今日消耗：<b style={{ color: '#595959' }}>{todayUsage ? `${todayUsage.total_tokens} tokens` : '-'}</b>
+          <span>今日消耗：<b style={{ color: 'var(--color-text-body)' }}>{todayUsage ? `${todayUsage.total_tokens} tokens` : '-'}</b>
             {todayUsage ? ` / ${todayUsage.calls} 次` : ''}</span>
-          <span>命中缓存：<b style={{ color: '#595959' }}>{todayUsage?.cached_tokens ?? 0}</b></span>
+          <span>命中缓存：<b style={{ color: 'var(--color-text-body)' }}>{todayUsage?.cached_tokens ?? 0}</b></span>
           {convSummary && (
             <Tooltip title={convSummary}>
               <Tag color="blue" style={{ margin: 0, cursor: 'help' }}>已压缩历史</Tag>
@@ -845,7 +915,7 @@ export default function ChatPage() {
         )}
 
         {viewUser ? (
-          <div style={{ marginTop: 12, color: '#8c8c8c', fontSize: 13 }}>只读模式：正在查看他人会话</div>
+          <div style={{ marginTop: 12, color: 'var(--color-text-secondary)', fontSize: 13 }}>只读模式：正在查看他人会话</div>
         ) : (
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
             <Upload beforeUpload={doUpload} showUploadList={false} multiple
@@ -895,7 +965,7 @@ export default function ChatPage() {
           return (
             <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
               {full.slice(0, from)}
-              <mark style={{ background: '#ffe58f', padding: '1px 0' }}>{full.slice(from, from + len)}</mark>
+              <mark style={{ background: 'var(--color-warn-border)', padding: '1px 0' }}>{full.slice(from, from + len)}</mark>
               {full.slice(from + len)}
             </Typography.Paragraph>
           )

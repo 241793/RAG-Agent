@@ -8,7 +8,7 @@ import {
   AppstoreOutlined, UserAddOutlined, FolderAddOutlined, LockOutlined, EditOutlined, ScissorOutlined,
   EyeOutlined, TagOutlined, PieChartOutlined, ApiOutlined, DownloadOutlined, FileTextOutlined, PaperClipOutlined,
   SafetyCertificateOutlined, ArrowUpOutlined, ArrowDownOutlined, HistoryOutlined,
-  SyncOutlined, SettingOutlined,
+  SyncOutlined, SettingOutlined, EllipsisOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import ReactECharts from 'echarts-for-react'
@@ -870,44 +870,60 @@ export default function KBDetailPage() {
                       ),
                     }] : []),
                     {
-                      title: '操作', width: 300,
-                      render: (_: any, r: Doc) => (
-                        <Space>
-                          {isEntry ? (
-                            <>
-                              <Tooltip title="编辑条目/附件">
-                                <Button size="small" icon={<EditOutlined />} onClick={() => openEntry(r)} />
-                              </Tooltip>
-                              {canWrite && (
-                                <Popconfirm title="删除该条目？" onConfirm={async () => {
-                                  await docApi.remove(r.id); message.success('已删除'); loadDocs()
-                                }}>
-                                  <Button size="small" danger icon={<DeleteOutlined />} />
-                                </Popconfirm>
-                              )}
-                            </>
-                          ) : (
-                            <>
-                              <Tooltip title="在线预览"><Button size="small" icon={<EyeOutlined />} onClick={() => openPreview(r)} /></Tooltip>
-                              <Tooltip title="分块管理"><Button size="small" icon={<AppstoreOutlined />} onClick={() => openChunks(r)} /></Tooltip>
-                              <Tooltip title="版本历史"><Button size="small" icon={<HistoryOutlined />} onClick={() => openVersions(r)} /></Tooltip>
-                              {canWrite && (
-                                <>
-                                  <Tooltip title="文档权限"><Button size="small" icon={<LockOutlined />} onClick={() => openAcl(r)} /></Tooltip>
-                                  <Tooltip title="重新处理"><Button size="small" icon={<ReloadOutlined />} onClick={async () => {
-                                    await docApi.reprocess(r.id); message.info('已重新提交处理'); loadDocs()
-                                  }} /></Tooltip>
-                                  <Popconfirm title="删除该文档？" onConfirm={async () => {
-                                    await docApi.remove(r.id); message.success('已删除'); loadDocs()
-                                  }}>
-                                    <Button size="small" danger icon={<DeleteOutlined />} />
-                                  </Popconfirm>
-                                </>
-                              )}
-                            </>
-                          )}
-                        </Space>
-                      ),
+                      title: '操作', width: 96, align: 'center',
+                      render: (_: any, r: Doc) => {
+                        // 高频操作直出 1 个，其余收纳到「更多」，避免操作列挤爆横向空间
+                        const primary = isEntry
+                          ? { icon: <EditOutlined />, tip: '编辑条目', fn: () => openEntry(r) }
+                          : { icon: <EyeOutlined />, tip: '在线预览', fn: () => openPreview(r) }
+                        const moreItems: any[] = isEntry
+                          ? [
+                              ...(canWrite ? [{
+                                key: 'del', icon: <DeleteOutlined />, label: '删除条目', danger: true,
+                              }] : []),
+                              ...(!canWrite ? [{ key: 'none', label: '无更多操作', disabled: true }] : []),
+                            ]
+                          : [
+                              { key: 'chunks', icon: <AppstoreOutlined />, label: '分块管理' },
+                              { key: 'versions', icon: <HistoryOutlined />, label: '版本历史' },
+                              ...(canWrite ? [
+                                { type: 'divider' as const },
+                                { key: 'acl', icon: <LockOutlined />, label: '文档权限' },
+                                { key: 'reprocess', icon: <ReloadOutlined />, label: '重新处理' },
+                                { key: 'del', icon: <DeleteOutlined />, label: '删除文档', danger: true },
+                              ] : []),
+                            ]
+                        return (
+                          <Space size={2}>
+                            <Tooltip title={primary.tip}>
+                              <Button size="small" type="text" icon={primary.icon} onClick={primary.fn} />
+                            </Tooltip>
+                            <Dropdown
+                              trigger={['click']}
+                              menu={{ items: moreItems, onClick: async ({ key }: any) => {
+                                if (key === 'chunks') openChunks(r)
+                                else if (key === 'versions') openVersions(r)
+                                else if (key === 'acl') openAcl(r)
+                                else if (key === 'reprocess') { await docApi.reprocess(r.id); message.info('已重新提交处理'); loadDocs() }
+                                else if (key === 'del') {
+                                  Modal.confirm({
+                                    title: isEntry ? '删除该条目？' : '删除该文档？',
+                                    content: `「${r.title || r.name || r.id}」删除后不可恢复。`,
+                                    okButtonProps: { danger: true },
+                                    onOk: async () => {
+                                      await docApi.remove(r.id)
+                                      message.success('已删除')
+                                      loadDocs()
+                                    },
+                                  })
+                                }
+                              } }}
+                            >
+                              <Button size="small" type="text" icon={<EllipsisOutlined />} />
+                            </Dropdown>
+                          </Space>
+                        )
+                      },
                     },
                   ]}
                 />
@@ -1048,12 +1064,12 @@ export default function KBDetailPage() {
       />
 
       {/* 原文在线预览 */}
-      <Drawer title={preview ? `预览：${preview.title}` : '文档预览'} width="72%" open={!!preview} onClose={() => setPreview(null)} destroyOnClose>
+      <Drawer title={preview ? `预览：${preview.title}` : '文档预览'} width={DRAWER_SIZE.LG} open={!!preview} onClose={() => setPreview(null)} destroyOnClose>
         {preview && <DocPreviewBody doc={preview} />}
       </Drawer>
 
       {/* 版本历史 */}
-      <Drawer title={verDoc ? `版本历史：${verDoc.title}` : '版本历史'} width="62%" open={!!verDoc} onClose={() => setVerDoc(null)} destroyOnClose>        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+      <Drawer title={verDoc ? `版本历史：${verDoc.title}` : '版本历史'} width={DRAWER_SIZE.LG} open={!!verDoc} onClose={() => setVerDoc(null)} destroyOnClose>        <Alert type="info" showIcon style={{ marginBottom: 12 }}
           message="文档每次「重新处理 / 覆盖上传」都会归档上一版。回滚会把分块与正文还原到所选版本（回滚前会先归档当前版本，操作可逆）。" />
         <Table
           rowKey="id" dataSource={verList} loading={verLoading} pagination={false} size="small"
@@ -1085,7 +1101,7 @@ export default function KBDetailPage() {
       </Drawer>
 
       {/* 版本内容查看 */}
-      <Drawer title={verView ? `版本内容：v${verView.version}` : '版本内容'} width="60%"
+      <Drawer title={verView ? `版本内容：v${verView.version}` : '版本内容'} width={DRAWER_SIZE.LG}
         open={!!verView} onClose={() => setVerView(null)} destroyOnClose>
         {verView && (
           <>
@@ -1123,7 +1139,7 @@ export default function KBDetailPage() {
       </Modal>
 
       {/* 分块查看 + 编辑 */}
-      <Drawer title={`分块：${chunks?.doc.title || ''}（共 ${chunks?.total || 0}）`} width="70%"
+      <Drawer title={`分块：${chunks?.doc.title || ''}（共 ${chunks?.total || 0}）`} width={DRAWER_SIZE.LG}
         open={!!chunks} onClose={() => setChunks(null)}>
         <List
           dataSource={chunks?.items || []}
@@ -1198,7 +1214,7 @@ export default function KBDetailPage() {
       </Modal>
 
       {/* 文档级权限（ACL） */}
-      <Drawer title={`文档权限：${aclDoc?.title || ''}`} width={600}
+      <Drawer title={`文档权限：${aclDoc?.title || ''}`} width={DRAWER_SIZE.MD}
         open={!!aclDoc} onClose={() => setAclDoc(null)}>
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           说明：添加授权会将该文档设为「受限」，只有命中 allow 且未命中 deny 的主体可检索到。

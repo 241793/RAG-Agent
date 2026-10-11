@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Layout, Menu, Avatar, Badge, Dropdown, Spin, Breadcrumb, Drawer, Grid, Button, Tooltip } from 'antd'
+import { Layout, Menu, Avatar, Badge, Dropdown, Spin, Breadcrumb, Drawer, Grid, Button, Tooltip, Tag } from 'antd'
 import {
   DashboardOutlined, DatabaseOutlined, CommentOutlined, SettingOutlined, LogoutOutlined,
   UserOutlined, ExperimentOutlined, RobotOutlined, AppstoreOutlined,
   TeamOutlined, ClusterOutlined, UsergroupAddOutlined, FileSearchOutlined,
   KeyOutlined, SafetyOutlined, BarChartOutlined, SafetyCertificateOutlined,
   FolderOutlined, ClockCircleOutlined, ToolOutlined, MenuOutlined, ApiOutlined, BellOutlined, MailOutlined,
-  CustomerServiceOutlined, FormOutlined, UserSwitchOutlined,
+  CustomerServiceOutlined, FormOutlined, UserSwitchOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
+  SearchOutlined,
 } from '@ant-design/icons'
-import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../stores/auth'
 import { ROUTE_PERMS } from '../router/routeMeta'
 import NotificationBell from '../components/NotificationBell'
@@ -179,20 +180,32 @@ export default function MainLayout() {
 
   if (loading && !user) {
     return (
-      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Spin size="large" />
+      <div style={{
+        height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'var(--color-bg-canvas)', flexDirection: 'column', gap: 16,
+      }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: 12, background: 'linear-gradient(135deg,#2563eb,#3b82f6)',
+          color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontWeight: 700, fontSize: 18, boxShadow: '0 4px 12px -2px rgba(37,99,235,0.4)',
+        }}>R</div>
+        <Spin size="default" />
       </div>
     )
   }
 
-  // 面包屑：父组 > 当前项
-  const crumbItems: { title: string }[] = [{ title: '首页' }]
+  // 面包屑：父组 > 当前项（可点击跳转，对齐商业 SaaS 导航预期）
+  const crumbItems: any[] = [{ title: <Link to="/dashboard">工作台</Link> }]
   if (parentKey) {
     const grp = groups.find((g) => g.key === parentKey) as NavGroup
-    crumbItems.push({ title: grp.label })
+    crumbItems.push({ title: <span style={{ color: 'var(--color-text-secondary)' }}>{grp.label}</span> })
   }
   const current = allLeaves.find((i) => i.key === selected)
-  if (current && current.key !== '/dashboard') crumbItems.push({ title: current.label })
+  if (current && current.key !== '/dashboard') {
+    crumbItems.push({
+      title: <span style={{ color: 'var(--color-text-secondary)' }}>{current.label}</span>,
+    })
+  }
 
   const menuNode = (
     <Menu
@@ -201,7 +214,10 @@ export default function MainLayout() {
       openKeys={collapsed && !isMobile ? undefined : openKeys}
       onOpenChange={(keys) => setOpenKeys(keys as string[])}
       items={menuItems}
-      style={{ borderRight: 0, paddingTop: 8 }}
+      style={{
+        borderRight: 0, paddingTop: 8, paddingInline: 4,
+        background: 'transparent', fontSize: 13.5,
+      }}
       onClick={(e) => { if (e.key.startsWith('/')) { nav(e.key); setMobileNavOpen(false) } }}
     />
   )
@@ -211,24 +227,48 @@ export default function MainLayout() {
       <Header
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          background: '#fff', paddingInline: isMobile ? 12 : 20, borderBottom: '1px solid #eef0f3', flexShrink: 0,
+          background: 'var(--color-bg-surface)', paddingInline: isMobile ? 12 : 24,
+          borderBottom: '1px solid var(--color-border)', flexShrink: 0,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 16, minWidth: 0 }}>
           {isMobile && (
             <Button type="text" icon={<MenuOutlined />} onClick={() => setMobileNavOpen(true)} />
           )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }} onClick={() => nav('/dashboard')}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }} onClick={() => nav('/dashboard')}>
             <div style={{
-              width: 30, height: 30, borderRadius: 8, background: 'linear-gradient(135deg,#2563eb,#3b82f6)',
+              width: 32, height: 32, borderRadius: 10, background: 'linear-gradient(135deg,#2563eb,#3b82f6)',
               color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontWeight: 700, fontSize: 15, flexShrink: 0,
+              fontWeight: 700, fontSize: 16, flexShrink: 0, letterSpacing: '-0.03em',
+              boxShadow: '0 2px 6px -1px rgba(37,99,235,0.35)',
             }}>R</div>
-            {!isMobile && <span style={{ fontSize: 17, fontWeight: 600, color: '#1f2937' }}>企业 RAG 知识库</span>}
+            {!isMobile && <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-text-title)', letterSpacing: '-0.015em' }}>企业 RAG 知识库</span>}
           </div>
-          {!isMobile && <Breadcrumb items={crumbItems} style={{ marginLeft: 8 }} />}
+          {!isMobile && <Breadcrumb items={crumbItems} style={{ marginLeft: 16, fontSize: 13 }} />}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 12 }}>
+          {/* 全局快捷搜索入口（预留交互位，对齐 Linear / Vercel 的 ⌘K 检索体验） */}
+          {!isMobile && (
+            <div
+              onClick={() => nav('/chat')}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+                padding: '5px 12px', borderRadius: 9999,
+                border: '1px solid var(--color-border)', background: 'var(--color-bg-subtle)',
+                color: 'var(--color-text-muted)', fontSize: 13,
+                transition: 'border-color 0.2s, background 0.2s',
+              }}
+            >
+              <SearchOutlined />
+              <span>搜索知识或发起提问</span>
+              <Tag
+                color="default"
+                style={{ margin: 0, fontSize: 11, borderRadius: 4, padding: '0 4px', lineHeight: '18px' }}
+              >
+                ⌘K
+              </Tag>
+            </div>
+          )}
           <NotificationBell />
           <Dropdown
             menu={{
@@ -243,9 +283,18 @@ export default function MainLayout() {
               },
             }}
           >
-            <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderRadius: 8 }}>
-              <Avatar size="small" style={{ background: '#2563eb' }} icon={<UserOutlined />} />
-              {!isMobile && <span style={{ color: '#1f2937' }}>{user?.display_name || user?.username}</span>}
+            <div style={{
+              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
+              padding: '4px 8px', borderRadius: 9999, border: '1px solid transparent',
+            }}>
+              <Avatar size={28} style={{ background: 'linear-gradient(135deg,#2563eb,#3b82f6)' }}>
+                {(user?.display_name || user?.username || 'U').slice(0, 1).toUpperCase()}
+              </Avatar>
+              {!isMobile && (
+                <span style={{ color: 'var(--color-text-title)', fontWeight: 500, fontSize: 13 }}>
+                  {user?.display_name || user?.username}
+                </span>
+              )}
             </div>
           </Dropdown>
         </div>
@@ -260,14 +309,37 @@ export default function MainLayout() {
           </Drawer>
         ) : (
           <Sider
-            width={216} theme="light" collapsible collapsed={collapsed}
+            width={232} theme="light" collapsible collapsed={collapsed}
             onCollapse={setCollapsed}
-            style={{ borderRight: '1px solid #eef0f3', overflowY: 'auto', height: '100%' }}
+            trigger={null}
+            style={{
+              borderRight: '1px solid var(--color-border)',
+              overflowY: 'auto', height: '100%',
+              background: 'var(--color-bg-surface)',
+            }}
           >
-            {menuNode}
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <div style={{ flex: 1, overflowY: 'auto' }}>{menuNode}</div>
+              {/* 底部精致折叠控制条 */}
+              <div style={{
+                flexShrink: 0, borderTop: '1px solid var(--color-border-subtle)', padding: '6px 0',
+              }}>
+                <Button
+                  type="text" block
+                  icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                  onClick={() => setCollapsed(!collapsed)}
+                  style={{
+                    color: 'var(--color-text-secondary)', height: 36,
+                    fontSize: 13, fontWeight: 500,
+                  }}
+                >
+                  {!collapsed && <span style={{ marginLeft: 2 }}>收起侧边栏</span>}
+                </Button>
+              </div>
+            </div>
           </Sider>
         )}
-        <Content style={{ padding: 24, background: '#f5f7fa', overflow: 'auto', minHeight: 0 }}>
+        <Content style={{ padding: 24, background: 'var(--color-bg-canvas)', overflow: 'auto', minHeight: 0 }}>
           <Outlet />
         </Content>
       </Layout>

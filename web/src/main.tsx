@@ -19,18 +19,55 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           token: {
             colorPrimary: '#2563eb',
             colorInfo: '#2563eb',
+            colorSuccess: '#10b981',
+            colorWarning: '#f59e0b',
+            colorError: '#ef4444',
+            colorTextBase: '#0f172a',
+            colorBgLayout: '#f8fafc',
+            colorBorder: '#e2e8f0',
             borderRadius: 8,
-            colorBgLayout: '#f5f7fa',
             fontSize: 14,
             fontFamily:
-              'system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+              '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif',
           },
           components: {
-            Layout: { headerBg: '#ffffff', headerHeight: 56, siderBg: '#ffffff', bodyBg: '#f5f7fa' },
-            Menu: { itemBorderRadius: 8, itemMarginInline: 8, itemHeight: 40 },
-            Card: { borderRadiusLG: 12 },
-            Table: { headerBg: '#fafbfc', headerColor: '#1f2937' },
-            Button: { borderRadius: 8 },
+            Layout: {
+              headerBg: '#ffffff',
+              headerHeight: 56,
+              siderBg: '#ffffff',
+              bodyBg: '#f8fafc',
+            },
+            Menu: {
+              itemBorderRadius: 8,
+              itemMarginInline: 6,
+              itemHeight: 38,
+              itemSelectedBg: '#eff6ff',
+              itemSelectedColor: '#1d4ed8',
+            },
+            Card: {
+              borderRadiusLG: 12,
+            },
+            Table: {
+              headerBg: '#f8fafc',
+              headerColor: '#475569',
+              borderColor: '#e2e8f0',
+            },
+            Button: {
+              borderRadius: 8,
+              controlHeight: 36,
+            },
+            Input: {
+              borderRadius: 8,
+            },
+            Select: {
+              borderRadius: 8,
+            },
+            Modal: {
+              borderRadiusLG: 14,
+            },
+            Drawer: {
+              borderRadiusLG: 14,
+            },
           },
         }}
       >

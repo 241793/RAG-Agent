@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
-  Alert, Button, Card, Col, Collapse, Form, Input, InputNumber, List, message, Modal, Popconfirm, Row, Segmented, Select, Space, Tag, Tooltip, Typography,
+  Alert, Button, Card, Col, Collapse, Dropdown, Form, Input, InputNumber, List, message, Modal, Popconfirm, Row, Segmented, Select, Space, Tag, Tooltip, Typography,
 } from 'antd'
-import { PlusOutlined, DatabaseOutlined, EditOutlined, DeleteOutlined, ApiOutlined, CloudServerOutlined, FileImageOutlined, SettingOutlined } from '@ant-design/icons'
+import { PlusOutlined, DatabaseOutlined, EditOutlined, DeleteOutlined, ApiOutlined, CloudServerOutlined, FileImageOutlined, SettingOutlined, SearchOutlined, EllipsisOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { kbApi, providerApi, type KB, type ModelConfig } from '../../api'
 import { errMsg } from '../../api/http'
@@ -96,6 +96,9 @@ const CONNECTOR_FIELDS: Record<string, { key: string; label: string; ph?: string
 export default function KBListPage() {
   const [kbs, setKbs] = useState<KB[]>([])
   const [loading, setLoading] = useState(false)
+  // 检索与筛选
+  const [kw, setKw] = useState('')
+  const [filter, setFilter] = useState<string>('all')
   const [open, setOpen] = useState(false)
   const [editKb, setEditKb] = useState<KB | null>(null)
   const [embedModels, setEmbedModels] = useState<ModelConfig[]>([])
@@ -124,6 +127,19 @@ export default function KBListPage() {
     load()
     providerApi.configs().then((cs) => setEmbedModels(cs.filter((c) => c.purpose === 'embedding'))).catch(() => {})
   }, [])
+
+  // 派生：关键词 + 类型筛选后的列表
+  const filteredKbs = kbs.filter((kb) => {
+    const q = kw.trim().toLowerCase()
+    const inText = !q
+      || (kb.name || '').toLowerCase().includes(q)
+      || (kb.description || '').toLowerCase().includes(q)
+    const inType = filter === 'all'
+      || (filter === 'keyword'
+        ? kb.index_mode === 'keyword'
+        : kb.source_type === filter && kb.index_mode !== 'keyword')
+    return inText && inType
+  })
 
   const openModal = (kb?: KB) => {
     setEditKb(kb || null)
@@ -224,48 +240,110 @@ export default function KBListPage() {
       {kbs.length === 0 && !loading ? (
         <EmptyState description="暂无知识库，点击右上角创建" actionText={hasPermission('kb:create') ? '新建知识库' : undefined} onAction={() => openModal()} />
       ) : (
-        <Row gutter={[16, 16]}>
-          {kbs.map((kb) => (
-            <Col key={kb.id} xs={24} sm={12} md={8} lg={6}>
-              <Card
-                hoverable
-                onClick={() => nav(`/kb/${kb.id}`)}
-                title={<Space>{(kb.source_type === 'external' ? <CloudServerOutlined /> : kb.source_type === 'entry' ? <FileImageOutlined /> : <DatabaseOutlined />)}{kb.name}</Space>}
-                extra={
-                  <Space className="kb-card-actions" onClick={(e) => e.stopPropagation()}>
-                    {kb.source_type === 'external' && <Tag color="purple">外部</Tag>}
-                    {kb.source_type === 'entry' && <Tag color="cyan">图文</Tag>}
-                    {kb.source_type !== 'external' && kb.source_type !== 'entry' && kb.index_mode === 'keyword' && (
-                      <Tag color="orange">关键词</Tag>
-                    )}
-                    <Tag color={visColor[kb.visibility]}>{visLabel[kb.visibility]}</Tag>
-                    <Can perm="kb:update">
-                      <Tooltip title="编辑">
-                        <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openModal(kb)} />
-                      </Tooltip>
-                    </Can>
-                    <Can perm="kb:delete">
-                      <Popconfirm title="删除该知识库？" onConfirm={async () => { await kbApi.remove(kb.id); message.success('已删除'); load() }}>
-                        <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-                      </Popconfirm>
-                    </Can>
-                  </Space>
-                }
-              >
-                <Typography.Paragraph ellipsis={{ rows: 2 }} type="secondary" style={{ minHeight: 44 }}>
-                  {kb.description || '暂无描述'}
-                </Typography.Paragraph>
-                <Space split="|" style={{ fontSize: 12, color: '#888' }}>
-                  {kb.source_type === 'external'
-                    ? <span>{CONNECTOR_OPTIONS.find((c) => c.value === kb.connector_kind)?.label || kb.connector_kind || '外部源'}</span>
-                    : kb.source_type === 'entry'
-                      ? <span>{kb.doc_count} 条目</span>
-                      : <><span>{kb.doc_count} 文档</span><span>{kb.chunk_count} 分块</span></>}
-                </Space>
-              </Card>
-            </Col>
-          ))}
-        </Row>
+        <>
+          {/* 检索与筛选工具条 */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap',
+          }}>
+            <Input
+              allowClear size="middle"
+              prefix={<SearchOutlined style={{ color: 'var(--color-text-muted)' }} />}
+              placeholder="搜索知识库名称或描述"
+              style={{ width: 260, borderRadius: 8 }}
+              value={kw}
+              onChange={(e) => setKw(e.target.value)}
+            />
+            <Segmented
+              value={filter}
+              onChange={(v: any) => setFilter(v)}
+              options={[
+                { value: 'all', label: '全部' },
+                { value: 'local', label: '向量' },
+                { value: 'entry', label: '图文' },
+                { value: 'external', label: '外部' },
+                { value: 'keyword', label: '关键词' },
+              ]}
+            />
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--color-text-secondary)' }}>
+              共 {filteredKbs.length} 个知识库
+            </span>
+          </div>
+          {filteredKbs.length === 0 ? (
+            <EmptyState icon={<SearchOutlined />} description="没有匹配的知识库，试试其它关键词" compact />
+          ) : (
+            <Row gutter={[16, 16]}>
+              {filteredKbs.map((kb) => (
+                <Col key={kb.id} xs={24} sm={12} md={8} lg={6}>
+                  <Card
+                    hoverable
+                    className="app-card"
+                    onClick={() => nav(`/kb/${kb.id}`)}
+                    title={<Space>{(kb.source_type === 'external' ? <CloudServerOutlined /> : kb.source_type === 'entry' ? <FileImageOutlined /> : <DatabaseOutlined />)}{kb.name}</Space>}
+                    extra={
+                      <Space className="kb-card-actions" onClick={(e) => e.stopPropagation()} size={4}>
+                        {kb.source_type === 'external' && <Tag color="purple" style={{ marginInlineEnd: 0 }}>外部</Tag>}
+                        {kb.source_type === 'entry' && <Tag color="cyan" style={{ marginInlineEnd: 0 }}>图文</Tag>}
+                        {kb.source_type !== 'external' && kb.source_type !== 'entry' && kb.index_mode === 'keyword' && (
+                          <Tag color="orange" style={{ marginInlineEnd: 0 }}>关键词</Tag>
+                        )}
+                        {/* 低频操作收纳进「更多」，避免标题区拥挤 */}
+                        <Dropdown
+                          trigger={['click']}
+                          menu={{
+                            items: [
+                              ...(hasPermission('kb:update')
+                                ? [{ key: 'edit', icon: <EditOutlined />, label: '编辑知识库' }]
+                                : []),
+                              ...(hasPermission('kb:delete')
+                                ? [{ key: 'del', icon: <DeleteOutlined />, label: '删除知识库', danger: true }]
+                                : []),
+                              ...(!hasPermission('kb:update') && !hasPermission('kb:delete')
+                                ? [{ key: 'none', label: '无可用操作', disabled: true }]
+                                : []),
+                            ],
+                            onClick: ({ key, domEvent }) => {
+                              domEvent.stopPropagation()
+                              if (key === 'edit') openModal(kb)
+                              if (key === 'del') {
+                                Modal.confirm({
+                                  title: '删除该知识库？',
+                                  content: `「${kb.name}」及其文档与分块将被删除，不可恢复。`,
+                                  okButtonProps: { danger: true },
+                                  onOk: async () => {
+                                    await kbApi.remove(kb.id)
+                                    message.success('已删除')
+                                    load()
+                                  },
+                                })
+                              }
+                            },
+                          }}
+                        >
+                          <Button size="small" type="text" icon={<EllipsisOutlined />} />
+                        </Dropdown>
+                      </Space>
+                    }
+                  >
+                    <Typography.Paragraph ellipsis={{ rows: 2 }} type="secondary" style={{ minHeight: 44, fontSize: 13 }}>
+                      {kb.description || '暂无描述'}
+                    </Typography.Paragraph>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, paddingTop: 10,
+                      borderTop: '1px solid var(--color-border-subtle)', fontSize: 12, color: 'var(--color-text-secondary)',
+                    }}>
+                      {kb.source_type === 'external'
+                        ? <span>{CONNECTOR_OPTIONS.find((c) => c.value === kb.connector_kind)?.label || kb.connector_kind || '外部源'}</span>
+                        : kb.source_type === 'entry'
+                          ? <span>{kb.doc_count} 条目</span>
+                          : <><span>{kb.doc_count} 文档</span><span>·</span><span>{kb.chunk_count} 分块</span></>}
+                      <Tag color={visColor[kb.visibility]} style={{ marginLeft: 'auto', marginInlineEnd: 0 }}>{visLabel[kb.visibility]}</Tag>
+                    </div>
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+          )}
+        </>
       )}
 
       <Modal title={editKb ? '编辑知识库' : '新建知识库'} open={open} onOk={onSubmit} onCancel={() => setOpen(false)} destroyOnClose width={680}>
