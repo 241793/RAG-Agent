@@ -14,7 +14,7 @@ from app.middleware.auth_dep import require_permission
 from app.models import Channel, User
 from app.services.audit_service import audited
 from app.services.channel_service import (
-    decrypt_config, encrypt_config, get_channel, mask_config,
+    decrypt_config, encrypt_config, get_channel, mask_config, secret_meta,
 )
 
 router = APIRouter(prefix="/channels", tags=["channel"])
@@ -42,6 +42,8 @@ def _to_out(c: Channel) -> dict:
     return {
         "id": c.id, "kind": c.kind, "name": c.name,
         "config": mask_config(c.config),
+        # 敏感字段元信息（是否已设置 + 明文真实长度，不含明文）
+        "secret_meta": secret_meta(c.config),
         "enabled": c.enabled, "connected": c.connected, "last_error": c.last_error,
         "default_tenant_id": c.default_tenant_id, "default_kb_ids": c.default_kb_ids or [],
         "kb_mode": c.kb_mode or "auto",
@@ -63,6 +65,35 @@ async def list_channels(
         .order_by(Channel.id.desc())
     )).scalars().all()
     return [_to_out(c) for c in rows]
+
+
+@router.get("/{channel_id}/secrets")
+async def reveal_secrets(
+    channel_id: int,
+    user: User = Depends(require_permission("channel:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """按需读取某个渠道的明文敏感配置（token/secret）。仅 channel:manage 可用，且写审计日志。
+
+    列表/详情接口只回掩码值 + 长度，避免明文常驻前端。点“查看”时才调这里，拿到明文后仅存内存（不写 localStorage）。
+    """
+    from app.services.audit_service import record_audit
+
+    ch = await get_channel(db, channel_id, user.tenant_id)
+    plain = decrypt_config(ch.config)
+    secret_keys = ("secret", "token", "password", "encoding_aes_key", "client_secret")
+    keys = []
+    for k in (ch.config or {}).keys():
+        if any(s in k.lower() for s in secret_keys):
+            keys.append(k)
+    out = {k: str(plain.get(k) or "") for k in keys}
+    record_audit(
+        db, action="channel.reveal_secret", resource_type="channel", resource_id=ch.id,
+        tenant_id=user.tenant_id, actor_id=user.id, actor_name=user.username,
+        result="success", after={"fields": keys},
+    )
+    await db.flush()
+    return {"secrets": out}
 
 
 @router.post("")

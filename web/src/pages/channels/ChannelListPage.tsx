@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   Alert, Badge, Button, Card, Col, Descriptions, Drawer, Form, Input, List, message, Modal,
-  Popconfirm, Row, Select, Space, Switch, Tag, Typography,
+  Popconfirm, Row, Select, Space, Switch, Tag, Tooltip, Typography,
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, WechatOutlined,
@@ -62,8 +62,9 @@ export default function ChannelListPage() {
   const [scanChannel, setScanChannel] = useState<ChannelItem | null>(null)
   const [formScan, setFormScan] = useState(false)
   const [wxToken, setWxToken] = useState('')  // 微信 token（扫码回填；渲染时同步到表单）
-  // Token 明文显隐（默认遮罩，点击眼睛查看）
+  // Token 明文显隐（默认遮罩，点击眼睛查看；明文按需从后端拉取，只存内存）
   const [showToken, setShowToken] = useState<Record<number, boolean>>({})
+  const [revealed, setRevealed] = useState<Record<number, string>>({})
   const hasPermission = useAuth((s) => s.hasPermission)
   const canManage = hasPermission('channel:manage')
 
@@ -71,6 +72,29 @@ export default function ChannelListPage() {
   const tokenOf = (c: ChannelItem): string => {
     const cfg = (c.config || {}) as Record<string, any>
     return String(cfg.token ?? cfg.bot_token ?? cfg.access_token ?? '')
+  }
+
+  /** token 的真实长度：优先用后端 secret_meta（基于明文计算；config 里是掩码值 "••••"，拿不到真实长度） */
+  const tokenLenOf = (c: ChannelItem): number => {
+    const meta = (c as any).secret_meta || {}
+    for (const k of Object.keys(meta)) {
+      if (k.toLowerCase().includes('token')) return Number(meta[k]?.length || 0)
+    }
+    const masked = tokenOf(c)
+    // 无 meta（后端旧版本）时，掩码串长度不可信，返回 0 并展示为已设置
+    return masked && masked !== '••••' ? masked.length : 0
+  }
+
+  /** 点“查看”：向后端请求明文（仅 channel:manage），只存内存 */
+  const revealToken = async (c: ChannelItem) => {
+    if (revealed[c.id]) { setShowToken((m) => ({ ...m, [c.id]: !m[c.id] })); return }
+    try {
+      const r = await channelApi.secrets(c.id)
+      const s = (r?.secrets || {}) as Record<string, string>
+      const plain = String(s.token ?? s.bot_token ?? s.access_token ?? Object.values(s)[0] ?? '')
+      setRevealed((m) => ({ ...m, [c.id]: plain }))
+      setShowToken((m) => ({ ...m, [c.id]: true }))
+    } catch (e) { message.error(errMsg(e)) }
   }
 
   const load = async () => {
@@ -185,30 +209,29 @@ export default function ChannelListPage() {
                           : '自动（全部有权库）'}
                     </Descriptions.Item>
                     <Descriptions.Item label="指令前缀"><code>{c.command_prefix}</code></Descriptions.Item>
-                    {/* Token：显示真实长度，可点眼睛切换明文（仅 channel:manage 可查看） */}
+                    {/* Token：显示明文真实长度，可点眼睛按需查看明文（仅 channel:manage） */}
                     <Descriptions.Item label="Token">
                       {(() => {
-                        const tk = tokenOf(c)
-                        if (!tk) {
+                        const len = tokenLenOf(c)
+                        if (!len) {
                           return <Tag color="default">未配置</Tag>
                         }
-                        const len = tk.length
                         const visible = !!showToken[c.id]
-                        const masked = len <= 8
-                          ? '•'.repeat(len)
-                          : `${tk.slice(0, 4)}${'•'.repeat(Math.min(12, len - 8))}${tk.slice(-4)}`
+                        const plain = revealed[c.id] || ''
+                        const masked = '•'.repeat(Math.min(16, len))
                         return (
                           <Space size={6} wrap>
                             <Tag color="blue" data-testid={`token-len-${c.id}`}>{len} 位</Tag>
-                            <Typography.Text code copyable={canManage ? { text: tk, tooltips: ['复制 token', '已复制'] } : false}
-                              style={{ fontSize: 12, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'middle' }}>
-                              {canManage && visible ? tk : masked}
+                            <Typography.Text code
+                              copyable={canManage && plain ? { text: plain, tooltips: ['复制 token', '已复制'] } : false}
+                              style={{ fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'middle' }}>
+                              {visible && plain ? plain : masked}
                             </Typography.Text>
                             {canManage && (
                               <Button size="small" type="text"
                                 icon={visible ? <EyeInvisibleOutlined /> : <EyeOutlined />}
                                 data-testid={`token-toggle-${c.id}`}
-                                onClick={() => setShowToken((m) => ({ ...m, [c.id]: !m[c.id] }))}>
+                                onClick={() => revealToken(c)}>
                                 {visible ? '隐藏' : '查看'}
                               </Button>
                             )}
@@ -240,6 +263,24 @@ export default function ChannelListPage() {
                 <Space.Compact style={{ width: '100%' }}>
                   <Input placeholder={f.ph} value={wxToken} onChange={(e) => setWxToken(e.target.value)} />
                   <Button icon={<QrcodeOutlined />} onClick={() => setFormScan(true)}>扫码获取</Button>
+                  {/* 已保存的 token 只回掩码值；点此按需拉取明文填回输入框（仅 channel:manage） */}
+                  {canManage && edit && (
+                    <Tooltip title="从服务端读取已保存的 token 明文">
+                      <Button icon={<EyeOutlined />}
+                        data-testid="edit-token-reveal"
+                        onClick={async () => {
+                          try {
+                            const r = await channelApi.secrets(edit.id)
+                            const s = (r?.secrets || {}) as Record<string, string>
+                            const plain = String(s.token ?? s.bot_token ?? s.access_token ?? Object.values(s)[0] ?? '')
+                            if (!plain) { message.info('该渠道未保存 token'); return }
+                            setWxToken(plain)
+                            form.setFieldValue(['config', 'token'], plain)
+                            message.success('已读取 token 明文')
+                          } catch (e) { message.error(errMsg(e)) }
+                        }}>查看</Button>
+                    </Tooltip>
+                  )}
                 </Space.Compact>
               </Form.Item>
             ) : (

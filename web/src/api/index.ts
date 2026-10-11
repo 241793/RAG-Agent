@@ -1310,6 +1310,8 @@ export interface ChannelItem {
   kind: 'qqbot' | 'wxclaw' | 'wework' | 'feishu'
   name: string
   config: Record<string, any>
+  /** 敏感字段元信息（是否已设置 + 明文真实长度，不含明文） */
+  secret_meta?: Record<string, { set: boolean; length: number }>
   enabled: boolean
   connected: boolean
   last_error?: string | null
@@ -1344,6 +1346,9 @@ export const channelApi = {
   remove: (id: number) => http.delete(`/channels/${id}`).then((r) => r.data),
   test: (id: number) => http.post<{ ok: boolean; message: string; latency_ms: number }>(`/channels/${id}/test`).then((r) => r.data),
   users: (id: number) => http.get<ChannelUserItem[]>(`/channels/${id}/users`).then((r) => r.data),
+  /** 按需读取渠道明文敏感配置（token/secret）。仅 channel:manage，后端写审计日志 */
+  secrets: (id: number) =>
+    http.get<{ secrets: Record<string, string> }>(`/channels/${id}/secrets`).then((r) => r.data),
   bindUser: (channelId: number, cuId: number, data: { user_id?: number; bind_code?: string }) =>
     http.post<{ message: string; bound_user_id: number }>(
       `/channels/${channelId}/users/${cuId}/bind`, data).then((r) => r.data),

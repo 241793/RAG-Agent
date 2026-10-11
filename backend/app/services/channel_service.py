@@ -40,6 +40,23 @@ def decrypt_config(cfg: dict | None) -> dict:
     return out
 
 
+def secret_meta(cfg: dict | None) -> dict:
+    """敏感字段元信息：是否已设置 + **明文真实长度**（长度需先解密才准——密文长度是误导性的，如明文 32 位 → 密文 104 位）。不泄露明文，供列表展示实际长度用。
+    返回 {key: {"set": bool, "length": int}}
+    """
+    if not cfg:
+        return {}
+    # 长度必须基于明文（加密后长度会膨胀，直接读密文长度会误导用户）
+    plain = decrypt_config(cfg)
+    out: dict = {}
+    for k, v in (cfg or {}).items():
+        if not any(s in k.lower() for s in _SECRET_KEYS):
+            continue
+        pv = plain.get(k)
+        out[k] = {"set": bool(v), "length": len(str(pv or "")) if pv else 0}
+    return out
+
+
 def mask_config(cfg: dict | None) -> dict:
     """脱敏回显：敏感字段显示为是否已设置。"""
     if not cfg:
