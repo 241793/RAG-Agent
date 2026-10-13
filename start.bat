@@ -11,14 +11,17 @@ if not exist ".venv" (
 if not exist ".env" copy .env.example .env >nul
 .venv\Scripts\python.exe scripts\seed.py
 
-echo [2/3] Build frontend...
+echo [2/3] Build frontend (Vue)...
 cd /d "%~dp0web"
 if not exist "node_modules" npm install
 call npm run build
+if errorlevel 1 (
+  echo [WARN] 前端构建失败；若无 web\dist 则界面不可用。
+)
 
 echo [3/3] Starting server on http://127.0.0.1:6677 ...
 cd /d "%~dp0backend"
-start "RAG-Server" cmd /k ".venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 6677"
+start "RAG-Server" cmd /k ".venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 6677 --log-level warning"
 
 echo.
 echo Done. Open http://127.0.0.1:6677  login: admin / admin123

@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,9 +19,8 @@ from app.tasks.queue import start_workers, stop_workers
 setup_logging()
 logger = get_logger("main")
 
-# 前端构建产物目录（web/dist）：
-# - 源码运行：项目根/web/dist
-# - 冻结运行：_MEIPASS/web/dist（PyInstaller --add-data 打入）
+# 前端构建产物目录（唯一前端 = Vue3）：web/dist，资源前缀 /assets。
+# 源码运行：项目根/web/dist；冻结运行：_MEIPASS/web/dist（PyInstaller --add-data 打入）。
 WEB_DIST = RESOURCE_DIR / "web" / "dist"
 
 
@@ -230,8 +228,8 @@ async def health() -> dict:
 
 
 # ---- 前端静态托管（统一入口：浏览器只访问本端口）----
-if WEB_DIST.exists():
-    # 静态资源（js/css/img）
+# 单一前端：/assets 挂产物资源；/ 与未匹配路由一律返回 index.html。
+if (WEB_DIST / "index.html").is_file():
     assets_dir = WEB_DIST / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
@@ -243,7 +241,6 @@ if WEB_DIST.exists():
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
         """SPA 前端路由回退：非 API 路径一律返回 index.html。"""
-        # API / 文档路径不走前端回退（注册顺序已保证 API 优先，此处再兜底）
         if full_path.startswith(("api/", "v1/")) or full_path in ("docs", "openapi.json", "health"):
             from fastapi import HTTPException
 

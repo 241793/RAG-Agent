@@ -52,6 +52,13 @@ class EffectiveConfig:
 
 async def _render_skill_prompt(db: AsyncSession, skills: list[Skill], params: dict) -> str:
     blocks = []
+    # 总纲：让模型明确「这些技能要按步骤执行，不要只当知识复述」
+    if skills:
+        blocks.append(
+            "【可用技能】下面是已启用的技能说明。当用户请求匹配某技能时，**按该技能的执行步骤"
+            "直接调用相应工具完成**（例如说明里写了用 http_request 调接口，就直接调 http_request），"
+            "不要仅凭记忆回答、也不要只调 find_tools 就作罢。"
+        )
     for sk in skills:
         # 技能集合：只注入子技能目录（名+描述），正文由 AI 用 load_skill 按需加载
         if sk.kind == "collection":

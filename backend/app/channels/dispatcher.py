@@ -169,15 +169,26 @@ async def handle_inbound(
 
         try:
             knowledge_media: list[dict] = []
-            if cu.agent_id:
-                reply = await _run_agent(cu.agent_id, conv.id, user, msg.content, images=images, lang=lang,
+            # 回复模式（真正生效）：
+            #   agent  → 用「默认智能体」（channel.default_agent_id）作答；
+            #   smart  → 直接走智能问答链路（可调平台工具，管理员经外部渠道即可操作更多功能）；
+            #   rag    → 知识库问答（默认；已绑定内部账号时也可调工具）。
+            reply_mode = getattr(channel, "reply_mode", "rag") or "rag"
+            agent_id = cu.agent_id or (
+                channel.default_agent_id if reply_mode == "agent" else None
+            )
+            if agent_id:
+                reply = await _run_agent(agent_id, conv.id, user, msg.content, images=images, lang=lang,
                                          bound_user=bound_user)
             else:
-                # 绑定内部账号 → 允许工具循环（读+写，写操作直接执行）；
-                # 未绑定的外部客户 → 纯问答（不装工具）。
+                # smart 模式：强制启用工具循环（真正的智能问答能力）。
+                # rag 模式：绑定内部账号才开工具（保持原行为，外部客户纯问答）。
+                # 安全仍由 resolve_tools 的 is_external 把关：外部客户只装只读工具，
+                # 写/管理工具只有「已绑定内部账号」才拿得到。
+                want_tools = (reply_mode == "smart") or (bound_user is not None)
                 reply, knowledge_media = await _run_rag(ps, conv.id, msg.content, use_retrieval,
                                        attachments=attachments, images=images, lang=lang,
-                                       use_tools=bound_user is not None)
+                                       use_tools=want_tools)
         except Exception as e:  # noqa: BLE001
             logger.exception("channel_ai_failed", channel=channel.kind)
             reply = f"处理失败：{str(e)[:200]}"

@@ -1,6 +1,7 @@
 /** 路由 → 所需权限码（单一事实源，菜单与路由守卫共用）。 */
 export const ROUTE_PERMS: Record<string, string> = {
   '/dashboard': '',
+  '/guide': '',
   '/account': '',
   '/chat': 'chat:use',
   '/chat-room': 'chat:use',

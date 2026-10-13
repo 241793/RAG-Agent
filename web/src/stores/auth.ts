@@ -1,39 +1,47 @@
-import { create } from 'zustand'
-import { authApi, type User } from '../api'
+import { defineStore } from 'pinia'
+import { authApi, type User } from '@/api'
 
 interface AuthState {
   user: User | null
   loading: boolean
-  hasPermission: (code: string) => boolean
-  setUser: (u: User | null) => void
-  fetchMe: () => Promise<void>
-  logout: () => void
 }
 
-export const useAuth = create<AuthState>((set, get) => ({
-  user: null,
-  loading: true,
-  hasPermission: (code) => {
-    const u = get().user
-    if (!u) return false
-    if (u.is_admin) return true
-    const p = u.permissions || []
-    return p.includes('*') || p.includes(code)
+export const useAuthStore = defineStore('auth', {
+  state: (): AuthState => ({ user: null, loading: true }),
+  getters: {
+    /** 权限判定：admin 兜底全权；支持通配 '*' */
+    hasPermission: (state) => (code?: string) => {
+      if (!code) return true
+      const u = state.user
+      if (!u) return false
+      if (u.is_admin) return true
+      const p = u.permissions || []
+      return p.includes('*') || p.includes(code)
+    },
   },
-  setUser: (u) => set({ user: u, loading: false }),
-  fetchMe: async () => {
-    set({ loading: true })
-    try {
-      const u = await authApi.me()
-      set({ user: u, loading: false })
-    } catch {
-      set({ user: null, loading: false })
-    }
+  actions: {
+    async fetchMe() {
+      this.loading = true
+      try {
+        this.user = await authApi.me()
+      } catch {
+        this.user = null
+      } finally {
+        this.loading = false
+      }
+    },
+    async login(username: string, password: string) {
+      const r = await authApi.login(username, password)
+      localStorage.setItem('access_token', r.access_token)
+      if (r.refresh_token) localStorage.setItem('refresh_token', r.refresh_token)
+      await this.fetchMe()
+      return r
+    },
+    logout() {
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('refresh_token')
+      this.user = null
+      this.loading = false
+    },
   },
-  logout: () => {
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
-    // loading 置 false，避免登出后再登录时守卫停留在转圈态
-    set({ user: null, loading: false })
-  },
-}))
+})

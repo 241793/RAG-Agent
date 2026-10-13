@@ -10,7 +10,7 @@
 import os
 from pathlib import Path
 
-# 项目根与前端 dist
+# 项目根与前端 dist（唯一前端 = Vue3）
 PROJECT_ROOT = Path(SPECPATH).parent          # backend/ 的上级 = 项目根
 WEB_DIST = PROJECT_ROOT / "web" / "dist"
 BACKEND_DIR = Path(SPECPATH)                   # backend/

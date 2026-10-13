@@ -229,9 +229,14 @@ async def stream_answer(
     use_retrieval: bool = True,
     use_tools: bool = False,
     allow_auto_write: bool = False,
+    skill_ids: list[int] | None = None,
     request=None,
 ) -> AsyncIterator[dict]:
-    """流式生成。yield 事件字典：{type: meta|delta|citations|usage|done|error}"""
+    """流式生成。yield 事件字典：{type: meta|delta|citations|usage|done|error}
+
+    skill_ids：启用的技能（能力包/工具/集合）。传 None=自动装载本租户全部可用技能，
+    传 []=不装技能。技能工具与「提示词」会一并进入 ReAct 链路（与智能体一致）。
+    """
     t0 = time.time()
     # 先取上下文历史（务必在落当前用户消息之前，否则会把本轮算进历史）
     from app.services.context_service import load_context
@@ -286,20 +291,48 @@ async def stream_answer(
             from app.agents.tools.registry import registry as _reg
             from app.agents.tools.registry import resolve_admin_pool, resolve_tools
             from app.middleware.auth_dep import get_user_permission_codes
-            from app.models import User
+            from app.models import Skill, User
 
             u = await db.get(User, ps.user_id) if ps.user_id else None
             perms_set = await get_user_permission_codes(db, u) if u else set()
+            # 技能：None=自动装载本租户全部可用技能；[]=不装
+            if skill_ids is None:
+                from sqlalchemy import select as _select
+
+                _sk = (
+                    await db.execute(
+                        _select(Skill).where(
+                            Skill.tenant_id == ps.tenant_id,
+                            Skill.status == "active",
+                            Skill.parent_id.is_(None),
+                        )
+                    )
+                ).scalars().all()
+                eff_skill_ids = [s.id for s in _sk]
+            else:
+                eff_skill_ids = list(skill_ids)
             _cfg = {"builtin": {}}
             for t in _reg.all_builtin():
                 _cfg["builtin"][t.name] = {"enabled": True}
             tools = await resolve_tools(
-                db, tool_config=_cfg, skill_ids=[], tenant_id=ps.tenant_id, perms=perms_set,
+                db, tool_config=_cfg, skill_ids=eff_skill_ids, tenant_id=ps.tenant_id, perms=perms_set,
                 is_external=bool(getattr(ps, "is_external", False)),
             )
             dynamic_tools = resolve_admin_pool(
                 perms=perms_set, is_external=bool(getattr(ps, "is_external", False)),
             )
+            # 技能提示词（能力包正文 / 集合目录）注入系统消息
+            if eff_skill_ids:
+                from app.agents.runner import _render_skill_prompt
+
+                rows = (
+                    await db.execute(
+                        select(Skill).where(Skill.id.in_(eff_skill_ids), Skill.status == "active")
+                    )
+                ).scalars().all()
+                skill_block = await _render_skill_prompt(db, rows, {})
+                if skill_block:
+                    messages.insert(0, ChatMessage(role="system", content=skill_block))
         except Exception:  # noqa: BLE001
             logger.exception("resolve_tools_failed")
 
@@ -538,11 +571,24 @@ async def resume_answer(
     try:
         u = await db.get(User, ps.user_id) if ps.user_id else None
         perms_set = await get_user_permission_codes(db, u) if u else set()
+        from app.models import Skill as _Skill
+        from sqlalchemy import select as _select
+
+        _sk = (
+            await db.execute(
+                _select(_Skill).where(
+                    _Skill.tenant_id == ps.tenant_id,
+                    _Skill.status == "active",
+                    _Skill.parent_id.is_(None),
+                )
+            )
+        ).scalars().all()
+        eff_skill_ids = [s.id for s in _sk]
         _cfg = {"builtin": {}}
         for t in _reg.all_builtin():
             _cfg["builtin"][t.name] = {"enabled": True}
         tools = await resolve_tools(
-            db, tool_config=_cfg, skill_ids=[], tenant_id=ps.tenant_id, perms=perms_set,
+            db, tool_config=_cfg, skill_ids=eff_skill_ids, tenant_id=ps.tenant_id, perms=perms_set,
             is_external=bool(getattr(ps, "is_external", False)),
         )
         dynamic_tools = resolve_admin_pool(

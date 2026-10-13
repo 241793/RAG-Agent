@@ -282,7 +282,13 @@ class FindToolsTool:
 
         if not picked:
             return ToolResult(
-                content=f"（未找到与「{query}」相关的、你有权执行的工具；可能无权限或平台无此功能）",
+                content=(
+                    f"（未找到与「{query}」相关的平台管理工具。）\n"
+                    "提示：本工具只检索**平台管理/运维**类工具。若你要做的是普通能力——"
+                    "如调用外部 HTTP 接口、读写/生成文件、知识库检索——请**直接使用你已拥有的内置工具**"
+                    "（如 http_request / generate_file / knowledge_retrieval 等），不要再调用 find_tools；"
+                    "若系统提示里给了某技能的说明，请按该说明的步骤直接执行。"
+                ),
                 data={"enable_tools": []},
             )
         lines = ["以下工具已为你启用，下一轮可直接调用："]

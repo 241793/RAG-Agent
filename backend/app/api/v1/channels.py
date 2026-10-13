@@ -121,7 +121,7 @@ async def create_channel(
         service_mode=_norm_choice(body.service_mode, ("qa", "support"), "qa"),
         default_lang=(body.default_lang or "").strip() or None,
         default_agent_id=body.default_agent_id,
-        reply_mode=_norm_choice(body.reply_mode, ("rag", "agent"), "rag"),
+        reply_mode=_norm_choice(body.reply_mode, ("rag", "smart", "agent"), "rag"),
         command_prefix=(body.command_prefix or "").strip() or "/",
         greeting=(body.greeting or "").strip() or None,
     )
@@ -154,7 +154,7 @@ async def update_channel(
     c.service_mode = _norm_choice(body.service_mode, ("qa", "support"), "qa")
     c.default_lang = (body.default_lang or "").strip() or None
     c.default_agent_id = body.default_agent_id
-    c.reply_mode = _norm_choice(body.reply_mode, ("rag", "agent"), "rag")
+    c.reply_mode = _norm_choice(body.reply_mode, ("rag", "smart", "agent"), "rag")
     c.command_prefix = (body.command_prefix or "").strip() or "/"
     c.greeting = (body.greeting or "").strip() or None
     await db.flush()
@@ -403,6 +403,51 @@ async def list_channel_users(
 class BindIn(BaseModel):
     user_id: int | None = None
     bind_code: str | None = None
+
+
+class BindByCodeIn(BaseModel):
+    bind_code: str
+    user_id: int
+
+
+@router.post("/users/bind-by-code")
+@audited("channel.user_bind", "channel")
+async def bind_by_code(
+    body: BindByCodeIn,
+    user: User = Depends(require_permission("channel:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """按「一次性绑定码」把渠道身份绑定到内部账号（无需知道渠道/身份 id）。
+
+    用户先在渠道里发送 /bind 取得 6 位码，管理员在此输入码 + 选择内部账号即可。
+    """
+    from app.core.errors import ValidationError
+    from app.models import ChannelUser
+
+    code = (body.bind_code or "").strip().upper()
+    if not code:
+        raise ValidationError("请输入绑定码")
+    cu = (await db.execute(
+        select(ChannelUser).where(
+            ChannelUser.bind_code == code, ChannelUser.tenant_id == user.tenant_id
+        )
+    )).scalars().first()
+    if not cu:
+        raise NotFoundError("绑定码无效或已作废（请让用户在渠道重新发送 /bind 获取）")
+    target = await db.get(User, body.user_id)
+    if not target or target.tenant_id != user.tenant_id:
+        raise NotFoundError("目标账号不存在")
+    if getattr(target, "user_type", "internal") == "external":
+        raise ValidationError("只能绑定到内部账号，不能绑定到外部客户")
+    cu.bound_user_id = target.id
+    cu.bind_code = None
+    await db.flush()
+    await db.commit()
+    return {
+        "message": f"已把 {cu.display_name or cu.external_id} 绑定到「{target.display_name or target.username}」",
+        "bound_user_id": target.id, "channel_user_id": cu.id,
+        "external_id": cu.external_id, "channel": cu.channel,
+    }
 
 
 @router.post("/{channel_id}/users/{cu_id}/bind")

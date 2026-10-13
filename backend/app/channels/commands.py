@@ -128,7 +128,7 @@ async def cmd_whoami(ctx: CommandContext, args: list[str]) -> str:
         f"身份：{cu.display_name or cu.external_id}\n"
         f"知识库：{kbs or '未设置'}\n"
         f"智能体：{agent or '未启用'}\n"
-        f"回复模式：{ctx.channel.reply_mode}"
+        f"回复模式：{ {'rag': '知识库问答', 'smart': '智能问答', 'agent': '智能体'}.get(ctx.channel.reply_mode, ctx.channel.reply_mode) }"
     )
 
 

@@ -64,8 +64,11 @@ def build_capability_banner(is_admin: bool = False) -> str:
     role = "管理员" if is_admin else "用户"
     return (
         f"[平台能力] 你在「企业 RAG 知识库平台」（当前账号：{role}）。"
-        "查询平台功能与本账号权限用 check_my_capabilities；"
-        "需要执行管理/运维操作时用 find_tools 检索对应工具。"
+        "查询平台功能与本账号权限用 check_my_capabilities。"
+        "仅当要执行**平台管理/运维操作**（建知识库、管理用户/角色/部门、配定时任务、改模型配置等）"
+        "且手上没有对应工具时，才用 find_tools 检索。"
+        "普通任务（调外部接口、读写/生成文件、知识库检索、按技能说明执行）请**直接使用你已拥有的工具**"
+        "（如 http_request / generate_file / knowledge_retrieval），不要调用 find_tools。"
     )
 
 

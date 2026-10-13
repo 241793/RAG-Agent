@@ -1,16 +1,21 @@
-import react from '@vitejs/plugin-react'
+import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
 
-// https://vite.dev/config/
+// 唯一前端产物：构建到 web/dist，由后端（FastAPI）在 /assets 下托管。
 export default defineConfig({
-  plugins: [react()],
+  plugins: [vue()],
+  resolve: {
+    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+  },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+  },
   server: {
-    port: 5173,
+    port: 5174,
     proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:6677',
-        changeOrigin: true,
-      },
+      '/api': { target: 'http://127.0.0.1:6677', changeOrigin: true },
     },
   },
 })

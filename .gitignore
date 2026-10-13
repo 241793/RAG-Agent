@@ -35,6 +35,7 @@ release/
 
 # ---- 工具 / IDE ----
 .claud/
+.e2e/
 .idea/
 .vscode/
 .DS_Store

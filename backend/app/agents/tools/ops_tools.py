@@ -682,7 +682,7 @@ class UpdateDocumentTagsTool(WriteToolMixin):
 class CreateChannelTool(WriteToolMixin):
     name = "create_channel"
     description = ("创建外部渠道（kind=qqbot/wxclaw/wework/feishu，name，config 依渠道而定，"
-                   "reply_mode=rag/agent，kb_mode=auto/custom/off）。微信需先扫码建议在页面配置。")
+                   "reply_mode=rag/smart/agent，kb_mode=auto/custom/off）。微信需先扫码建议在页面配置。")
     required_permission = "channel:manage"
     parameters = {
         "type": "object",

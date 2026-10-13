@@ -1,0 +1,254 @@
+/* ============================================================
+   企业 AI 中台 · Vue3 版 — 浅色商业级设计系统
+   参考 Linear / Vercel / Supabase 的克制、留白与冷灰体系
+   ============================================================ */
+
+:root {
+  /* 品牌主色（Deep Royal Blue） */
+  --brand-50: #eff6ff;
+  --brand-100: #dbeafe;
+  --brand-200: #bfdbfe;
+  --brand-500: #3b82f6;
+  --brand-600: #2563eb;
+  --brand-700: #1d4ed8;
+  --brand-800: #1e40af;
+
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-primary-active: #1e40af;
+  --color-primary-subtle: #eff6ff;
+  --color-primary-border: #bfdbfe;
+
+  /* 中性冷灰阶（Slate） */
+  --text-title: #0f172a;
+  --text-body: #334155;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+
+  --border: #e2e8f0;
+  --border-subtle: #f1f5f9;
+  --border-strong: #cbd5e1;
+
+  --bg-canvas: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f8fafc;
+  --bg-muted: #f1f5f9;
+
+  /* 语义色（微柔低饱和） */
+  --success: #10b981;
+  --success-soft: #ecfdf5;
+  --success-border: #a7f3d0;
+  --warn: #f59e0b;
+  --warn-soft: #fffbeb;
+  --warn-border: #fde68a;
+  --error: #ef4444;
+  --error-soft: #fef2f2;
+  --error-border: #fecaca;
+  --info: #2563eb;
+  --info-soft: #eff6ff;
+  --info-border: #bfdbfe;
+
+  /* 圆角阶梯 */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* 多层微阴影 */
+  --shadow-xs: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
+  --shadow-sm: 0 1px 3px 0 rgba(15, 23, 42, 0.08), 0 1px 2px -1px rgba(15, 23, 42, 0.06);
+  --shadow-card: 0 1px 3px 0 rgba(15, 23, 42, 0.04), 0 1px 2px -1px rgba(15, 23, 42, 0.04);
+  --shadow-hover: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.04);
+  --shadow-floating: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.04);
+  --shadow-modal: 0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 8px 10px -6px rgba(15, 23, 42, 0.08);
+
+  /* 布局尺寸 */
+  --header-h: 56px;
+  --sider-w: 236px;
+  --sider-w-collapsed: 64px;
+
+  /* ---- Element Plus 变量覆写：浅色商业级 ----
+     EP 默认主色 #409eff 偏活泼，这里统一到深皇家蓝；圆角收紧到 8px。 */
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-3: #5b8def;
+  --el-color-primary-light-5: #93b4f4;
+  --el-color-primary-light-7: #c7d8fa;
+  --el-color-primary-light-8: #dbe6fc;
+  --el-color-primary-light-9: #eff6ff;
+  --el-color-primary-dark-2: #1d4ed8;
+  --el-color-success: #10b981;
+  --el-color-warning: #f59e0b;
+  --el-color-danger: #ef4444;
+  --el-color-error: #ef4444;
+  --el-color-info: #64748b;
+
+  --el-text-color-primary: #0f172a;
+  --el-text-color-regular: #334155;
+  --el-text-color-secondary: #64748b;
+  --el-text-color-placeholder: #94a3b8;
+  --el-border-color: #e2e8f0;
+  --el-border-color-light: #eef2f6;
+  --el-border-color-lighter: #f1f5f9;
+  --el-fill-color-blank: #ffffff;
+  --el-fill-color-light: #f8fafc;
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #f8fafc;
+
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-border-radius-round: 9999px;
+
+  --el-font-size-base: 14px;
+  --el-box-shadow-light: 0 4px 6px -1px rgba(15, 23, 42, 0.08);
+  --el-box-shadow: 0 10px 15px -3px rgba(15, 23, 42, 0.08);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, 'Noto Sans', sans-serif,
+    'Apple Color Emoji', 'Segoe UI Emoji';
+  color: var(--text-body);
+  background: var(--bg-canvas);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 纤细滚动条 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------------- 通用商业组件类 ---------------- */
+
+.page-container { max-width: 1440px; margin: 0 auto; }
+
+.page-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-title);
+  letter-spacing: -0.015em;
+  margin: 0;
+  line-height: 1.4;
+}
+.page-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+/* 高级卡片：1px 微边框 + 轻微阴影 */
+.app-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.app-card:hover { border-color: var(--border-strong); }
+
+/* 数据指标卡 */
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.stat-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-hover);
+  transform: translateY(-1px);
+}
+.stat-card .stat-label { font-size: 13px; color: var(--text-secondary); }
+.stat-card .stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-title);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.stat-icon {
+  width: 40px; height: 40px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; background: var(--color-primary-subtle); color: var(--color-primary);
+}
+
+/* 区块标题 */
+.section-title {
+  font-size: 15px; font-weight: 600; color: var(--text-title);
+  margin: 0; display: flex; align-items: center; gap: 8px;
+}
+
+/* 胶囊标签 */
+.badge-pill {
+  border-radius: var(--radius-full);
+  padding: 1px 9px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.badge-pill.blue { background: var(--info-soft); color: var(--brand-700); }
+.badge-pill.green { background: var(--success-soft); color: #047857; }
+.badge-pill.amber { background: var(--warn-soft); color: #b45309; }
+.badge-pill.gray { background: var(--bg-muted); color: var(--text-secondary); }
+
+/* 文本工具 */
+.text-title { color: var(--text-title); }
+.text-secondary { color: var(--text-secondary); }
+.text-muted { color: var(--text-muted); }
+.mono { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; }
+
+/* ---------------- Element Plus 细节修饰 ---------------- */
+
+.el-card {
+  border-radius: var(--radius-lg);
+  border-color: var(--border);
+  box-shadow: var(--shadow-card) !important;
+}
+.el-button { font-weight: 500; }
+.el-menu { border-right: none !important; }
+.el-tag { border-radius: var(--radius-sm); }
+
+/* 侧边栏菜单（自定义 el-menu 浅色风格） */
+.nav-menu.el-menu {
+  background: transparent;
+  border: none;
+  --el-menu-item-height: 40px;
+  --el-menu-sub-item-height: 38px;
+  padding: 4px 8px;
+}
+.nav-menu .el-menu-item,
+.nav-menu .el-sub-menu__title {
+  height: 40px;
+  line-height: 40px;
+  border-radius: 8px;
+  margin: 2px 0;
+  color: var(--text-body);
+  font-size: 13.5px;
+}
+.nav-menu .el-menu-item:hover,
+.nav-menu .el-sub-menu__title:hover { background: var(--bg-muted); }
+.nav-menu .el-menu-item.is-active {
+  background: var(--color-primary-subtle);
+  color: var(--brand-700);
+  font-weight: 600;
+}
+.nav-menu .el-sub-menu .el-menu-item { font-size: 13px; }
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.18s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
