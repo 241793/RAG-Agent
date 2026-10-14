@@ -26,12 +26,13 @@
 ### 二、智能体（Agent）平台
 
 - **ReAct 工具循环**：LLM 自主多轮调用工具直到得出答案，运行过程可视化（可折叠的调用卡片）
-- **90+ 管理/运维工具** + 13 个内置工具（知识检索 / HTTP / 文件读写 / 表格分析 / 办公文档生成 …）
+- **工具生态**：15 个常驻内置工具（知识检索 / HTTP / 文件读写 / 表格分析 / 办公文档生成 / 待办 / 会话管理 …）+ 96 个管理运维工具
   - 问答页按需装配工具（`find_tools` 工具路由），省 token、更快
 - **技能（Skill）**：能力包（提示词+工具+知识库）与 HTTP 工具两种形态；支持**技能集合**——把多技能仓库整体导入，AI 按需加载子技能（progressive disclosure）
+  - **多运行时脚本**：技能脚本支持 Python / Node / Shell（按扩展名或 `skill.yaml` 清单识别），Python 脚本可用第三方库；依赖一键安装（pip / npm ci）、产物自动回传、环境变量白名单隔离与资源限额
 - **技能市场**：`find_skill` 从 GitHub 实时搜索并一键安装技能包
 - **行为模式（AgentMode）**：同一智能体多套行为，运行时切换
-- **工作流编排（DAG）**：15 类节点（start / llm / 检索 / 条件 / **多路分支 switch** / HTTP / 文件 / 变量 / 代码 / 循环 / **人工审批** / 协作智能体 / 消息推送 / **并行网关 parallel** / 汇聚 join / end）+ 变量引用 + 可视化画布（@xyflow/react）+ 发布/版本回滚
+- **工作流编排（DAG）**：15 类节点（start / llm / 检索 / 条件 / **多路分支 switch** / HTTP / 文件 / 变量 / 代码 / 循环 / **人工审批** / 协作智能体 / 消息推送 / **并行网关 parallel** / 汇聚 join / end）+ 变量引用 + 可视化画布（自绘）+ 发布/版本回滚
 
 ### 三、外部渠道与客服
 
@@ -45,8 +46,10 @@
 ### 四、办公与自动化
 
 - **智能录单**：定义模板 → AI 从通话记录/聊天/邮件抽结构化台账 → 导出 Excel/CSV
-- **办公文档生成**：会议纪要 / 周报日报 / 待办清单 / 公文通知（docx/pdf/xlsx/md）；表格导出支持**柱状/折线/饼图**图表
-- **待办日程**：待办/日程/提醒，支持到期推送、重复规则（cron）、提前提醒
+- **办公文档生成**：会议纪要 / 周报日报 / 待办清单 / 公文通知（docx/pdf/xlsx/md）
+  - 专业排版：DOCX 封面/页眉页脚/页码/目录、XLSX 多工作表/列宽自适应/数字格式/图表（柱状/折线/饼）、PDF 封面/页眉/页码/跨页表头
+  - PPTX 自绘设计版式（封面/章节/要点/两栏/引用/表格/结尾 + 主题色）
+- **待办日程**：待办/日程/提醒，支持到期推送、重复规则（cron）、提前提醒；AI 可直接代建/代查
 - **审批中心**：集中处理工作流中的人工审批节点，支持批准/拒绝并填写意见
 - **对话导出/分享**、文档批量合并导出
 - **邮件入库**：配置 IMAP，邮件正文与附件自动入库知识库
@@ -76,7 +79,7 @@
 | 数据库 | **默认 SQLite**（零依赖），可切换 **PostgreSQL(+pgvector)** / **MySQL** |
 | 向量检索 | pgvector（PG）/ numpy 应用层（SQLite/MySQL），自动切换 |
 | 任务队列 | 进程内 asyncio 队列（零依赖），可换 Celery |
-| 前端 | React 19 + TypeScript + Vite + antd + @xyflow/react（工作流画布） |
+| 前端 | Vue 3 + TypeScript + Vite 6 + Element Plus + Pinia（工作流画布自绘 / ECharts 图表） |
 | 模型 | 统一 Provider 抽象层：OpenAI 兼容 / Anthropi Claud / Ollama / 本地 bge / 离线 |
 | 桌面 | Electron 33 + electron-builder |
 
@@ -186,10 +189,10 @@ pip install asyncmy             # MySQL
 backend/
   app/
     core/          # 配置/数据库/安全/日志/错误
-    models/        # SQLAlchemy ORM（55 张表）
+    models/        # SQLAlchemy ORM（61 张表）
     schemas/       # Pydantic DTO
-    api/v1/        # 35 个路由模块（kb/document/chat/agents/channels/service/…）
-    services/      # permission(权限唯一入口)/retrieval/chat/eval/service_ticket/…
+    api/v1/        # 36 个路由模块（kb/document/chat/agents/channels/service/…）
+    services/      # permission(权限唯一入口)/retrieval/chat/eval/service_ticket/skill_runtime/…
     agents/        # 智能体运行时：react 循环 / tools / workflow 引擎
     providers/     # 模型抽象层：base/registry/drivers/*
     retrieval/     # vector_store/bm25/fusion
@@ -200,7 +203,7 @@ backend/
     tasks/         # 进程内队列 + 入库/调度/评测/SLA 等后台任务
   scripts/         # seed.py(初始化) / 自测脚本
   data/            # SQLite 库 + 上传文件（gitignore）
-web/               # 前端（39 个页面）
+web/               # 前端（42 个页面）
 desktop/           # Electron 桌面版
 ```
 
