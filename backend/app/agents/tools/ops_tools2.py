@@ -333,6 +333,34 @@ class ToggleSkillScriptsTool(WriteToolMixin):
         return ToolResult(content=f"已{'启用' if pkg.scripts_enabled else '停用'}脚本执行")
 
 
+class GcSkillPacksTool(WriteToolMixin):
+    name = "gc_skill_packs"
+    description = ("清理技能包磁盘垃圾：回收「磁盘上有、DB 无记录」的孤儿解压目录（异常中断/历史遗留）。"
+                   "默认保留 1 小时内新建的目录（可能正在入库）。dry_run=true 仅统计不删除。")
+    required_permission = "skill:edit"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "min_age_hours": {"type": "integer", "default": 1, "description": "只回收早于该时长的孤儿目录"},
+            "dry_run": {"type": "boolean", "default": False, "description": "true=仅统计，不实际删除"},
+        },
+    }
+
+    def summarize(self, args: dict) -> str:
+        return f"{'统计' if args.get('dry_run') else '清理'}孤儿技能包目录"
+
+    async def execute(self, args: dict, ctx: ToolContext) -> ToolResult:
+        from app.services.skill_pack_service import gc_orphan_packs
+
+        r = await gc_orphan_packs(ctx.db, min_age_hours=int(args.get("min_age_hours") or 1),
+                                  dry_run=bool(args.get("dry_run")))
+        verb = "可回收" if r.get("dry_run") else "已回收"
+        return ToolResult(
+            content=f"{verb}孤儿技能包 {r['removed']} 个（保留 {r['kept']} 个），释放 {r['freed_mb']} MB",
+            data=r,
+        )
+
+
 # ==================== 通知渠道 ====================
 class ManageNotifyChannelTool(WriteToolMixin):
     name = "manage_notify_channel"
@@ -1305,15 +1333,22 @@ class ManageFilesTool(WriteToolMixin):
 # ==================== 技能脚本试跑 ====================
 class RunSkillScriptTool(WriteToolMixin):
     name = "run_skill_script"
-    description = ("试跑技能包内的某个脚本（需该技能包已启用脚本执行）。"
-                   "脚本从 stdin 读 JSON 参数、向 stdout 输出结果。先用 list_skills 查技能 id。")
+    description = (
+        "试跑技能包内的某个入口脚本（需该技能包已启用脚本执行）。支持 Python/Node/Shell（按扩展名自动选择运行时）。"
+        "Python 脚本从 stdin 读 JSON 参数、向 stdout 输出结果；Node/Shell 脚本额外可用命令行位置参数 extra_args"
+        "（如 build_all.mjs 需要「deck.json -o 输出目录」）。先用 list_skills 查技能 id。"
+    )
     required_permission = "skill:execute"
     parameters = {
         "type": "object",
         "properties": {
             "skill_id": {"type": "integer"},
-            "script": {"type": "string", "description": "脚本名（技能的 entry_scripts 里）"},
-            "args": {"type": "object", "description": "传给脚本的 JSON 参数"},
+            "script": {"type": "string", "description": "脚本名（技能的 entry_scripts 里，取文件名主干）"},
+            "args": {"type": "object", "description": "传给脚本的 JSON 参数（经 stdin 与 env PPT_SKILL_ARGS）"},
+            "extra_args": {
+                "type": "array", "items": {"type": "string"},
+                "description": "追加的命令行位置参数，如 ['examples/x.deck.json', '-o', 'out']",
+            },
         },
         "required": ["skill_id", "script"],
     }
@@ -1322,7 +1357,11 @@ class RunSkillScriptTool(WriteToolMixin):
         return f"试跑技能 #{args.get('skill_id')} 的脚本 {args.get('script')}"
 
     async def execute(self, args: dict, ctx: ToolContext) -> ToolResult:
+        import time as _t
+        from pathlib import Path as _Path
+
         from app.agents.tools.registry import run_pack_script
+        from app.core.config import settings
         from app.models import SkillPackage
 
         sid = int(args.get("skill_id") or 0)
@@ -1333,12 +1372,152 @@ class RunSkillScriptTool(WriteToolMixin):
             return ToolResult(content="技能包不存在", is_error=True)
         if not pkg.scripts_enabled:
             return ToolResult(content="该技能包未启用脚本执行（先用 toggle_skill_scripts 开启）", is_error=True)
-        scripts = {s.get("name"): s.get("path") for s in (pkg.entry_scripts or [])}
+        scripts = {s.get("name"): s for s in (pkg.entry_scripts or [])}
         name = str(args.get("script") or "")
         if name not in scripts:
             return ToolResult(content=f"脚本不在白名单内：{name}（可选：{', '.join(scripts) or '无'}）", is_error=True)
-        res = await run_pack_script(pkg.pack_dir, scripts[name], args.get("args") or {})
+        entry = scripts[name]
+        extra = args.get("extra_args") or []
+        if not isinstance(extra, list):
+            extra = [str(extra)]
+
+        pack_root = (settings.skill_pack_path / pkg.pack_dir).resolve()
+        # 能力桥接：注入平台回调地址与短期令牌（白名单来自清单 permissions.platform_tools）
+        bridge = None
+        try:
+            from app.agents.tools.registry import build_bridge_env
+            from app.services.skill_runtime import load_manifest
+
+            mf = load_manifest(pack_root)
+            allowed = [str(x) for x in (mf.permissions.get("platform_tools") or [])]
+            bridge = build_bridge_env(tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+                                      skill_id=sid, allowed_tools=allowed)
+        except Exception:  # noqa: BLE001
+            bridge = None
+
+        t0 = _t.time()
+        res = await run_pack_script(pkg.pack_dir, entry["path"], args.get("args") or {},
+                                    extra_args=[str(x) for x in extra],
+                                    entry=entry, bridge=bridge)
+        # 捕获运行期间新产生的可交付文件 → 登记为 Artifact（供下载）
+        try:
+            outs = list(entry.get("outputs") or [])
+            produced = self._collect_artifacts(pack_root, t0, outputs=outs)
+        except Exception:  # noqa: BLE001
+            produced = {}
+        if produced:
+            saved = await self._save_artifacts(ctx, list(produced.values()))
+            if saved:
+                lines = [res.content, "", "已产出可下载文件："]
+                for s in saved:
+                    lines.append(f"  • {s['name']}（{s['size']} 字节）")
+                return ToolResult(content="\n".join(lines)[:20000], is_error=res.is_error,
+                                  data={"artifacts": saved})
         return ToolResult(content=res.content[:20000], is_error=res.is_error)
+
+    # 运行期间产出、可回传下载的交付物：二进制成品优先，其次预览/文本
+    _BINARY_DELIVERABLE = {"pptx", "docx", "xlsx", "pdf", "png", "jpg", "jpeg", "svg", "zip"}
+    _PREVIEW_DELIVERABLE = {"html"}
+    _TEXT_DELIVERABLE = {"json", "csv", "md"}
+    _DELIVERABLE_EXT = _BINARY_DELIVERABLE | _PREVIEW_DELIVERABLE | _TEXT_DELIVERABLE
+    # 中间报告文件（不作为交付物，避免与成品重复刷屏）
+    _INTERMEDIATE_SUFFIXES = (".build.json", ".report.json", ".report.md")
+    # 排除目录（依赖/缓存/包内样例，不作为交付物回传）
+    _SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "examples", "assets"}
+
+    def _collect_artifacts(self, pack_root, since_ts: float, outputs: list | None = None) -> dict:
+        """本次运行新产生的交付物 → {name: path}。
+
+        若清单/入口声明了 outputs（glob，如 "*.pptx"、"out/*.html"），**按其精确匹配**
+        （排除 node_modules 等仍生效）；否则回退到按扩展名 + mtime 的启发式。
+        """
+        if outputs:
+            return self._collect_by_globs(pack_root, outputs, since_ts)
+
+        cands: dict[str, tuple] = {}
+        for p in pack_root.rglob("*"):
+            if not p.is_file():
+                continue
+            try:
+                rel = p.relative_to(pack_root)
+            except ValueError:
+                continue
+            if any(seg in self._SKIP_DIRS or seg.startswith(".") for seg in rel.parts[:-1]):
+                continue
+            low = p.name.lower()
+            ext = p.suffix.lower().lstrip(".")
+            if ext not in self._DELIVERABLE_EXT:
+                continue
+            if any(low.endswith(s) for s in self._INTERMEDIATE_SUFFIXES):
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            if st.st_mtime + 0.5 < since_ts or st.st_size == 0 or st.st_size > 50 * 1024 * 1024:
+                continue
+            cands[p.name] = (p, ext, st.st_mtime)
+
+        has_binary_or_preview = any(
+            ext in self._BINARY_DELIVERABLE or ext in self._PREVIEW_DELIVERABLE
+            for _p, ext, _m in cands.values()
+        )
+        out: dict = {}
+        for name, (p, ext, mtime) in cands.items():
+            if has_binary_or_preview and ext in self._TEXT_DELIVERABLE:
+                continue
+            out[name] = p
+        return out
+
+    def _collect_by_globs(self, pack_root, patterns: list, since_ts: float) -> dict:
+        """按声明的 glob 收集产物（优先），并跳过依赖/隐藏目录。"""
+        out: dict = {}
+        for pat in patterns:
+            pat = str(pat).strip()
+            if not pat:
+                continue
+            for p in pack_root.glob(pat):
+                if not p.is_file():
+                    continue
+                try:
+                    rel = p.relative_to(pack_root)
+                except ValueError:
+                    continue
+                if any(seg in self._SKIP_DIRS or seg.startswith(".") for seg in rel.parts[:-1]):
+                    continue
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                if st.st_size == 0 or st.st_size > 50 * 1024 * 1024:
+                    continue
+                # 声明了 outputs 时允许略过 mtime（脚本可能写死路径、mtime 判定不稳）
+                if st.st_mtime + 0.5 < since_ts:
+                    continue
+                out[p.name] = p
+        return out
+
+    async def _save_artifacts(self, ctx, paths) -> list:
+        import mimetypes
+
+        from app.agents.tools.file_tools import _MIME, _save_artifact
+
+        rows = []
+        for p in sorted(paths, key=lambda x: x.name):
+            try:
+                data = p.read_bytes()
+            except OSError:
+                continue
+            ext = p.suffix.lower().lstrip(".")
+            mime = _MIME.get(ext) or (mimetypes.guess_type(p.name)[0] or "application/octet-stream")
+            file_key, art, _ = _save_artifact(ctx, p.name, data, mime)
+            rows.append((file_key, art, mime, len(data), p.name))
+        if not rows:
+            return []
+        await ctx.db.flush()  # 先 flush 才有自增 id
+        return [{"file_key": fk, "artifact_id": art.id, "name": name,
+                 "mime": mime, "size": size, "url": f"/api/v1/chat/attachments/{fk}"}
+                for fk, art, mime, size, name in rows]
 
 
 # ==================== Provider 测试/健康 / KB 统计 ====================
@@ -2065,6 +2244,7 @@ class ExtractRecordsTool(WriteToolMixin):
 OPS_TOOLS2 = [
     CloneAgentTool(), ManageAgentVersionTool(), ManageAgentModeTool(),
     UpdateSkillTool(), DeleteSkillTool(), ImportSkillFromUrlTool(), ToggleSkillScriptsTool(),
+    GcSkillPacksTool(),
     FindSkillTool(),
     RegisterToolTool(), DeleteToolTool(), TestToolTool(),
     ManageProviderTool(), ManageModelConfigTool(),

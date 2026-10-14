@@ -890,15 +890,17 @@ export const skillApi = {
   },
   upgradeUrl: (skillId: number, url: string) =>
     http.post<{ skill_id: number; version?: string; files: number }>(`/skills/${skillId}/upgrade`, { url }).then((r) => r.data),
-  runScript: (skillId: number, script: string, args: Record<string, any>) =>
-    http.post<{ ok: boolean; content: string; is_error: boolean }>(`/skills/${skillId}/scripts/run`, { script, args }).then((r) => r.data),
+  runScript: (skillId: number, script: string, args: Record<string, any>, extraArgs: string[] = []) =>
+    http.post<{ ok: boolean; content: string; is_error: boolean }>(`/skills/${skillId}/scripts/run`, { script, args, extra_args: extraArgs }).then((r) => r.data),
   getPackage: (skillId: number) => http.get<SkillPackageInfo>(`/skills/${skillId}/package`).then((r) => r.data),
   readPackageFile: (skillId: number, path: string) =>
     http.get<{ path: string; binary: boolean; size: number; content: string | null }>('/skills/' + skillId + '/package/file', { params: { path } }).then((r) => r.data),
   writePackageFile: (skillId: number, path: string, content: string) =>
     http.put(`/skills/${skillId}/package/file`, { path, content }).then((r) => r.data),
   toggleScripts: (skillId: number, enabled: boolean) =>
-    http.post(`/skills/${skillId}/package/scripts?enabled=${enabled}`).then((r) => r.data),
+    http.post<{ scripts_enabled: boolean; entry_scripts: SkillScriptEntry[] }>(`/skills/${skillId}/package/scripts?enabled=${enabled}`).then((r) => r.data),
+  installDeps: (skillId: number) =>
+    http.post<{ ok: boolean; message: string; log: string }>(`/skills/${skillId}/package/install-deps`).then((r) => r.data),
 }
 
 export interface SkillImportResult {
@@ -922,9 +924,23 @@ export interface SkillPackageInfo {
   source_uri?: string
   version?: string
   files?: { path: string; size: number }[]
-  entry_scripts?: { name: string; path: string; description?: string }[]
+  entry_scripts?: SkillScriptEntry[]
   scripts_enabled: boolean
   manifest?: Record<string, any>
+  capabilities?: {
+    has_node_manifest: boolean
+    has_python_reqs: boolean
+    needs_node_install: boolean
+    has_manifest: boolean
+  }
+  manifest_template?: string
+}
+
+export interface SkillScriptEntry {
+  name: string
+  path: string
+  description?: string
+  runtime?: string
 }
 
 export const toolApi = {

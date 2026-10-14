@@ -86,236 +86,53 @@ def _stem(name: str) -> str:
     return Path(name).stem or "file"
 
 
-# ==================== Markdown 表格解析（生成 docx/pdf 用）====================
-def _parse_md_table(lines: list[str]) -> tuple[list[str], list[list[str]]] | None:
-    """把连续的 markdown 表格行解析为 (表头, 数据行)。非表格返回 None。"""
-    rows: list[list[str]] = []
-    for ln in lines:
-        s = ln.strip()
-        if not s.startswith("|"):
-            return None
-        cells = [c.strip() for c in s.strip("|").split("|")]
-        rows.append(cells)
-    if len(rows) < 2:
-        return None
-    # 第二行须是分隔行（--- | :--: 等）
-    sep = rows[1]
-    if not all(set(c) <= set("-: ") and c for c in sep):
-        return None
-    return rows[0], rows[2:]
+# ==================== 渲染（委托 office_render / pptx_render）====================
+def _render_docx(content: str, meta: dict | None = None) -> bytes:
+    """专业排版 DOCX：封面 / 页眉页脚 / 页码 / 中日韩字体 / 表格样式。
 
+    meta: {title, subtitle, author, date, header, footer, cover, toc, font}
+    见 office_render.render_docx。
+    """
+    from app.agents.tools.office_render import render_docx
 
-def _is_table_start(line: str, nxt: str) -> bool:
-    return line.strip().startswith("|") and nxt.strip().startswith("|") and set(nxt.strip().strip("|").replace("|", "")) <= set("-: ")
-
-
-def _render_docx(content: str) -> bytes:
-    import docx
-
-    doc = docx.Document()
-    lines = content.split("\n")
-    i = 0
-    while i < len(lines):
-        s = lines[i].rstrip()
-        nxt = lines[i + 1] if i + 1 < len(lines) else ""
-        # 表格块
-        if _is_table_start(s, nxt):
-            block = []
-            j = i
-            while j < len(lines) and lines[j].strip().startswith("|"):
-                block.append(lines[j]); j += 1
-            parsed = _parse_md_table(block)
-            if parsed:
-                header, body = parsed
-                ncol = max([len(header)] + [len(r) for r in body]) if body else len(header)
-                t = doc.add_table(rows=1, cols=ncol)
-                t.style = "Light Grid Accent 1"
-                for ci, c in enumerate(header):
-                    if ci < ncol:
-                        t.rows[0].cells[ci].text = c
-                for r in body:
-                    cells = t.add_row().cells
-                    for ci in range(ncol):
-                        cells[ci].text = r[ci] if ci < len(r) else ""
-                i = j
-                continue
-        if s.startswith("### "):
-            doc.add_heading(s[4:], level=3)
-        elif s.startswith("## "):
-            doc.add_heading(s[3:], level=2)
-        elif s.startswith("# "):
-            doc.add_heading(s[2:], level=1)
-        elif s.startswith("- ") or s.startswith("* "):
-            doc.add_paragraph(s[2:], style="List Bullet")
-        elif s.startswith("> "):
-            doc.add_paragraph(s[2:], style="Intense Quote")
-        else:
-            doc.add_paragraph(s)
-        i += 1
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
+    return render_docx(content, meta)
 
 
 def _render_xlsx(content: str, rows: list | None,
-                 charts: list | None = None, sheet_name: str | None = None) -> bytes:
-    import openpyxl
+                 charts: list | None = None, sheet_name: str | None = None,
+                 sheets: list | None = None, options: dict | None = None) -> bytes:
+    """专业排版 XLSX：多工作表 / 列宽自适应 / 表头样式 / 数字格式 / 冻结 / 图表。
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    if sheet_name:
-        ws.title = str(sheet_name)[:31]
-    if rows:
-        for row in rows:
-            ws.append(list(row))
-    else:
-        for ln in content.split("\n"):
-            cells = ln.split(",") if "," in ln else ln.split("\t")
-            ws.append([c.strip() for c in cells])
-    # 图表：rows 首行为表头时，分类用第 1 列、系列用其余列
-    for ch in (charts or []):
-        try:
-            ctype = str(ch.get("type") or "bar").lower()
-            title = str(ch.get("title") or "")
-            anchor = str(ch.get("anchor") or "H2")
-            data = ch.get("data")  # 可选：显式 {categories:[], series:[{name, values:[]}]}
-            existing = ws.max_row
-            if data and data.get("series"):
-                cats = data.get("categories") or []
-                start = existing + 2
-                ws.cell(row=start, column=1, value=ch.get("category_title") or "类别")
-                for j, s in enumerate(data["series"], start=2):
-                    ws.cell(row=start, column=j, value=s.get("name") or f"系列{j-1}")
-                for i, cval in enumerate(cats):
-                    ws.cell(row=start + 1 + i, column=1, value=cval)
-                    for j, s in enumerate(data["series"], start=2):
-                        vals = s.get("values") or []
-                        if i < len(vals):
-                            ws.cell(row=start + 1 + i, column=j, value=vals[i])
-                min_col, max_col = 1, 1 + len(data["series"])
-                min_row, max_row = start, start + len(cats)
-            else:
-                min_col, min_row, max_col, max_row = 1, 1, ws.max_column, ws.max_row
-            from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+    sheets: [{name, rows, charts?, number_formats?, freeze?, header?}]（多表优先）
+    options: {autosize(bool), header(bool)}
+    见 office_render.render_xlsx。
+    """
+    from app.agents.tools.office_render import render_xlsx
 
-            ref = Reference(ws, min_col=min_col, min_row=min_row, max_col=max_col, max_row=max_row)
-            chart = {"bar": BarChart, "line": LineChart, "pie": PieChart}.get(ctype, BarChart)()
-            chart.title = title or None
-            chart.add_data(ref, titles_from_data=True)
-            ws.add_chart(chart, anchor)
-        except Exception:  # noqa: BLE001
-            continue  # 单个图表失败不影响整体导出
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return render_xlsx(content, rows=rows, charts=charts, sheet_name=sheet_name,
+                       sheets=sheets, options=options)
 
 
-def _render_pptx(content: str, slides: list | None) -> bytes:
-    from pptx import Presentation
-    from pptx.util import Inches  # noqa: F401
+def _render_pptx(content: str, slides: list | None, theme=None) -> bytes:
+    """自绘版式的 PPTX（封面/章节/要点/两栏/引用/表格/结尾），不依赖模板文件。
 
-    prs = Presentation()
-    if slides:
-        for s in slides:
-            slide = prs.slides.add_slide(prs.slide_layouts[1])
-            slide.shapes.title.text = str(s.get("title") or "")
-            body = slide.placeholders[1].text_frame
-            body.text = ""
-            for b in (s.get("bullets") or []):
-                p = body.add_paragraph()
-                p.text = str(b)
-    else:
-        for block in content.split("\n\n"):
-            lines = [x for x in block.split("\n") if x.strip()]
-            if not lines:
-                continue
-            slide = prs.slides.add_slide(prs.slide_layouts[1])
-            slide.shapes.title.text = lines[0].lstrip("# ").strip()
-            body = slide.placeholders[1].text_frame
-            body.text = ""
-            for ln in lines[1:]:
-                p = body.add_paragraph()
-                p.text = ln.lstrip("- ").strip()
-    buf = io.BytesIO()
-    prs.save(buf)
-    return buf.getvalue()
+    见 pptx_render.py：支持主题色与多种版式，观感更接近设计稿。
+    """
+    from app.agents.tools.pptx_render import render_pptx
+
+    return render_pptx(content, slides, theme)
 
 
-def _register_cjk_font() -> str:
-    """注册中文字体，返回字体名；找不到则回退 Helvetica。"""
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
+def _render_pdf(content: str, meta: dict | None = None) -> bytes:
+    """专业排版 PDF：封面 / 页眉 / 页码 / 标题层级 / 表格样式。
 
-    candidates = [
-        ("SimSun", r"C:\Windows\Fonts\simsun.ttc"),
-        ("MicrosoftYaHei", r"C:\Windows\Fonts\msyh.ttc"),
-        ("NotoSansCJK", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-        ("WenQuanYi", "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
-    ]
-    for name, path in candidates:
-        try:
-            if Path(path).is_file():
-                pdfmetrics.registerFont(TTFont(name, path))
-                return name
-        except Exception:  # noqa: BLE001
-            continue
-    return "Helvetica"
+    meta: {title, subtitle, author, date, header, footer, cover}
+    见 office_render.render_pdf。
+    """
+    from app.agents.tools.office_render import render_pdf
 
+    return render_pdf(content, meta)
 
-def _render_pdf(content: str) -> bytes:
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-
-    buf = io.BytesIO()
-    font = _register_cjk_font()
-    styles = getSampleStyleSheet()
-    for s in styles.byName.values():
-        s.fontName = font
-    doc = SimpleDocTemplate(buf, pagesize=A4)
-    flow = []
-    lines = content.split("\n")
-    i = 0
-    while i < len(lines):
-        s = lines[i].rstrip()
-        nxt = lines[i + 1] if i + 1 < len(lines) else ""
-        if _is_table_start(s, nxt):
-            block = []
-            j = i
-            while j < len(lines) and lines[j].strip().startswith("|"):
-                block.append(lines[j]); j += 1
-            parsed = _parse_md_table(block)
-            if parsed:
-                header, body = parsed
-                data = [header] + body
-                t = Table(data, hAlign="LEFT")
-                t.setStyle(TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8eef7")),
-                    ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, -1), font),
-                    ("FONTSIZE", (0, 0), (-1, -1), 9),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ]))
-                flow.append(t)
-                flow.append(Spacer(1, 8))
-            i = j
-            continue
-        if s.startswith("# "):
-            flow.append(Paragraph(s[2:], styles["Heading1"]))
-        elif s.startswith("## "):
-            flow.append(Paragraph(s[3:], styles["Heading2"]))
-        elif s.startswith("### "):
-            flow.append(Paragraph(s[4:], styles["Heading3"]))
-        elif s.startswith("- ") or s.startswith("* "):
-            flow.append(Paragraph("• " + s[2:].replace("<", "&lt;").replace(">", "&gt;"), styles["BodyText"]))
-        elif not s:
-            flow.append(Spacer(1, 8))
-        else:
-            flow.append(Paragraph(s.replace("<", "&lt;").replace(">", "&gt;"), styles["BodyText"]))
-        i += 1
-    doc.build(flow)
-    return buf.getvalue()
 
 
 def _render(args: dict, fmt: str | None = None) -> tuple[bytes, str]:
@@ -324,14 +141,16 @@ def _render(args: dict, fmt: str | None = None) -> tuple[bytes, str]:
         fmt = str(args.get("format") or "txt").lower().lstrip(".")
     content = str(args.get("content") or "")
     if fmt == "docx":
-        return _render_docx(content), _MIME["docx"]
+        return _render_docx(content, args.get("meta")), _MIME["docx"]
     if fmt == "xlsx":
         return _render_xlsx(content, args.get("rows"), charts=args.get("charts"),
-                            sheet_name=args.get("sheet_name")), _MIME["xlsx"]
+                            sheet_name=args.get("sheet_name"),
+                            sheets=args.get("sheets"),
+                            options=args.get("options")), _MIME["xlsx"]
     if fmt == "pptx":
-        return _render_pptx(content, args.get("slides")), _MIME["pptx"]
+        return _render_pptx(content, args.get("slides"), args.get("theme")), _MIME["pptx"]
     if fmt == "pdf":
-        return _render_pdf(content), _MIME["pdf"]
+        return _render_pdf(content, args.get("meta")), _MIME["pdf"]
     # 其余格式（md/csv/txt/html/svg/json/js/css/… 及任何未知扩展名）：纯文本直出
     return content.encode("utf-8"), _mime_for(fmt)
 
@@ -551,10 +370,30 @@ class GenerateFileTool(_WriteToolMixin):
         "请直接输出 ```html 代码块（前端自带「预览」按钮，点击即可看渲染结果），**不要调用本工具**。\n"
         "根据内容生成文件供用户下载。**按 filename 的扩展名自动判断格式**，无需手动指定。\n"
         "支持任意常见类型：\n"
-        "- 办公文档：.docx / .pdf（content 传 markdown，会自动排版）、"
-        ".xlsx（用 rows 传二维数组）、.pptx（用 slides 传 [{title,bullets}]）\n"
+        "- 办公文档：.docx / .pdf（content 传 markdown，会自动专业排版）、"
+        ".xlsx（用 rows 传二维数组，或多表用 sheets）、.pptx（用 slides 传幻灯片，见下）\n"
         "- 网页/代码/文本：.html / .svg / .json / .js / .css / .xml / .py / .md / .csv / .txt 等"
         "（content 传原文，原样写出）\n"
+        "【DOCX/PDF 已支持专业排版】content 传 markdown（# 标题 / - 列表 / **粗体** / | 表格 | 均可）。"
+        "另可用 meta 增强：{title 标题, subtitle 副标题, author 作者, date 日期, "
+        "cover:true 生成封面页, header 页眉文字, footer 页脚文字, toc:true 生成目录(docx)}。"
+        "正式报告/方案建议加 cover+title+author；页脚会自动带「第 X 页」页码。\n"
+        "【XLSX 已支持多表与图表】单表用 rows 传二维数组（首行作表头）；"
+        "多工作表用 sheets:[{name, rows, charts?, number_formats?, freeze?, header?}]。"
+        "number_formats 例 {B:'#,##0.00', C:'0.0%'}；charts 例 "
+        "[{type:'bar'|'line'|'pie', title, anchor:'H2', data:{categories:[...], series:[{name, values:[...]}]}}]。"
+        "会自动列宽自适应、表头底纹、冻结首行。\n"
+        "【PPTX 已支持设计版式】slides 每项支持 layout：\n"
+        "  • cover  封面：{layout:'cover', title, subtitle, footer}\n"
+        "  • section 章节：{layout:'section', number, title}\n"
+        "  • bullets 要点（默认）：{layout:'bullets', title, bullets:[...]}\n"
+        "  • two-col 两栏：{layout:'two-col', title, left:[...], right:[...]}\n"
+        "  • quote  引用：{layout:'quote', title, source}\n"
+        "  • table  表格：{layout:'table', title, rows:[[表头],[数据]]}\n"
+        "  • end    结尾：{layout:'end', title, subtitle}\n"
+        "  可用 theme 设主题色（内置名 blue/green/dark/red/orange/purple/teal，或 #RRGGBB）。\n"
+        "  做「漂亮的 PPT」时：首张用 cover、章节用 section、正文用 bullets/two-col/table、末张用 end，"
+        "并给一个贴合主题的 theme 色。\n"
         "调用示例：用户说「生成动画文件发给我」时才调用本工具，传 filename=\"anim.html\""
         "（不要用 .txt），content 放完整 HTML/SVG 源码。"
     )
@@ -565,8 +404,28 @@ class GenerateFileTool(_WriteToolMixin):
             "filename": {"type": "string", "description": "文件名（务必含正确扩展名，如 index.html、report.docx）"},
             "content": {"type": "string", "description": "正文内容；办公文档传 markdown，网页/代码/文本传原文"},
             "format": {"type": "string", "description": "可选。留空则按 filename 扩展名自动判断；仅当文件名无扩展名时需要指定"},
-            "rows": {"type": "array", "items": {"type": "array", "items": {}}, "description": "xlsx 数据（二维数组）"},
-            "slides": {"type": "array", "items": {"type": "object"}, "description": "pptx 幻灯片 [{title,bullets}]"},
+            "meta": {
+                "type": "object",
+                "description": "docx 排版选项：{title, subtitle, author, date, cover(布尔), header, footer, toc(布尔,生成目录), font}",
+            },
+            "rows": {"type": "array", "items": {"type": "array", "items": {}}, "description": "xlsx 单表数据（二维数组，首行作表头）"},
+            "sheets": {
+                "type": "array", "items": {"type": "object"},
+                "description": "xlsx 多工作表：[{name, rows, charts?, number_formats?, freeze?, header?}]（优先于 rows）",
+            },
+            "options": {
+                "type": "object",
+                "description": "xlsx 选项：{autosize(布尔,默认true), header(布尔,默认true)}",
+            },
+            "charts": {
+                "type": "array", "items": {"type": "object"},
+                "description": "xlsx 图表（单表模式）：[{type:'bar'|'line'|'pie', title, anchor, data:{categories, series:[{name, values}]}}]",
+            },
+            "slides": {
+                "type": "array", "items": {"type": "object"},
+                "description": "pptx 幻灯片。每项 {layout, title, subtitle?, bullets?, left?, right?, rows?, source?, number?}；layout 见描述（cover/section/bullets/two-col/quote/table/end）",
+            },
+            "theme": {"type": "string", "description": "pptx 主题色：内置名 blue/green/dark/red/orange/purple/teal 或 #RRGGBB"},
         },
         "required": ["filename"],
     }
@@ -602,16 +461,37 @@ class GenerateFileTool(_WriteToolMixin):
 
 class EditFileTool(_WriteToolMixin):
     name = "edit_file"
-    description = "读取用户上传的 docx/xlsx 文件，按指令改写后另存为新文件供下载。"
+    description = (
+        "读取用户上传的 docx/xlsx 文件，按指令改写后另存为新文件供下载。\n"
+        "改写方式（可组合）：\n"
+        "- replace：查找替换 [{find, replace}]（docx 按段落文本、xlsx 按单元格文本）\n"
+        "- cells：写入单元格 {\"Sheet1!B2\": 值, \"B3\": 值}（xlsx，省略表名用首个工作表）\n"
+        "- append_rows：在表尾追加行 [[...], [...]]（xlsx）\n"
+        "- instructions：纯文本，追加到文档末尾（docx 段落 / xlsx 每行追加）\n"
+        "至少提供其中一种。"
+    )
     required_permission = "file:write"
     parameters = {
         "type": "object",
         "properties": {
             "file_key": {"type": "string", "description": "源文件 file_key"},
-            "instructions": {"type": "string", "description": "改写内容（纯文本追加/替换说明）"},
+            "replace": {
+                "type": "array", "items": {"type": "object"},
+                "description": "查找替换列表：[{find:'旧文本', replace:'新文本'}]",
+            },
+            "cells": {
+                "type": "object",
+                "description": "xlsx 单元格写入：{\"Sheet1!B2\": 123, \"C3\": \"文本\"}",
+            },
+            "append_rows": {
+                "type": "array", "items": {"type": "array", "items": {}},
+                "description": "xlsx 追加到表尾的行",
+            },
+            "sheet": {"type": "string", "description": "xlsx 操作的工作表名（默认首个）"},
+            "instructions": {"type": "string", "description": "纯文本，追加到文档末尾"},
             "output_filename": {"type": "string", "description": "输出文件名"},
         },
-        "required": ["file_key", "instructions"],
+        "required": ["file_key"],
     }
 
     def summarize(self, args: dict) -> str:
@@ -622,6 +502,12 @@ class EditFileTool(_WriteToolMixin):
         err = _check_tenant_key(ctx, fk)
         if err:
             return ToolResult(content=err, is_error=True)
+        replaces = args.get("replace") or []
+        cells = args.get("cells") or {}
+        append_rows = args.get("append_rows") or []
+        instructions = str(args.get("instructions") or "")
+        if not (replaces or cells or append_rows or instructions):
+            return ToolResult(content="需提供 replace / cells / append_rows / instructions 之一", is_error=True)
         src = get_storage().path(fk)
         if not src.is_file():
             return ToolResult(content="源文件不存在", is_error=True)
@@ -629,26 +515,73 @@ class EditFileTool(_WriteToolMixin):
         out_name = str(args.get("output_filename") or f"{_stem(src.name)}-edited.{ext}")
         if not out_name.lower().endswith(f".{ext}"):
             out_name = f"{out_name}.{ext}"
+
+        def _apply_replaces(text: str) -> tuple[str, int]:
+            hits = 0
+            for r in replaces:
+                f, t = str(r.get("find", "")), str(r.get("replace", ""))
+                if f and f in text:
+                    hits += text.count(f)
+                    text = text.replace(f, t)
+            return text, hits
+
         try:
             if ext == "docx":
                 import docx
 
                 doc = docx.Document(str(src))
-                for ln in str(args.get("instructions") or "").split("\n"):
-                    doc.add_paragraph(ln)
+                total = 0
+                for para in doc.paragraphs:
+                    if para.text:
+                        new, hits = _apply_replaces(para.text)
+                        if hits:
+                            total += hits
+                            for run in para.runs[1:]:
+                                run.text = ""
+                            if para.runs:
+                                para.runs[0].text = new
+                for tbl in doc.tables:
+                    for row in tbl.rows:
+                        for cell in row.cells:
+                            if cell.text:
+                                new, hits = _apply_replaces(cell.text)
+                                if hits:
+                                    total += hits
+                                    cell.text = new
+                if instructions:
+                    for ln in instructions.split("\n"):
+                        doc.add_paragraph(ln)
                 buf = io.BytesIO()
                 doc.save(buf)
                 data = buf.getvalue()
+                note = f"（替换 {total} 处）" if total else ""
             elif ext == "xlsx":
                 import openpyxl
 
                 wb = openpyxl.load_workbook(str(src))
-                ws = wb.active
-                for ln in str(args.get("instructions") or "").split("\n"):
-                    ws.append([c.strip() for c in ln.split(",")])
+                ws = wb[str(args.get("sheet"))] if args.get("sheet") in wb.sheetnames else wb.active
+                total = 0
+                if replaces:
+                    for row in ws.iter_rows():
+                        for cell in row:
+                            if isinstance(cell.value, str):
+                                new, hits = _apply_replaces(cell.value)
+                                if hits:
+                                    total += hits
+                                    cell.value = new
+                for ref, val in cells.items():
+                    sheet_name, _, coord = str(ref).rpartition("!")
+                    target = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else ws
+                    target[str(coord or ref)] = val
+                for r in append_rows:
+                    ws.append(list(r) if isinstance(r, (list, tuple)) else [r])
+                if instructions:
+                    for ln in instructions.split("\n"):
+                        ws.append([c.strip() for c in ln.split(",")])
                 buf = io.BytesIO()
                 wb.save(buf)
                 data = buf.getvalue()
+                note = f"（替换 {total} 处，写入 {len(cells)} 格，追加 {len(append_rows)} 行）"
             else:
                 return ToolResult(content=f"暂不支持改写 .{ext}（仅 docx/xlsx）", is_error=True)
         except Exception as e:  # noqa: BLE001
@@ -656,7 +589,7 @@ class EditFileTool(_WriteToolMixin):
         file_key, art, _ = _save_artifact(ctx, out_name, data, _MIME.get(ext, "application/octet-stream"))
         await ctx.db.flush()
         return ToolResult(
-            content=f"已生成改写文件：{out_name}（可下载）",
+            content=f"已生成改写文件：{out_name}{note}（可下载）",
             data={"file_key": file_key, "artifact_id": art.id, "name": out_name,
                   "mime": _MIME.get(ext), "size": len(data), "url": f"/api/v1/chat/attachments/{file_key}"},
         )

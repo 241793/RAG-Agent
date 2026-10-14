@@ -233,17 +233,20 @@ def test_is_capability_query():
 
 
 def test_capability_brief_banner_vs_full():
-    """普通问题给短 banner；能力问题给完整摘要（更长）。"""
+    """普通问题给「横幅 + 使用手册速览」；能力/用法问题给更长摘要。"""
     async def _run():
         d = await _setup()
         from app.services.chat_service import _capability_brief
 
         async with AsyncSessionLocal() as db:
             ps = PrincipalSet(user_id=d["admin"], tenant_id=d["tenant_id"], is_admin=True)
-            banner = await _capability_brief(db, ps, query="帮我查油价")
+            brief = await _capability_brief(db, ps, query="帮我查油价")
             full = await _capability_brief(db, ps, query="你能做什么")
-            assert len(banner) < 300, f"普通问题应给短横幅，实际 {len(banner)}"
-            assert len(full) > len(banner) * 3, "能力问题应给完整摘要"
+            guide = await _capability_brief(db, ps, query="知识库怎么用")
+            # 默认注入含平台身份 + 使用手册速览（让 AI 默认知道平台怎么用）
+            assert brief, "普通问题也应注入平台身份与手册速览"
+            assert len(full) > len(brief), "能力问题的完整摘要应长于速览"
+            assert "使用手册" in guide, "用法类问题应注入完整使用手册"
     asyncio.new_event_loop().run_until_complete(_run())
 
 

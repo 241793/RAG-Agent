@@ -160,6 +160,10 @@ class OfficeDocTool(WriteToolMixin):
             "format": {"type": "string", "enum": ["docx", "pdf", "xlsx", "md"], "default": "docx"},
             "filename": {"type": "string", "description": "文件名（可省略扩展名）"},
             "data": {"type": "object", "description": "按模板填写的字段（见描述）"},
+            "meta": {
+                "type": "object",
+                "description": "可选排版增强（docx）：{cover:true 生成封面, header 页眉, footer 页脚, author, date}",
+            },
         },
         "required": ["template", "data"],
     }
@@ -194,7 +198,10 @@ class OfficeDocTool(WriteToolMixin):
             if fmt == "md":
                 blob, mime = md.encode("utf-8"), "text/markdown"
             else:
-                blob, mime = _render({"format": fmt, "content": md})
+                meta = args.get("meta") if isinstance(args.get("meta"), dict) else None
+                if meta and "title" not in meta:
+                    meta = {**meta, "title": title}
+                blob, mime = _render({"format": fmt, "content": md, "meta": meta})
         except Exception as e:  # noqa: BLE001
             return ToolResult(content=f"生成失败：{str(e)[:200]}", is_error=True)
         file_key, art, _ = _save_artifact(ctx, filename, blob, mime)

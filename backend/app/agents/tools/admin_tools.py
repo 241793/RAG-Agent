@@ -223,13 +223,15 @@ class CreateSkillTool(_WriteToolMixin):
 
 class WriteSkillFileTool(_WriteToolMixin):
     name = "write_skill_file"
-    description = "编辑技能包内的文本文件（如 SKILL.md、scripts/*.py）。写操作，需管理员确认。"
+    description = ("编辑技能包内的文本文件（如 SKILL.md、scripts/*.py、tools/*.mjs）。"
+                   "**目标文件不存在时会新建**（可用于在技能包内创建 deck.json、临时数据文件等）。"
+                   "写操作，需管理员确认。")
     required_permission = "skill:edit"
     parameters = {
         "type": "object",
         "properties": {
             "skill_id": {"type": "integer", "description": "技能 id"},
-            "path": {"type": "string", "description": "包内相对路径，如 SKILL.md"},
+            "path": {"type": "string", "description": "包内相对路径，如 SKILL.md 或 deck.json"},
             "content": {"type": "string", "description": "新的文件内容"},
         },
         "required": ["skill_id", "path", "content"],
@@ -239,7 +241,7 @@ class WriteSkillFileTool(_WriteToolMixin):
         return f"写入技能 {args.get('skill_id')} 的文件 {args.get('path')}（{len(args.get('content') or '')} 字符）"
 
     async def execute(self, args: dict, ctx: ToolContext) -> ToolResult:
-        from app.api.v1.skills import TEXT_EXT, _safe_in_pack
+        from app.api.v1.skills import TEXT_EXT, _safe_pack_target
         from app.core.config import settings
         from app.models import Skill, SkillPackage
         from app.services.skill_pack_service import parse_skill_md
@@ -256,11 +258,13 @@ class WriteSkillFileTool(_WriteToolMixin):
         ).scalars().first()
         if not pkg or not pkg.pack_dir:
             return ToolResult(content="技能包不存在", is_error=True)
-        target = _safe_in_pack(settings.skill_pack_path / pkg.pack_dir, path)
+        if Path(path).suffix.lower().lstrip(".") not in TEXT_EXT:
+            return ToolResult(content=f"仅可写入文本文件（允许：{', '.join(sorted(TEXT_EXT))}）", is_error=True)
+        target = _safe_pack_target(settings.skill_pack_path / pkg.pack_dir, path, allow_new=True)
         if not target:
-            return ToolResult(content="文件不存在", is_error=True)
-        if target.suffix.lower().lstrip(".") not in TEXT_EXT:
-            return ToolResult(content="仅可编辑文本文件", is_error=True)
+            return ToolResult(content="非法路径", is_error=True)
+        is_new = not target.is_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         if target.name.upper() == "SKILL.MD":
             sk = await ctx.db.get(Skill, skill_id)
@@ -269,7 +273,8 @@ class WriteSkillFileTool(_WriteToolMixin):
                 sk.body_md = md_body
                 sk.prompt_template = md_body
                 await ctx.db.flush()
-        return ToolResult(content=f"已写入 {path}", data={"path": path})
+        return ToolResult(content=f"已{'新建' if is_new else '写入'} {path}",
+                          data={"path": path, "created": is_new})
 
 
 class CreateAgentTool(_WriteToolMixin):
@@ -406,3 +411,8 @@ ADMIN_TOOLS += OPS_TOOLS
 from app.agents.tools.ops_tools2 import OPS_TOOLS2  # noqa: E402
 
 ADMIN_TOOLS += OPS_TOOLS2
+
+# 第三轮补全工具（待办提醒/录单模板/话术库/渠道身份/站内通知/问答评测/会话管理）
+from app.agents.tools.complement_tools import COMPLEMENT_TOOLS  # noqa: E402
+
+ADMIN_TOOLS += COMPLEMENT_TOOLS

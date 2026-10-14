@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pathlib import Path
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,6 +66,12 @@ from app.agents.tools.office_tools import OFFICE_TOOLS  # noqa: E402
 
 for _ot in OFFICE_TOOLS:
     registry.register(_ot)
+
+# 用户级个人工具（待办提醒 / 我的会话）：高频，常驻下发，无需 find_tools 两跳
+from app.agents.tools.complement_tools import PERSONAL_TOOLS  # noqa: E402
+
+for _pt in PERSONAL_TOOLS:
+    registry.register(_pt)
 
 # 管理类工具（read/write；需 agent.tool_config.admin.enabled 显式启用）
 from app.agents.tools.admin_tools import ADMIN_TOOLS  # noqa: E402
@@ -190,69 +198,173 @@ def build_mcp_tools(server, *, seen: set[str]) -> list[McpTool]:
     return tools
 
 
-async def run_pack_script(
-    pack_dir: str, script_path: str, args: dict, *, timeout: int = 20
-) -> ToolResult:
-    """执行技能包内的 Python 脚本（受限子进程，供 ScriptTool 与 REST 试跑共用）。
+def _script_runtime(script_path: str) -> str:
+    from app.services.skill_runtime import runtime_of
 
-    约定：脚本从 stdin 读 JSON 参数，向 stdout 输出 JSON 结果。
-    安全：独立子进程（-I -S）、硬超时、工作目录限定在技能包内。
+    return runtime_of(script_path)
+
+
+def build_bridge_env(*, tenant_id: int, user_id: int, skill_id: int,
+                     allowed_tools: list[str] | None = None) -> dict:
+    """构造技能脚本回调平台的能力桥接环境变量。
+
+    脚本据此可用 PLATFORM_BASE_URL + PLATFORM_SKILL_TOKEN 调 /skills/bridge/call
+    执行白名单内的**只读**平台工具，避免技能内重复实现 HTTP 且绕过 SSRF 守卫。
+    """
+    import os
+
+    from app.core.security import create_skill_token
+
+    base = os.environ.get("PLATFORM_PUBLIC_BASE_URL") or f"http://127.0.0.1:{os.environ.get('API_PORT', '6677')}"
+    token = create_skill_token(tenant_id=tenant_id, user_id=user_id, skill_id=skill_id,
+                               allowed_tools=allowed_tools or [])
+    return {
+        "PLATFORM_BASE_URL": f"{base}/api/v1",
+        "PLATFORM_SKILL_TOKEN": token,
+        "PLATFORM_SKILL_ID": str(skill_id),
+    }
+
+
+# 技能脚本执行的全局并发闸门：防单个租户/技能打满 CPU。
+# 惰性初始化（绑定到当前事件循环），进程内所有技能脚本共用。
+_SCRIPT_SEM: "object | None" = None
+_SCRIPT_SEM_LIMIT = 4
+
+
+def _script_semaphore():
+    import asyncio
+
+    global _SCRIPT_SEM
+    if _SCRIPT_SEM is None:
+        _SCRIPT_SEM = asyncio.Semaphore(_SCRIPT_SEM_LIMIT)
+    return _SCRIPT_SEM
+
+
+async def run_pack_script(
+    pack_dir: str, script_path: str, args: dict, *, timeout: int = 120,
+    extra_args: list[str] | None = None, entry: dict | None = None,
+    bridge: dict | None = None,
+) -> ToolResult:
+    """执行技能包内的入口脚本（受限子进程，供 ScriptTool 与 REST 试跑共用）。
+
+    运行时由 skill_runtime 注册表决定（Python/Node/Shell）；`entry` 为入口元数据
+    （含 runtime/args 约定/outputs），缺省按扩展名推断。
+
+    - args 约定：stdin（默认，JSON 经 stdin）| positional（追加到 argv）| none。
+    - 超时：entry.timeout 覆盖默认（上限 600s）。
+    - 安全：独立子进程、硬超时、全局并发闸门、环境变量白名单、工作目录限定在技能包内。
+    - 桥接：bridge 非空时注入 PLATFORM_BASE_URL / PLATFORM_SKILL_TOKEN，供脚本回调平台工具。
     """
     import asyncio
     import json
-    import sys
 
     from app.core.config import settings
+    from app.services import skill_runtime as sr
 
-    root = settings.skill_pack_path / pack_dir
-    script = root / script_path
-    if not script.is_file():
+    root = (settings.skill_pack_path / pack_dir).resolve()
+    script = (root / script_path).resolve()
+    if root not in script.parents or not script.is_file():
         return ToolResult(content="脚本文件不存在", is_error=True)
+
+    entry = entry or {}
+    runtime_name = entry.get("runtime") or sr.runtime_of(script_path)
+    rt = sr.get_runtime(runtime_name)
+    if rt is None:
+        return ToolResult(content=f"不支持的脚本类型：{script_path}", is_error=True)
+
+    # 依赖就绪检查（如 Node 缺 node_modules）
+    ok, why = rt.check_deps(root)
+    if not ok:
+        return ToolResult(content=f"{why}。{rt.install_hint()}", is_error=True)
+
+    # 超时：入口声明优先（夹在 5~600s）
+    eff_timeout = timeout
+    if entry.get("timeout"):
+        try:
+            eff_timeout = max(5, min(600, int(entry["timeout"])))
+        except (TypeError, ValueError):
+            eff_timeout = timeout
+
+    # 参数约定：extra_args 始终追加到 argv；positional 模式下 args 也作为位置参数
+    arg_mode = str(entry.get("args") or "stdin")
+    eff_extra = [str(x) for x in (extra_args or [])]
+    if arg_mode == "positional" and args and not eff_extra:
+        eff_extra = [json.dumps(args, ensure_ascii=False)]
+
+    env = sr.build_child_env(runtime=rt, extra={**({"PPT_SKILL_ARGS": json.dumps(args, ensure_ascii=False)}), **(bridge or {})})
+
+    ctx = sr.RunContext(root=root, script=script, args=args, extra_args=eff_extra,
+                        timeout=eff_timeout, env_extra=env)
+
+    try:
+        cmd = rt.build_cmd(ctx)
+    except RuntimeError as e:
+        return ToolResult(content=str(e), is_error=True)
 
     def _exec() -> tuple[int, str]:
         import subprocess
 
-        proc = subprocess.run(
-            [sys.executable, "-I", "-S", str(script)],
-            input=json.dumps(args, ensure_ascii=False).encode(),
-            capture_output=True,
-            timeout=timeout,
-            cwd=str(root),
+        from app.services.skill_limits import Limits, apply_job_limits, make_popen_kwargs
+
+        lim = Limits(cpu_seconds=max(eff_timeout, 30), mem_mb=2048, max_procs=64)
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=str(root), env=env, **make_popen_kwargs(lim),
         )
-        out = proc.stdout.decode("utf-8", errors="ignore")
-        err = proc.stderr.decode("utf-8", errors="ignore")
+        apply_job_limits(proc, lim)  # Windows：Job Object 限内存/进程
+        try:
+            out_b, err_b = proc.communicate(
+                input=json.dumps(args, ensure_ascii=False).encode(), timeout=eff_timeout
+            )
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            return -9, f"__TIMEOUT__{eff_timeout}"
+        out = out_b.decode("utf-8", errors="ignore")
+        err = err_b.decode("utf-8", errors="ignore")
         if proc.returncode != 0:
-            return proc.returncode, f"脚本退出码 {proc.returncode}\n{err[:1000]}"
-        return 0, out[:65536] or "(无输出)"
+            tail = (err or out)[-2000:]
+            extra = "（若为内存/CPU 超限，子进程会被强制终止）" if proc.returncode not in (1,) else ""
+            return proc.returncode, f"脚本退出码 {proc.returncode}{extra}\n{tail}"
+        return 0, (out or err)[:65536] or "(无输出)"
 
     try:
-        code, result = await asyncio.wait_for(asyncio.to_thread(_exec), timeout=timeout + 5)
+        # 全局并发闸门：超出并发上限时排队等待
+        async with _script_semaphore():
+            code, result = await asyncio.wait_for(
+                asyncio.to_thread(_exec), timeout=eff_timeout + 5
+            )
+        if result.startswith("__TIMEOUT__"):
+            return ToolResult(content=f"脚本执行超时（超过 {result[11:]}s 已终止）", is_error=True)
         return ToolResult(content=result, is_error=code != 0)
     except asyncio.TimeoutError:
-        return ToolResult(content="脚本执行超时", is_error=True)
+        return ToolResult(content=f"脚本执行超时（{eff_timeout}s）", is_error=True)
     except Exception as e:  # noqa: BLE001
         return ToolResult(content=f"脚本执行错误: {str(e)[:200]}", is_error=True)
 
 
 class ScriptTool:
-    """技能包内的 Python 脚本工具（受限子进程执行，默认禁用）。
+    """技能包内的入口脚本工具（受限子进程执行，默认禁用）。
 
-    约定：脚本从 stdin 读 JSON 参数，向 stdout 输出 JSON 结果。
-    安全：独立子进程、硬超时、工作目录限定在技能包内。
+    支持 Python / Node / Shell（按扩展名）。约定：参数经 stdin(JSON) 与 env 传入，
+    向 stdout 输出结果。安全：独立子进程、硬超时、工作目录限定在技能包内。
     """
 
     required_permission = "skill:execute"
     kind = "write"
 
-    def __init__(self, *, name: str, description: str, pack_dir: str, script_path: str) -> None:
+    def __init__(self, *, name: str, description: str, pack_dir: str, script_path: str,
+                 entry: dict | None = None) -> None:
         self.name = name
         self.description = description
         self.pack_dir = pack_dir
         self.script_path = script_path
+        self.entry = entry or {}
         self.parameters = {"type": "object", "properties": {}, "additionalProperties": True}
 
     async def run(self, args: dict, ctx) -> ToolResult:
-        return await run_pack_script(self.pack_dir, self.script_path, args)
+        return await run_pack_script(self.pack_dir, self.script_path, args, entry=self.entry)
 
 
 def tool_allowed(tool: Tool, perms: set[str]) -> bool:
@@ -385,6 +497,7 @@ async def resolve_tools(
                             description=scr.get("description") or f"技能脚本 {scr['name']}",
                             pack_dir=pkg.pack_dir,
                             script_path=scr["path"],
+                            entry=scr,
                         )
                         if not _ok(t):
                             continue

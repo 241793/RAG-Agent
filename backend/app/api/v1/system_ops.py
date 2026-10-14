@@ -116,7 +116,8 @@ class ResetPwIn(BaseModel):
 
 
 class CleanupIn(BaseModel):
-    scope: str = "all"  # temp | orphan_artifacts | all
+    scope: str = "all"  # temp | orphan_artifacts | orphan_skill_packs | all
+    dry_run: bool = False
 
 
 # ==================== 系统信息 ====================
@@ -591,5 +592,13 @@ async def system_cleanup(
                             removed += 1; freed += sz
                         except OSError:
                             pass
+    skill_gc = None
+    if body.scope in ("orphan_skill_packs", "all"):
+        from app.services.skill_pack_service import gc_orphan_packs
+
+        skill_gc = await gc_orphan_packs(db, dry_run=body.dry_run)
     return {"ok": True, "removed": removed, "freed_bytes": freed,
-            "message": f"已清理 {removed} 个文件，释放 {freed} 字节"}
+            "skill_packs": skill_gc,
+            "message": f"已清理 {removed} 个文件，释放 {freed} 字节"
+                       + (f"；技能包：回收 {skill_gc['removed']} 个，释放 {skill_gc['freed_mb']} MB"
+                          if skill_gc else "")}

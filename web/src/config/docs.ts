@@ -112,6 +112,10 @@ export const DOCS: DocSection[] = [
       { name: '导入', desc: '「导入技能包」支持上传 zip/.md 或从 URL/GitHub 导入；多技能仓库可选整体导入为集合或单独安装某子技能。' },
       { name: '从 SKILL.md 新建', desc: '粘贴含 frontmatter 的 SKILL.md，自动解析预览后导入。' },
       { name: '技能包详情', desc: '查看来源/版本/文件清单，可在线查看/编辑包内文件、试跑脚本、从 URL 升级。', ai: '技能让 AI 掌握"特定套路"（如查油价、日报）。智能问答与智能体都会自动装载你有权的技能，并按技能说明调用工具执行。' },
+      { name: '脚本与运行时', desc: '技能脚本支持 Python / Node / Shell 三种运行时（按扩展名自动识别）：入口放 scripts/ 或 tools/，或写 skill.yaml 清单声明 entrypoints（可指定 args=positional/stdin、outputs 产物 glob）。Python 脚本可直接用第三方库；Node 技能（如 ppt-gen，工具在 tools/*.mjs）先在详情里点「安装依赖」执行 npm ci，Python 技能用 requirements.txt。跑脚本可传命令行参数（如 build_all.mjs deck.json -o out），运行产生的 PPTX/HTML 等成品会自动作为可下载附件回传。' },
+      { name: '清单与能力桥接', desc: '技能包可选 skill.yaml 声明 runtime/entrypoints/outputs/dependencies/permissions。清单里 permissions.platform_tools 可让脚本经环境变量（PLATFORM_BASE_URL + PLATFORM_SKILL_TOKEN）回调平台**只读**工具（如知识检索），避免重复实现 HTTP。脚本在环境变量白名单下运行（读不到后端密钥/数据库连接串），并受 CPU/内存/并发限额与入口超时（清单 timeout）约束。' },
+      { name: '磁盘维护', desc: '技能包解压目录若因中断留下「磁盘有、DB 无」的孤儿，可用「系统设置」的清理（scope=orphan_skill_packs）或让 AI 调 gc_skill_packs 回收；默认保留 1 小时内新建的目录，避免误删正在入库的包。' },
+      { name: '在包内写文件', desc: '「查看包」里可新建/编辑包内文本文件（如生成 deck.json 源文件），供脚本读取后编译。' },
     ],
   },
   {
@@ -157,6 +161,7 @@ export const DOCS: DocSection[] = [
       { name: '工单详情', desc: '对话记录、内部备注（客户不可见）、状态流转、转派、标记解决、关注提醒、客户上下文（历史工单）。' },
       { name: '渠道会话工作台', desc: '直接与外部客户对话（会回发到渠道），可发附件、加会话备注、设客户备注、开关提醒。' },
       { name: '话术库', desc: '预存常用话术，回复时一键插入。' },
+      { name: '与 AI 配合', desc: '话术库可用 manage_quick_reply 增删改；客服工单用 manage_service_ticket 查看/回复/关闭。', ai: '直接对 AI 说「加一条催单话术」「把这条工单标记解决」即可。' },
     ],
   },
   {
@@ -176,6 +181,7 @@ export const DOCS: DocSection[] = [
     summary: '待办事项与日程提醒；审批中心处理 AI 发起的写操作确认。',
     items: [
       { name: '待办日程', desc: '新建待办（标题/内容/到期时间/重复/提前提醒），标记完成、删除。' },
+      { name: '与 AI 配合', desc: '可用 manage_reminder 由 AI 代建/代查待办（"帮我建个明天下午三点的待办"），无需手动进页面。', ai: '「X 分钟后提醒我」这类用定时任务一次性任务；纯待办管理直接对话即可。' },
       { name: '审批中心', desc: 'AI 要执行写操作（如建库、改数据）时，会在这里等你「通过/拒绝」。', ai: '在智能问答/智能体里开启"AI 工具"但不开"免确认"时，写操作会先进入审批中心由你确认。' },
     ],
   },
@@ -220,6 +226,7 @@ export const DOCS: DocSection[] = [
     summary: '把平台事件推送到站内/Webhook/企微/钉钉/邮件；订阅外部事件；从邮箱拉资料入知识库。',
     items: [
       { name: '通知渠道', desc: '配置站内、通用 Webhook、企业微信、钉钉、SMTP 邮件等通知方式，可测试。' },
+      { name: '站内通知', desc: '铃铛里的消息（系统/任务/工作流通知）。AI 可用 manage_notification 列通知、给同事发通知、标记已读。', ai: '对 AI 说「提醒同事张三看下今天的工单」即可给他发一条站内通知。' },
       { name: '事件订阅', desc: '外部系统订阅平台事件（出站 Webhook），可测试。' },
       { name: '邮件入库', desc: '配置 IMAP 邮箱，按规则（发件人/主题关键词/入库方式）把邮件与附件自动导入知识库。', ai: '定时任务完成通知、工单提醒等都会走这些渠道。' },
     ],
@@ -245,7 +252,7 @@ export const DOCS: DocSection[] = [
     summary: '排查"答得不准"与批量评估回答质量。',
     items: [
       { name: '检索调试', desc: '输入问题，查看命中的分块与分数、耗时，定位检索问题。' },
-      { name: '问答评测', desc: '建数据集与问题集，批量跑评测，看命中/忠实度/相关性/延迟并导出。', ai: '调优 AI 效果的两把尺子：先用检索调试看"找得对不对"，再用评测看"答得好不好"。' },
+      { name: '问答评测', desc: '建数据集与问题集，批量跑评测，看命中/忠实度/相关性/延迟并导出。', ai: '调优 AI 效果的两把尺子：先用检索调试看"找得对不对"，再用评测看"答得好不好"。AI 可直接用 manage_eval 建集/加题/跑评测/看结果。' },
     ],
   },
 ]

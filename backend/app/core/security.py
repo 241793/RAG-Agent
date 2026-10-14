@@ -82,6 +82,27 @@ def create_file_token(
     return _create_token(payload, expires_minutes or settings.file_token_expire_minutes, "file")
 
 
+def create_skill_token(
+    *,
+    tenant_id: int,
+    user_id: int,
+    skill_id: int,
+    allowed_tools: list[str] | None = None,
+    expires_minutes: int | None = None,
+) -> str:
+    """签发技能脚本回调平台的短期 token（能力桥接用）。
+
+    仅用于「技能脚本 → 平台工具」这一条通路：把调用方的身份/租户/技能id 与
+    **允许的工具白名单**封进 token，端点据此以调用者自己的权限集执行工具。
+    短时效（默认 10 分钟）、单用途（type=skill）。
+    """
+    payload: dict[str, Any] = {
+        "tenant_id": tenant_id, "user_id": user_id, "skill_id": skill_id,
+        "allowed_tools": list(allowed_tools or []),
+    }
+    return _create_token(payload, expires_minutes or 10, "skill")
+
+
 def decode_token(token: str) -> dict[str, Any]:
     """解码并校验 JWT，失败抛 jwt.PyJWTError。"""
     return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])

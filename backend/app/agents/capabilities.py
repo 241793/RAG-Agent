@@ -128,7 +128,14 @@ async def build_capability_brief(
                      "导出/分享对话用 export_conversation，合并导出文档用 merge_export_documents，改系统设置用 manage_system_settings；"
                      "列出/删除/清理产物文件用 manage_files，试跑技能包脚本用 run_skill_script；"
                      "客服工单（渠道转人工生成）用 manage_service_ticket 查看/回复/关闭；"
-                     "把文本抽成结构化台账用 extract_records（先 list_templates 拿模板 id）。")
+                     "把文本抽成结构化台账用 extract_records（先 list_templates 拿模板 id）。"
+                     "录单模板用 manage_record_template（建模板/字段、看台账、导出 CSV）；"
+                     "客服话术库用 manage_quick_reply（增删改查）；渠道身份绑定内部账号用 manage_channel_user；"
+                     "站内通知用 manage_notification（给同事发通知、标记已读）；"
+                     "问答评测用 manage_eval（建数据集/加题/跑评测/看结果）。")
+    else:
+        lines.append("个人待办/日程用 manage_reminder（创建/列出/完成/删除，可设到期时间与重复）；"
+                     "管理自己的问答会话用 manage_conversation（列出/重命名/删除/导出）。")
     return "\n".join(lines)
 
 

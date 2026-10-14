@@ -146,6 +146,10 @@
           <el-button :icon="Upload" @click="upgradeRef?.click()">更新技能包（上传 zip）</el-button>
           <input ref="upgradeRef" type="file" hidden accept=".zip" @change="onUpgradePick" />
           <el-button :icon="Link" @click="upgradeOpen = true">从 URL 更新</el-button>
+          <el-button v-if="hasDeps" :icon="Download" :loading="installingDeps" @click="installDeps">
+            安装依赖<el-badge v-if="needsInstall" is-dot style="margin-left: 4px" />
+          </el-button>
+          <el-button :icon="Document" @click="showManifestTemplate = true">清单格式</el-button>
         </div>
 
         <h4 class="p-title">脚本</h4>
@@ -153,9 +157,10 @@
         <div v-for="s in pkg.entry_scripts || []" :key="s.name" class="script-row">
           <div class="script-info">
             <code>{{ s.name }}</code>
+            <el-tag v-if="s.runtime" size="small" :type="runtimeTag(s.runtime)" class="rt-tag">{{ s.runtime }}</el-tag>
             <div class="text-muted" style="font-size: 12px">{{ s.description || s.path }}</div>
           </div>
-          <el-button v-if="canRun" size="small" :disabled="!pkg.scripts_enabled" @click="openRunScript(s.name)">试跑</el-button>
+          <el-button v-if="canRun" size="small" :disabled="!pkg.scripts_enabled" @click="openRunScript(s)">试跑</el-button>
         </div>
 
         <h4 class="p-title">文件清单（点击查看/编辑）</h4>
@@ -177,10 +182,25 @@
       </template>
     </el-dialog>
 
+    <!-- 清单格式说明 -->
+    <el-dialog v-model="showManifestTemplate" title="技能清单 skill.yaml（可选）" width="640px">
+      <p class="text-secondary" style="font-size: 12px">
+        在技能包根目录放 skill.yaml 即可声明入口、参数约定、产物与依赖。不写则按扩展名/目录自动推断。
+      </p>
+      <pre class="run-result" style="max-height: 400px">{{ pkg?.manifest_template || '' }}</pre>
+      <template #footer>
+        <el-button @click="showManifestTemplate = false">关闭</el-button>
+        <el-button type="primary" :icon="CopyDocument" @click="copyManifestTemplate">复制</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 试跑脚本 -->
     <el-dialog v-model="runOpen" :title="`试跑脚本：${runScript}`" width="560px">
-      <p class="text-secondary" style="font-size: 12px">脚本从 stdin 读 JSON 参数，向 stdout 输出结果。参数为 JSON，如 {"city":"北京"}。</p>
+      <p class="text-secondary" style="font-size: 12px">
+        Python 脚本从 stdin 读 JSON 参数；Node/Shell 脚本额外支持下方「命令行参数」。
+      </p>
       <el-input v-model="runScriptArgs" type="textarea" :rows="4" placeholder='{"key":"value"}' class="mono-in" />
+      <el-input v-model="runExtraArgs" placeholder="命令行参数（空格分隔），如：deck.json -o out" class="mono-in" style="margin-top: 8px" />
       <el-button type="primary" :icon="VideoPlay" :loading="running" style="margin-top: 12px" @click="doRunScript">执行</el-button>
       <pre v-if="runResult" class="run-result">{{ runResult }}</pre>
     </el-dialog>
@@ -202,7 +222,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Upload, Edit, Delete, Grid, Document, Link, VideoPlay, CopyDocument } from '@element-plus/icons-vue'
+import { Plus, Upload, Edit, Delete, Grid, Document, Link, VideoPlay, CopyDocument, Download } from '@element-plus/icons-vue'
 import PageContainer from '@/components/PageContainer.vue'
 import { kbApi, skillApi, type KB, type Skill, type SkillPackageInfo } from '@/api'
 import { errMsg } from '@/api/http'
@@ -241,8 +261,29 @@ const upgradeBusy = ref(false)
 const runOpen = ref(false)
 const runScript = ref('')
 const runScriptArgs = ref('')
+const runExtraArgs = ref('')
 const runResult = ref('')
 const running = ref(false)
+const installingDeps = ref(false)
+const showManifestTemplate = ref(false)
+
+function copyManifestTemplate() {
+  const text = pkg.value?.manifest_template || ''
+  if (!text) return
+  navigator.clipboard?.writeText(text).then(
+    () => ElMessage.success('已复制'),
+    () => ElMessage.warning('复制失败，请手动选择'),
+  )
+}
+
+const hasNodeManifest = computed(() =>
+  pkg.value?.capabilities?.has_node_manifest ?? (pkg.value?.files || []).some((f) => f.path === 'package.json'))
+const hasDeps = computed(() =>
+  pkg.value?.capabilities?.has_node_manifest || pkg.value?.capabilities?.has_python_reqs)
+const needsInstall = computed(() => pkg.value?.capabilities?.needs_node_install === true)
+function runtimeTag(rt: string) {
+  return rt === 'python' ? 'primary' : rt === 'node' ? 'success' : rt === 'sh' ? 'warning' : 'info'
+}
 
 const fileOpen = ref(false)
 const fileView = ref<{ path: string; content: string; binary: boolean; dirty?: boolean } | null>(null)
@@ -408,9 +449,10 @@ async function doUpgradeUrl() {
     load()
   } catch (e) { ElMessage.error(errMsg(e)) } finally { upgradeBusy.value = false }
 }
-function openRunScript(name: string) {
-  runScript.value = name
+function openRunScript(s: { name: string }) {
+  runScript.value = s.name
   runScriptArgs.value = ''
+  runExtraArgs.value = ''
   runResult.value = ''
   runOpen.value = true
 }
@@ -418,13 +460,26 @@ async function doRunScript() {
   if (!pkgSkillId.value || !runScript.value) return
   let args: any = {}
   try { args = runScriptArgs.value.trim() ? JSON.parse(runScriptArgs.value) : {} } catch { ElMessage.error('参数不是合法 JSON'); return }
+  const extra = runExtraArgs.value.trim() ? runExtraArgs.value.trim().split(/\s+/) : []
   running.value = true
   try {
-    const r = await skillApi.runScript(pkgSkillId.value, runScript.value, args)
+    const r = await skillApi.runScript(pkgSkillId.value, runScript.value, args, extra)
     runResult.value = r.content || ''
     if (r.ok) ElMessage.success('执行成功')
     else ElMessage.warning('脚本返回错误')
   } catch (e) { runResult.value = '失败：' + errMsg(e) } finally { running.value = false }
+}
+async function installDeps() {
+  if (!pkgSkillId.value) return
+  installingDeps.value = true
+  try {
+    const r = await skillApi.installDeps(pkgSkillId.value)
+    if (r.ok) ElMessage.success(r.message || '依赖安装完成')
+    else ElMessage.error(r.message || '安装失败')
+    runResult.value = r.log || ''
+    runOpen.value = true
+    runScript.value = 'npm ci'
+  } catch (e) { ElMessage.error(errMsg(e)) } finally { installingDeps.value = false }
 }
 async function openFile(path: string) {
   if (!pkgSkillId.value) return
@@ -464,6 +519,7 @@ onMounted(load)
 .script-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border-subtle); }
 .script-info { flex: 1; min-width: 0; }
 .script-info code { font-family: monospace; font-size: 12.5px; }
+.rt-tag { margin-left: 6px; vertical-align: middle; }
 .file-row { display: flex; align-items: center; gap: 6px; padding: 6px 4px; border-radius: 6px; cursor: pointer; font-family: monospace; font-size: 13px; }
 .file-row:hover { background: var(--bg-subtle); }
 .file-ico { color: var(--color-primary); }

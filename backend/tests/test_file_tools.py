@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import time
 
 from sqlalchemy import select
@@ -78,7 +79,38 @@ async def _run():
         content = get_storage().read(conv.data["file_key"]).decode("utf-8")
         assert "x" in content and "3" in content, content
 
-    # 6) 过期清理
+    # 6) 改写 docx：查找替换 + 追加
+    from app.agents.tools.file_tools import EditFileTool
+
+    async with AsyncSessionLocal() as db:
+        ctx = ToolContext(db=db, ps=ps, tenant_id=d["tid"], user_id=d["uid"])
+        gen = await GenerateFileTool().execute(
+            {"filename": "草稿.docx", "format": "docx", "content": "# 草稿\n旧标题在这里\n"}, ctx)
+        ed = await EditFileTool().execute(
+            {"file_key": gen.data["file_key"], "replace": [{"find": "旧标题", "replace": "新标题"}],
+             "instructions": "补充说明"}, ctx)
+        assert not ed.is_error, ed.content
+        import docx as _docx
+
+        edoc = _docx.Document(io.BytesIO(get_storage().read(ed.data["file_key"])))
+        texts = "\n".join(p.text for p in edoc.paragraphs)
+        assert "新标题" in texts and "旧标题" not in texts, texts
+        assert "补充说明" in texts
+
+    # 7) 改写 xlsx：单元格写入 + 追加行
+    async with AsyncSessionLocal() as db:
+        ctx = ToolContext(db=db, ps=ps, tenant_id=d["tid"], user_id=d["uid"])
+        gen = await GenerateFileTool().execute(
+            {"filename": "表.xlsx", "format": "xlsx", "rows": [["名称", "值"], ["甲", 1]]}, ctx)
+        ed = await EditFileTool().execute(
+            {"file_key": gen.data["file_key"], "cells": {"B2": 99}, "append_rows": [["乙", 2]]}, ctx)
+        assert not ed.is_error, ed.content
+        import openpyxl as _x
+
+        ws = _x.load_workbook(io.BytesIO(get_storage().read(ed.data["file_key"]))).active
+        assert ws["B2"].value == 99 and ws["A3"].value == "乙"
+
+    # 8) 过期清理
     async with AsyncSessionLocal() as db:
         db.add(Artifact(tenant_id=d["tid"], user_id=d["uid"], file_key=f"{d['tid']}/expired.bin",
                         file_name="expired.bin", size=1, source="generated",
@@ -100,6 +132,72 @@ def test_file_tools():
     finally:
         loop.close()
         asyncio.set_event_loop(None)
+
+
+async def _run_office():
+    """办公增强渲染：docx 封面/页眉/页码/表格样式；xlsx 多表/格式/图表/冻结。"""
+    from app.agents.tools.office_render import render_docx, render_xlsx
+
+    # docx：封面 + 页眉 + 页码域 + 表头底纹 + 中日韩字体
+    md = "# 季度报告\n\n## 指标\n\n| 指标 | 值 |\n| --- | --- |\n| 营收 | 100 |\n"
+    data = render_docx(md, meta={"title": "季度报告", "author": "张三", "cover": True,
+                                 "header": "内部资料", "toc": True})
+    assert data[:2] == b"PK", "docx 应为 zip 容器"
+    import docx
+    from docx.oxml.ns import qn
+
+    d = docx.Document(io.BytesIO(data))
+    assert d.tables and d.tables[0].rows[0].cells[0].text == "指标"
+    shd = d.tables[0].rows[0].cells[0]._tc.tcPr.find(qn("w:shd"))
+    assert shd is not None and shd.get(qn("w:fill")) == "1E3A8A", "表头应有底纹"
+    assert "PAGE" in d.sections[0].footer.paragraphs[0]._p.xml, "页脚应含 PAGE 域"
+    assert d.sections[0].header.paragraphs[0].text == "内部资料"
+    assert any("TOC" in p._p.xml for p in d.paragraphs), "应含目录域"
+    rfonts = d.styles["Normal"].element.get_or_add_rPr().find(qn("w:rFonts"))
+    assert rfonts is not None and rfonts.get(qn("w:eastAsia")), "应设置中文字体"
+
+    # xlsx：多工作表 + 数字格式 + 冻结 + 图表（显式 data）
+    sheets = [
+        {"name": "明细", "rows": [["区域", "金额"], ["华东", 101570.0], ["华南", 34314.0]],
+         "number_formats": {"B": "#,##0.00"},
+         "charts": [{"type": "bar", "title": "各区域金额", "anchor": "D2",
+                     "data": {"categories": ["华东", "华南"], "series": [{"name": "金额", "values": [101570, 34314]}]}}]},
+        {"name": "汇总", "rows": [["部门", "达成率"], ["销售", 0.92]], "number_formats": {"B": "0.0%"}},
+    ]
+    xdata = render_xlsx("", sheets=sheets)
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(xdata))
+    assert wb.sheetnames == ["明细", "汇总"], wb.sheetnames
+    ws = wb["明细"]
+    assert ws.freeze_panes == "A2", "应冻结首行"
+    assert ws["A1"].font.bold and ws["A1"].fill.fgColor.rgb.endswith("1E3A8A")
+    assert ws["B2"].number_format == "#,##0.00"
+    assert len(ws._charts) == 1, "应写入 1 个图表"
+    assert wb["汇总"]["B2"].number_format == "0.0%"
+
+    # xlsx：图表引用现有表格（不传 data）
+    xdata2 = render_xlsx("", rows=[["区域", "金额"], ["华东", 1], ["华南", 2]],
+                         charts=[{"type": "line", "title": "趋势", "anchor": "D2"}])
+    ws2 = openpyxl.load_workbook(io.BytesIO(xdata2)).active
+    assert len(ws2._charts) == 1, "引用现有表格也应生成图表"
+
+    # pdf：封面 + 页眉 + 页码
+    from app.agents.tools.office_render import render_pdf
+
+    pdata = render_pdf("# 报告\n\n| 列 | 值 |\n| --- | --- |\n| A | 1 |\n",
+                       meta={"title": "报告", "author": "李四", "cover": True, "header": "内部资料"})
+    assert pdata[:5] == b"%PDF-", "应为 PDF"
+    import pymupdf
+
+    pdf = pymupdf.open(stream=pdata, filetype="pdf")
+    assert pdf.page_count >= 2, "封面 + 正文应 ≥2 页"
+    text = "\n".join(p.get_text() for p in pdf)
+    assert "报告" in text and "第 2 页" in text, text[:200]
+
+
+def test_office_render():
+    asyncio.new_event_loop().run_until_complete(_run_office())
 
 
 def test_content_disposition_handles_non_ascii():

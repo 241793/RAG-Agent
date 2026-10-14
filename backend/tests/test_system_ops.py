@@ -160,3 +160,39 @@ def test_cleanup_protects_active_db():
             return await system_cleanup(CleanupIn(scope="all"), user=U(), db=db)
     _ev(_run())
     assert cur.exists(), "当前生效的数据库文件绝不能被清理删除"
+
+
+def test_gc_orphan_skill_packs():
+    """孤儿技能包 GC：删旧的孤儿目录、保留新的（可能在入库）、dry_run 不动文件。"""
+    import os
+    import time
+
+    from app.services.skill_pack_service import gc_orphan_packs
+
+    root = settings.skill_pack_path
+    root.mkdir(parents=True, exist_ok=True)
+    old = root / "1" / "orphan_old_zz"
+    old.mkdir(parents=True, exist_ok=True)
+    (old / "SKILL.md").write_text("x", encoding="utf-8")
+    os.utime(old, (time.time() - 7200, time.time() - 7200))  # 2 小时前
+    new = root / "1" / "orphan_new_zz"
+    new.mkdir(parents=True, exist_ok=True)
+    (new / "SKILL.md").write_text("y", encoding="utf-8")
+
+    async def _run():
+        from app.core.db import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            dry = await gc_orphan_packs(db, min_age_hours=1, dry_run=True)
+            assert dry["removed"] >= 1 and old.exists(), "dry_run 不得删文件"
+            done = await gc_orphan_packs(db, min_age_hours=1, dry_run=False)
+            return done
+
+    done = _ev(_run())
+    assert done["removed"] >= 1
+    assert not old.exists(), "旧孤儿包应被回收"
+    assert new.exists(), "新建的包（可能在入库）应保留"
+    import shutil
+
+    if new.exists():
+        shutil.rmtree(new, ignore_errors=True)

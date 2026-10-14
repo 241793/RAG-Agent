@@ -152,6 +152,12 @@ async def prepare(
     history/summary：多轮上下文（摘要在前，最近 N 条在后）。
     """
     hist = list(history or [])
+    # 「某界面怎么用/在哪/如何操作」类问法：属平台用法问题，直接按平台手册回答，
+    # 不走知识库检索（检索空结果会让模型困惑、绕去调工具）。
+    from app.agents.platform_guide import is_guide_query
+
+    if is_guide_query(query):
+        use_retrieval = False
     if not use_retrieval:
         cap_brief = await _capability_brief(db, ps, query=query, has_context=False)
         messages = [ChatMessage(role="system", content=PLAIN_SYSTEM_PROMPT)]
@@ -193,24 +199,34 @@ async def _capability_brief(db: AsyncSession, ps: PrincipalSet, *, query: str = 
 
     if not getattr(settings, "inject_capabilities_default", True):
         return ""
-    if has_context:
-        return ""
     try:
+        from app.agents.platform_guide import GUIDE_BRIEF, GUIDE_FULL, is_guide_query
+
+        # 本轮检索到知识库资料时，不注入任何平台身份/手册声明——避免抢答知识库内容
+        # （典型：「你是谁」若知识库有定义，应以知识库为准）。
+        if has_context:
+            return ""
+        # 用户在问"某界面怎么用/在哪/如何操作"→ 注入完整使用手册
+        if is_guide_query(query):
+            return GUIDE_FULL
+        # 命中"能力/权限"类问法 → 注入完整能力清单（权限视角）
         from app.agents.capabilities import (
             build_capability_banner, build_capability_brief, is_capability_query,
         )
 
         is_admin = bool(getattr(ps, "is_admin", False))
-        if not is_capability_query(query):
-            return build_capability_banner(is_admin)
-        from app.middleware.auth_dep import get_user_permission_codes
-        from app.models import User
+        if is_capability_query(query):
+            from app.middleware.auth_dep import get_user_permission_codes
+            from app.models import User
 
-        u = await db.get(User, ps.user_id) if ps.user_id else None
-        perms = await get_user_permission_codes(db, u) if u else set()
-        return await build_capability_brief(
-            db, perms=perms, is_admin=is_admin, tenant_id=ps.tenant_id
-        )
+            u = await db.get(User, ps.user_id) if ps.user_id else None
+            perms = await get_user_permission_codes(db, u) if u else set()
+            return await build_capability_brief(
+                db, perms=perms, is_admin=is_admin, tenant_id=ps.tenant_id
+            )
+        # 其余情况：注入「能力横幅 + 使用手册速览」，让 AI 默认就知道平台怎么用。
+        banner = build_capability_banner(is_admin)
+        return f"{banner}\n\n{GUIDE_BRIEF}"
     except Exception:  # noqa: BLE001
         return ""
 

@@ -29,6 +29,17 @@ logger = get_logger("skill_pack")
 MAX_TOTAL_BYTES = 50 * 1024 * 1024  # 解压后总量上限
 MAX_FILES = 500
 
+# 运行时/入口发现统一收敛到 skill_runtime（此处 re-export，保持历史 import 兼容）
+from app.services.skill_runtime import (  # noqa: E402
+    NODE_MANIFEST,  # noqa: F401
+    NODE_MODULES,  # noqa: F401
+    SCRIPT_DIRS,
+    SCRIPT_RUNTIMES,
+    has_node_deps,  # noqa: F401
+    load_manifest,
+    scan_entry_scripts,
+)
+
 
 @dataclass
 class ParsedPack:
@@ -213,11 +224,6 @@ def extract_zip(data: bytes, tenant_id: int, *, subpath: str | None = None) -> P
         low = rel.lower()
         if Path(rel).name.upper() == "SKILL.MD" or low.endswith("skill.md"):
             skill_md = content.decode("utf-8", errors="ignore")
-        # 收集脚本
-        if low.startswith("scripts/") and low.endswith(".py"):
-            pack.entry_scripts.append(
-                {"name": Path(rel).stem, "path": rel, "description": ""}
-            )
         # 脚本清单（可选）：scripts/manifest.json 或 manifest.json 的 scripts 字段
         if low.endswith("manifest.json"):
             try:
@@ -238,6 +244,9 @@ def extract_zip(data: bytes, tenant_id: int, *, subpath: str | None = None) -> P
         # SKILL.md frontmatter 里的 scripts 声明（优先）
         if isinstance(meta.get("scripts"), list):
             pack.script_meta["scripts"] = meta["scripts"]
+
+    # 入口脚本：优先读 skill.yaml 清单，否则扫描 scripts/ 与 tools/（多运行时：py/node/sh）
+    pack.entry_scripts = scan_entry_scripts(dest, manifest=load_manifest(dest))
 
     # 回填脚本描述：meta 里按 name 匹配
     decl: dict[str, str] = {}
@@ -330,16 +339,34 @@ def parse_collection(data: bytes, tenant_id: int) -> ParsedCollection:
         if not cname:
             m = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
             cname = (m.group(1).strip() if m else (subpath.rsplit("/", 1)[-1] or "skill")).strip()
-        # 该子技能目录下的脚本
-        entry_scripts = []
+        # 该子技能目录下的脚本（多运行时；子目录若有 skill.yaml 则以其为准）
         pre = (subpath + "/") if subpath else ""
-        for f in col.files:
-            fp = f["path"]
-            if not fp.startswith(pre):
-                continue
-            low = fp.lower()
-            if low.endswith(".py"):
-                entry_scripts.append({"name": Path(fp).stem, "path": fp, "description": ""})
+        sub_root = (dest / subpath) if subpath else dest
+        sub_manifest = load_manifest(sub_root) if sub_root.is_dir() else None
+        if sub_manifest and sub_manifest.entrypoints:
+            entry_scripts = scan_entry_scripts(sub_root, manifest=sub_manifest)
+            for e in entry_scripts:  # 补全为包内完整相对路径
+                e["path"] = f"{pre}{e['path']}"
+        else:
+            entry_scripts = []
+            seen_names: set[str] = set()
+            for f in col.files:
+                fp = f["path"]
+                if not fp.startswith(pre):
+                    continue
+                rel_sub = fp[len(pre):]
+                parts = rel_sub.split("/")
+                if len(parts) != 2 or parts[0] not in SCRIPT_DIRS:
+                    continue
+                rt = SCRIPT_RUNTIMES.get(Path(parts[1]).suffix.lower())
+                if not rt:
+                    continue
+                name = Path(parts[1]).stem
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+                entry_scripts.append({"name": name, "path": fp, "description": "",
+                                      "runtime": rt, "args": "stdin", "outputs": []})
         col.subs.append({
             "subpath": subpath, "name": cname,
             "description": str(meta.get("description") or ""),
@@ -391,7 +418,6 @@ def create_pack_from_markdown(
     dest.mkdir(parents=True, exist_ok=True)
 
     files: list[dict] = []
-    entry_scripts: list[dict] = []
 
     skill_md_bytes = text.encode("utf-8")
     (dest / "SKILL.md").write_bytes(skill_md_bytes)
@@ -405,11 +431,8 @@ def create_pack_from_markdown(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         files.append({"path": rel, "size": len(content.encode("utf-8"))})
-        low = rel.lower()
-        if low.startswith("scripts/") and low.endswith(".py"):
-            entry_scripts.append(
-                {"name": Path(rel).stem, "path": rel, "description": ""}
-            )
+    # 入口脚本：优先读 skill.yaml 清单，否则扫描 scripts/ 与 tools/（多运行时）
+    entry_scripts = scan_entry_scripts(dest, manifest=load_manifest(dest))
 
     pack = ParsedPack(
         name=name, description=description, body_md=body, version=version,
@@ -733,6 +756,60 @@ def remove_pack_dir(pack_dir: str | None) -> None:
         logger.warning("skill_pack_remove_refused", pack_dir=pack_dir)
         return
     shutil.rmtree(target, ignore_errors=True)
+
+
+async def gc_orphan_packs(db, *, min_age_hours: int = 1, dry_run: bool = False) -> dict:
+    """清理孤儿技能包目录：磁盘上存在、但 DB 无任何记录、且超过 min_age_hours。
+
+    用途：兜底回收异常中断/历史版本遗留的解压目录（如测试污染、导入中途失败）。
+    **保留**刚创建（可能正在入库）的目录，避免与并发的导入流程竞争。
+    返回 {removed, kept, freed_mb, errors, dry_run}。
+    """
+    import shutil
+    import time as _t
+
+    from sqlalchemy import select as _select
+
+    from app.models import SkillPackage
+
+    root = settings.skill_pack_path
+    if not root.is_dir():
+        return {"removed": 0, "kept": 0, "freed_mb": 0.0, "errors": 0}
+
+    rows = (await db.execute(_select(SkillPackage.pack_dir).where(SkillPackage.pack_dir.is_not(None)))).all()
+    known = {str(r[0]) for r in rows}
+    cutoff = _t.time() - min_age_hours * 3600
+
+    removed = kept = errors = 0
+    freed = 0
+    for tenant_dir in root.iterdir():
+        if not tenant_dir.is_dir():
+            continue
+        for pack in tenant_dir.iterdir():
+            if not pack.is_dir():
+                continue
+            key = f"{tenant_dir.name}/{pack.name}"
+            if key in known:
+                continue
+            try:
+                if pack.stat().st_mtime > cutoff:  # 太新：可能在入库中，保留
+                    kept += 1
+                    continue
+                size = sum(f.stat().st_size for f in pack.rglob("*") if f.is_file())
+                if not dry_run:
+                    shutil.rmtree(pack, ignore_errors=True)
+                removed += 1
+                freed += size
+            except OSError:
+                errors += 1
+        try:
+            if not dry_run and tenant_dir.is_dir() and not any(tenant_dir.iterdir()):
+                tenant_dir.rmdir()
+        except OSError:
+            pass
+    logger.info("skill_pack_gc", removed=removed, kept=kept, freed_mb=round(freed / 1024 / 1024, 2))
+    return {"removed": removed, "kept": kept, "freed_mb": round(freed / 1024 / 1024, 2),
+            "errors": errors, "dry_run": dry_run}
 
 
 def resolve_github_zip(url: str) -> str:
