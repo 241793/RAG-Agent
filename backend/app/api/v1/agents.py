@@ -635,13 +635,20 @@ async def confirm_tool_action(
                 a2.status = "failed"
                 a2.error = str(e)[:300]
             await sdb.commit()
+            from app.agents.tools.base import is_sensitive, tool_risk_level
+
             record_audit(
                 sdb, action="agent.tool_write", resource_type="tool", resource_id=tool2.name,
                 result="success" if result and not result.is_error else "failure",
                 error=(result.content[:200] if result and result.is_error else (a2.error if a2.status == "failed" else None)),
                 actor_id=user.id, tenant_id=user.tenant_id,
                 before={"arguments": args},
-                after={"result": (result.content[:500] if result else None)},
+                after={
+                    "result": (result.content[:500] if result else None),
+                    "sensitive": is_sensitive(tool2),
+                    "risk_level": tool_risk_level(tool2),
+                    "autonomy": "confirmed",  # 人工确认后执行
+                },
             )
             await sdb.commit()
 

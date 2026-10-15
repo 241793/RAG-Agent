@@ -42,23 +42,20 @@ class TemplateOut(BaseModel):
 
 class ExtractIn(BaseModel):
     template_id: int
-    text: str
+    text: str = ""            # 直接粘贴的文本
+    doc_id: int | None = None  # 或从知识库文档取文本（与 text 二选一）
     source_type: str = "text"  # text|document|channel
     source_ref: str | None = None
     save: bool = True  # 是否保存为记录
-
-
-class EntryOut(BaseModel):
-    id: int
-    template_id: int
-    data: dict | None = None
-    source_type: str
-    source_ref: str | None = None
-    status: str
-
-    model_config = {"from_attributes": True}
+    auto_confirm: bool = False  # 免确认模式：抽取直接落 confirmed（跳过人工核对）
 
 
 class EntryUpdate(BaseModel):
     data: dict
     status: str | None = None
+
+
+class EntryBatchIn(BaseModel):
+    """批量操作记录。action: delete=删除 / confirm=确认 / unconfirm=退回草稿。"""
+    action: str  # delete | confirm | unconfirm
+    ids: list[int] = []

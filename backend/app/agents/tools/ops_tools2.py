@@ -2173,7 +2173,8 @@ async def _load_user(ctx: ToolContext):
 class ExtractRecordsTool(WriteToolMixin):
     name = "extract_records"
     description = ("智能录单：按「录单模板」从一段文本（通话记录/聊天/邮件）中抽取结构化字段并保存。"
-                   "action=list_templates（列出模板，得到 template_id）、extract（从 text 抽取）。"
+                   "action=list_templates（列出模板，得到 template_id）、extract（从 text 抽取，"
+                   "或给 doc_id 从知识库文档取全文抽取）。"
                    "抽取结果会保存为记录，可在「智能录单」页看台账/导出。")
     required_permission = "record:manage"
     parameters = {
@@ -2182,6 +2183,7 @@ class ExtractRecordsTool(WriteToolMixin):
             "action": {"type": "string", "enum": ["list_templates", "extract"]},
             "template_id": {"type": "integer", "description": "extract：录单模板 id"},
             "text": {"type": "string", "description": "extract：要抽取的原始文本"},
+            "doc_id": {"type": "integer", "description": "extract：改为从该知识库文档取全文（与 text 二选一）"},
             "save": {"type": "boolean", "default": True, "description": "是否保存为记录"},
             "source_type": {"type": "string", "enum": ["text", "document", "channel"], "default": "text"},
         },
@@ -2193,6 +2195,15 @@ class ExtractRecordsTool(WriteToolMixin):
         if a == "list_templates":
             return "列出录单模板"
         return f"从文本智能录单（模板 #{args.get('template_id')}）"
+
+    def needs_confirm(self, args: dict) -> bool:
+        """按 action 判定：list_templates 是只读查询，免确认；extract（尤其 save）才需确认。"""
+        if str(args.get("action") or "") == "list_templates":
+            return False
+        # extract 且明确不保存 → 只是试抽，也免确认
+        if str(args.get("action") or "") == "extract" and args.get("save") is False:
+            return False
+        return True
 
     async def execute(self, args: dict, ctx: ToolContext) -> ToolResult:
         from app.models import RecordEntry, RecordTemplate
@@ -2213,8 +2224,28 @@ class ExtractRecordsTool(WriteToolMixin):
             if not t or t.tenant_id != ctx.tenant_id:
                 return ToolResult(content="模板不存在", is_error=True)
             text = str(args.get("text") or "").strip()
+            source_type = str(args.get("source_type") or "text")
+            source_ref = None
+            if not text and args.get("doc_id"):
+                # 从知识库文档取全文（与前端 /extract 的 doc_id 一致）
+                from app.models import Document
+
+                doc = await ctx.db.get(Document, int(args["doc_id"]))
+                if not doc or doc.tenant_id != ctx.tenant_id:
+                    return ToolResult(content="文档不存在", is_error=True)
+                text = (doc.content or "").strip()
+                if not text:
+                    from app.models import Chunk
+
+                    chs = (await ctx.db.execute(
+                        select(Chunk).where(Chunk.doc_id == doc.id).order_by(Chunk.id).limit(200)
+                    )).scalars().all()
+                    text = "\n".join(c.content for c in chs if c.content).strip()
+                if not text:
+                    return ToolResult(content="该文档没有可用的文本内容", is_error=True)
+                source_type, source_ref = "document", str(doc.id)
             if not text:
-                return ToolResult(content="请提供要抽取的文本", is_error=True)
+                return ToolResult(content="请提供要抽取的文本或 doc_id", is_error=True)
             from app.services.record_extract_service import extract_records
 
             try:
@@ -2222,20 +2253,25 @@ class ExtractRecordsTool(WriteToolMixin):
             except Exception as e:  # noqa: BLE001
                 return ToolResult(content=f"抽取失败：{str(e)[:200]}", is_error=True)
             save = args.get("save", True)
+            # 免确认/无人值守（auto_write）：AI 在无人核验下执行，抽取结果直接落 confirmed，
+            # 省去逐条手动确认；否则落 draft 待人工核对。
+            init_status = "confirmed" if getattr(ctx, "auto_write", False) else "draft"
             lines = []
             for row in rows:
                 if save:
                     e = RecordEntry(
                         tenant_id=ctx.tenant_id, template_id=t.id, data=row,
-                        source_type=str(args.get("source_type") or "text"),
-                        raw_text=text[:8000], created_by=ctx.user_id, status="draft",
+                        source_type=source_type, source_ref=source_ref,
+                        raw_text=text[:8000], created_by=ctx.user_id, status=init_status,
                     )
                     ctx.db.add(e)
                     await ctx.db.flush()
                 lines.append(", ".join(f"{k}={v}" for k, v in row.items()))
             return ToolResult(
-                content=f"已抽取 {len(rows)} 条记录（模板「{t.name}」）：\n" + "\n".join(lines),
-                data={"count": len(rows)},  # 供前端展示
+                content=f"已抽取 {len(rows)} 条记录（模板「{t.name}」"
+                        + ("，已自动确认" if (save and init_status == "confirmed") else "") + "）：\n"
+                        + "\n".join(lines),
+                data={"count": len(rows), "status": init_status},  # 供前端展示
             )
 
         return ToolResult(content=f"未知 action：{action}", is_error=True)
@@ -2259,5 +2295,5 @@ OPS_TOOLS2 = [
     QueryKbStatsTool(),
     RunWorkflowTool(), ApproveWorkflowRunTool(), ManageEmailSourceTool(),
     ExportConversationTool(), MergeExportDocumentsTool(), ManageSystemSettingsTool(),
-    ManageServiceTicketTool(), ExtractRecordsTool(),
+    ManageServiceTicketTool(),
 ]

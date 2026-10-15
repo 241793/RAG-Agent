@@ -243,9 +243,11 @@ def test_capability_brief_banner_vs_full():
             brief = await _capability_brief(db, ps, query="帮我查油价")
             full = await _capability_brief(db, ps, query="你能做什么")
             guide = await _capability_brief(db, ps, query="知识库怎么用")
-            # 默认注入含平台身份 + 使用手册速览（让 AI 默认知道平台怎么用）
+            # 默认注入含平台身份 + 工具能力提示 + 使用手册速览（让 AI 默认知道平台怎么用/能调什么）
             assert brief, "普通问题也应注入平台身份与手册速览"
-            assert len(full) > len(brief), "能力问题的完整摘要应长于速览"
+            assert "工具能力" in brief, "普通问题应含工具能力提示（让 AI 知道有哪些工具）"
+            # 能力问题给完整能力清单（逐项列权限 ✓/✗），与速览是不同形态
+            assert "平台能力" in full and "✓" in full, "能力问题应给完整能力清单"
             assert "使用手册" in guide, "用法类问题应注入完整使用手册"
     asyncio.new_event_loop().run_until_complete(_run())
 

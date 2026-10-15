@@ -1371,11 +1371,16 @@ export const recordApi = {
   createTemplate: (data: Record<string, any>) => http.post<RecordTemplateItem>('/record-templates', data).then((r) => r.data),
   updateTemplate: (id: number, data: Record<string, any>) => http.patch<RecordTemplateItem>(`/record-templates/${id}`, data).then((r) => r.data),
   removeTemplate: (id: number) => http.delete(`/record-templates/${id}`).then((r) => r.data),
-  extract: (data: { template_id: number; text: string; save?: boolean; source_type?: string }) => http.post<{ count: number; entries: any[] }>('/record-templates/extract', data).then((r) => r.data),
-  entries: (templateId: number) => http.get<{ id: number; data: Record<string, any>; source_type: string; status: string }[]>(`/record-templates/${templateId}/entries`).then((r) => r.data),
+  extract: (data: { template_id: number; text?: string; doc_id?: number; save?: boolean; source_type?: string; auto_confirm?: boolean }) => http.post<{ count: number; entries: any[]; source_type?: string; status?: string }>('/record-templates/extract', data).then((r) => r.data),
+  searchDocs: (keyword?: string) => http.get<{ id: number; title: string; kb_id: number; chars: number }[]>('/record-templates/docs/search', { params: { keyword } }).then((r) => r.data),
+  entries: (templateId: number, params?: { keyword?: string; status?: string }) =>
+    http.get<{ id: number; data: Record<string, any>; source_type: string; source_ref?: string; raw_text?: string; created_by?: number; created_at?: number; status: string }[]>(`/record-templates/${templateId}/entries`, { params }).then((r) => r.data),
   updateEntry: (entryId: number, data: Record<string, any>, status?: string) => http.patch(`/record-templates/entries/${entryId}`, { data, status }).then((r) => r.data),
   removeEntry: (entryId: number) => http.delete(`/record-templates/entries/${entryId}`).then((r) => r.data),
-  exportUrl: (templateId: number, fmt: 'xlsx' | 'csv' | 'md' = 'xlsx') => `${API_BASE}/record-templates/${templateId}/export?fmt=${fmt}`,
+  batchEntries: (action: 'delete' | 'confirm' | 'unconfirm', ids: number[]) =>
+    http.post<{ ok: boolean; affected: number; message: string }>('/record-templates/entries/batch', { action, ids }).then((r) => r.data),
+  exportUrl: (templateId: number, fmt: 'xlsx' | 'csv' | 'md' = 'xlsx', status?: string) =>
+    `${API_BASE}/record-templates/${templateId}/export?fmt=${fmt}${status ? `&status=${status}` : ''}`,
 }
 
 // ---------------- 问答评测 ----------------

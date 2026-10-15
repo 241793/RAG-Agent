@@ -38,36 +38,117 @@
       <div class="panel-head">
         <span class="section-title">录入：{{ cur.name }}</span>
         <div>
-          <el-button :icon="Document" @click="exportLedger('xlsx')">导出 Excel</el-button>
-          <el-button @click="exportLedger('csv')">CSV</el-button>
-          <el-button @click="exportLedger('md')">Markdown</el-button>
+          <el-dropdown style="margin-right: 8px" @command="(f: any) => exportLedger(f.fmt, f.status)">
+            <el-button :icon="Document">导出<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item :command="{ fmt: 'xlsx' }">Excel（全部）</el-dropdown-item>
+                <el-dropdown-item :command="{ fmt: 'csv' }">CSV（全部）</el-dropdown-item>
+                <el-dropdown-item :command="{ fmt: 'md' }">Markdown（全部）</el-dropdown-item>
+                <el-dropdown-item divided :command="{ fmt: 'xlsx', status: 'confirmed' }">Excel（仅已确认）</el-dropdown-item>
+                <el-dropdown-item :command="{ fmt: 'csv', status: 'confirmed' }">CSV（仅已确认）</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-button text :icon="Close" @click="cur = null" />
         </div>
       </div>
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px"
-        message="把原始文本粘进来（可含多条），AI 会按模板字段抽取并存为台账记录。" />
-      <el-input v-model="text" type="textarea" :rows="5"
-        placeholder="例：&#10;客户张三，电话138xxxx0001，下单 A123，金额199，2026-01-05&#10;客户李四，电话138xxxx0002，下单 A124，金额88" />
+        message="粘贴文本，或从知识库文档取全文，AI 会按模板字段抽取并存为台账记录。" />
+      <el-radio-group v-model="srcMode" size="small" style="margin-bottom: 8px">
+        <el-radio-button label="text">粘贴文本</el-radio-button>
+        <el-radio-button label="doc">知识库文档</el-radio-button>
+      </el-radio-group>
+      <template v-if="srcMode === 'text'">
+        <el-input v-model="text" type="textarea" :rows="5"
+          placeholder="例：&#10;客户张三，电话138xxxx0001，下单 A123，金额199，2026-01-05&#10;客户李四，电话138xxxx0002，下单 A124，金额88" />
+      </template>
+      <template v-else>
+        <el-select v-model="docId" filterable remote :remote-method="searchDocs"
+          :loading="docLoading" placeholder="搜索并选择知识库文档（按标题）" style="width: 100%" clearable>
+          <el-option v-for="d in docOptions" :key="d.id" :label="`${d.title}（${d.chars} 字）`" :value="d.id" />
+        </el-select>
+        <div class="doc-hint muted" v-if="!docOptions.length">输入关键词搜索已解析完成的知识库文档</div>
+      </template>
       <el-button type="primary" :icon="Lightning" :loading="extracting" style="margin-top: 12px" @click="doExtract">抽取并保存</el-button>
+      <el-checkbox v-model="autoConfirm" style="margin-left: 12px">抽取后自动确认（免核对）</el-checkbox>
 
-      <el-table :data="entries" style="margin-top: 16px" size="small">
+      <!-- 记录工具条：搜索 + 状态筛选 + 批量操作 -->
+      <div class="rec-toolbar">
+        <el-input v-model="kw" placeholder="搜索记录（跨字段）" clearable :prefix-icon="Search"
+          style="width: 240px" @input="onSearch" />
+        <el-select v-model="statusFilter" style="width: 130px" @change="onSearch">
+          <el-option label="全部状态" value="" />
+          <el-option label="草稿" value="draft" />
+          <el-option label="已确认" value="confirmed" />
+        </el-select>
+        <span class="rec-count">共 {{ entries.length }} 条</span>
+        <div class="rec-bulk" v-if="canManage">
+          <span v-if="selected.length" class="sel-tip">已选 {{ selected.length }} 条</span>
+          <el-button size="small" :disabled="!selected.length" :icon="Select" @click="batch('confirm')">批量确认</el-button>
+          <el-button size="small" :disabled="!selected.length" @click="batch('unconfirm')">取消确认</el-button>
+          <el-popconfirm :title="`删除选中的 ${selected.length} 条记录？`" :disabled="!selected.length" @confirm="batch('delete')">
+            <template #reference>
+              <el-button size="small" type="danger" plain :disabled="!selected.length" :icon="Delete">批量删除</el-button>
+            </template>
+          </el-popconfirm>
+        </div>
+      </div>
+
+      <el-table ref="recTableRef" :data="entries" style="margin-top: 12px" size="small"
+        row-key="id" @selection-change="onSelChange" v-loading="loadingEntries">
+        <el-table-column v-if="canManage" type="selection" width="42" reserve-selection />
         <el-table-column v-for="f in (cur.fields || [])" :key="f.name" :label="f.label || f.name" show-overflow-tooltip>
           <template #default="{ row }">{{ fmtCell(row.data?.[f.name]) }}</template>
+        </el-table-column>
+        <el-table-column label="来源" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="srcTag(row.source_type)" effect="plain">{{ srcLabel(row.source_type) }}</el-tag>
+            <el-button v-if="row.raw_text" size="small" link type="primary" style="margin-left: 2px" @click="openRaw(row)">原文</el-button>
+          </template>
         </el-table-column>
         <el-table-column label="状态" width="90">
           <template #default="{ row }"><el-tag size="small" :type="row.status === 'confirmed' ? 'success' : 'info'">{{ row.status === 'confirmed' ? '已确认' : '草稿' }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="操作" width="140">
+        <el-table-column label="操作" width="180">
           <template #default="{ row }">
             <template v-if="canManage">
-              <el-button size="small" link type="primary" @click="confirmEntry(row)">确认</el-button>
-              <el-button size="small" link type="danger" @click="removeEntry(row)">删除</el-button>
+              <el-button size="small" link type="primary" @click="openEntry(row)">编辑</el-button>
+              <el-button size="small" link :type="row.status === 'confirmed' ? 'info' : 'success'" @click="toggleConfirm(row)">
+                {{ row.status === 'confirmed' ? '取消确认' : '确认' }}
+              </el-button>
+              <el-popconfirm title="删除这条记录？" @confirm="removeEntry(row)">
+                <template #reference><el-button size="small" link type="danger">删除</el-button></template>
+              </el-popconfirm>
             </template>
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!entries.length" description="暂无记录" :image-size="60" />
+      <el-empty v-if="!loadingEntries && !entries.length" :description="kw || statusFilter ? '无匹配记录' : '暂无记录'" :image-size="60" />
     </div>
+
+    <!-- 记录编辑（修正 AI 抽取偏差） -->
+    <el-dialog v-model="eOpen" title="编辑记录" width="520px">
+      <el-form v-if="eRow" label-position="top">
+        <el-form-item v-for="f in (cur?.fields || [])" :key="f.name" :label="f.label || f.name">
+          <el-input v-if="f.type === 'enum' && (f.options || []).length" v-model="eForm[f.name]" />
+          <el-input v-else v-model="eForm[f.name]" :placeholder="f.type === 'date' ? 'YYYY-MM-DD' : ''" />
+        </el-form-item>
+        <el-empty v-if="!(cur?.fields || []).length" description="该模板无字段" :image-size="50" />
+      </el-form>
+      <template #footer>
+        <el-button @click="eOpen = false">取消</el-button>
+        <el-button type="primary" @click="saveEntry">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 查看原始文本（追溯来源） -->
+    <el-dialog v-model="rawOpen" title="原始文本" width="640px">
+      <el-descriptions :column="1" border size="small" style="margin-bottom: 12px">
+        <el-descriptions-item label="来源">{{ srcLabel(rawRow?.source_type) }}<template v-if="rawRow?.source_ref">（#{rawRow.source_ref}）</template></el-descriptions-item>
+      </el-descriptions>
+      <pre class="raw-text">{{ rawRow?.raw_text || '（无原始文本）' }}</pre>
+    </el-dialog>
 
     <!-- 模板编辑 -->
     <el-dialog v-model="tOpen" :title="edit ? '编辑模板' : '新建录单模板'" width="720px">
@@ -99,7 +180,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Edit, Delete, Document, Close, Lightning } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Document, Close, Lightning, Search, Select, ArrowDown } from '@element-plus/icons-vue'
 import PageContainer from '@/components/PageContainer.vue'
 import { recordApi, type RecordTemplateItem } from '@/api'
 import { errMsg } from '@/api/http'
@@ -123,6 +204,67 @@ const cur = ref<RecordTemplateItem | null>(null)
 const text = ref('')
 const extracting = ref(false)
 const entries = ref<any[]>([])
+
+// 录入来源：文本 / 知识库文档
+const srcMode = ref<'text' | 'doc'>('text')
+const docId = ref<number | null>(null)
+const docOptions = ref<{ id: number; title: string; kb_id: number; chars: number }[]>([])
+const docLoading = ref(false)
+// 抽取后是否自动确认（免核对）；默认沿用聊天页"免确认"偏好
+const autoConfirm = ref(localStorage.getItem('chat_auto_write') === '1')
+// 原始文本查看
+const rawOpen = ref(false)
+const rawRow = ref<any>(null)
+
+function srcLabel(t?: string) {
+  return ({ text: '粘贴', document: '文档', channel: '渠道' } as Record<string, string>)[t || 'text'] || t || '—'
+}
+function srcTag(t?: string) {
+  return ({ text: 'info', document: 'warning', channel: 'success' } as Record<string, string>)[t || 'text'] || 'info'
+}
+function openRaw(row: any) { rawRow.value = row; rawOpen.value = true }
+async function searchDocs(kw: string) {
+  docLoading.value = true
+  try { docOptions.value = await recordApi.searchDocs(kw || undefined) }
+  catch { docOptions.value = [] } finally { docLoading.value = false }
+}
+const loadingEntries = ref(false)
+const kw = ref('')
+const statusFilter = ref('')
+const selected = ref<any[]>([])
+const recTableRef = ref<any>(null)
+let searchTimer: any = null
+
+function onSelChange(rows: any[]) { selected.value = rows }
+// 搜索防抖（避免每敲一个字都请求）
+function onSearch() {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => loadEntries(), 250)
+}
+
+async function loadEntries() {
+  if (!cur.value) return
+  loadingEntries.value = true
+  try {
+    entries.value = await recordApi.entries(cur.value.id, {
+      keyword: kw.value.trim() || undefined,
+      status: statusFilter.value || undefined,
+    })
+    // 服务端过滤后清空选择，避免选中看不见的行
+    selected.value = []
+    recTableRef.value?.clearSelection?.()
+  } catch (e) { ElMessage.error(errMsg(e)) } finally { loadingEntries.value = false }
+}
+
+async function batch(action: 'delete' | 'confirm' | 'unconfirm') {
+  if (!selected.value.length) return
+  const ids = selected.value.map((r) => r.id)
+  try {
+    const r = await recordApi.batchEntries(action, ids)
+    ElMessage.success(r.message || '操作完成')
+    await loadEntries()
+  } catch (e) { ElMessage.error(errMsg(e)) }
+}
 
 function fmtCell(v: any) {
   return v === null || v === undefined || v === '' ? '-' : String(v)
@@ -165,37 +307,78 @@ async function openPanel(t: RecordTemplateItem) {
   cur.value = t
   text.value = ''
   entries.value = []
-  try { entries.value = await recordApi.entries(t.id) } catch { /* ignore */ }
+  kw.value = ''
+  statusFilter.value = ''
+  selected.value = []
+  srcMode.value = 'text'
+  docId.value = null
+  docOptions.value = []
+  await loadEntries()
 }
 async function doExtract() {
-  if (!cur.value || !text.value.trim()) { ElMessage.info('请输入要抽取的文本'); return }
+  if (!cur.value) return
+  const payload: any = { template_id: cur.value.id, save: true, auto_confirm: autoConfirm.value }
+  if (srcMode.value === 'doc') {
+    if (!docId.value) { ElMessage.info('请选择知识库文档'); return }
+    payload.doc_id = docId.value
+  } else {
+    if (!text.value.trim()) { ElMessage.info('请输入要抽取的文本'); return }
+    payload.text = text.value.trim()
+  }
   extracting.value = true
   try {
-    const r = await recordApi.extract({ template_id: cur.value.id, text: text.value.trim(), save: true })
-    ElMessage.success(`已抽取 ${r.count} 条记录`)
+    const r = await recordApi.extract(payload)
+    ElMessage.success(`已抽取 ${r.count} 条记录` + (r.status === 'confirmed' ? '（已自动确认）' : ''))
     text.value = ''
-    entries.value = await recordApi.entries(cur.value.id)
+    await loadEntries()
   } catch (e) { ElMessage.error(errMsg(e)) } finally { extracting.value = false }
 }
-async function confirmEntry(row: any) {
-  try { await recordApi.updateEntry(row.id, row.data, 'confirmed'); if (cur.value) entries.value = await recordApi.entries(cur.value.id) }
-  catch (e) { ElMessage.error(errMsg(e)) }
+const eOpen = ref(false)
+const eRow = ref<any>(null)
+const eForm = reactive<Record<string, any>>({})
+
+function openEntry(row: any) {
+  eRow.value = row
+  Object.keys(eForm).forEach((k) => delete eForm[k])
+  for (const f of cur.value?.fields || []) eForm[f.name] = row.data?.[f.name] ?? ''
+  eOpen.value = true
+}
+async function saveEntry() {
+  if (!eRow.value) return
+  const data: Record<string, any> = {}
+  for (const f of cur.value?.fields || []) {
+    const v = eForm[f.name]
+    data[f.name] = v === '' ? null : v
+  }
+  try {
+    await recordApi.updateEntry(eRow.value.id, data, eRow.value.status)
+    ElMessage.success('已保存')
+    eOpen.value = false
+    await loadEntries()
+  } catch (e) { ElMessage.error(errMsg(e)) }
+}
+async function toggleConfirm(row: any) {
+  const next = row.status === 'confirmed' ? 'draft' : 'confirmed'
+  try {
+    await recordApi.updateEntry(row.id, row.data, next)
+    await loadEntries()
+  } catch (e) { ElMessage.error(errMsg(e)) }
 }
 async function removeEntry(row: any) {
-  try { await recordApi.removeEntry(row.id); if (cur.value) entries.value = await recordApi.entries(cur.value.id) }
+  try { await recordApi.removeEntry(row.id); await loadEntries() }
   catch (e) { ElMessage.error(errMsg(e)) }
 }
-async function exportLedger(fmt: 'xlsx' | 'csv' | 'md') {
+async function exportLedger(fmt: 'xlsx' | 'csv' | 'md', status?: string) {
   if (!cur.value) return
   try {
     const token = localStorage.getItem('access_token') || ''
-    const r = await fetch(recordApi.exportUrl(cur.value.id, fmt), { headers: { Authorization: `Bearer ${token}` } })
+    const r = await fetch(recordApi.exportUrl(cur.value.id, fmt, status), { headers: { Authorization: `Bearer ${token}` } })
     if (!r.ok) throw new Error('导出失败')
     const blob = await r.blob()
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${cur.value.name}-台账.${fmt}`
+    a.download = `${cur.value.name}-台账${status === 'confirmed' ? '-已确认' : ''}.${fmt}`
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) { ElMessage.error(errMsg(e)) }
@@ -209,4 +392,14 @@ onMounted(load)
 .tm-name { display: inline-flex; align-items: center; gap: 8px; }
 .fields-title { font-size: 14px; font-weight: 600; color: var(--text-title); margin: 8px 0 10px; }
 .field-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.rec-toolbar { display: flex; align-items: center; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.rec-count { font-size: 13px; color: var(--text-muted); }
+.rec-bulk { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.sel-tip { font-size: 13px; color: var(--brand-700); font-weight: 600; }
+.doc-hint { font-size: 12px; margin-top: 6px; }
+.raw-text {
+  background: var(--bg-muted); border: 1px solid var(--border-subtle); border-radius: 8px;
+  padding: 12px; font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-all;
+  max-height: 420px; overflow: auto; margin: 0;
+}
 </style>

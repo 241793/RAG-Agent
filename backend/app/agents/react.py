@@ -58,7 +58,7 @@ async def run_react_loop(
     temperature: float = 0.3,
     max_turns: int = 6,
     allow_auto_write: bool = False,
-    on_audit: Callable[[ToolCall, ToolResult, bool], Awaitable[None]] | None = None,
+    on_audit: Callable[..., Awaitable[None]] | None = None,
     on_pending_action: Callable[[object, ToolCall, dict], Awaitable[object]] | None = None,
 ) -> AsyncIterator[dict]:
     """多轮工具循环。write 工具：有 on_pending_action 则挂起（HITL），否则 allow_auto_write 时直执行。
@@ -115,20 +115,31 @@ async def run_react_loop(
             yield {"type": "tool_call", "id": tc.id, "name": tc.name,
                    "arguments": tc.arguments, "turn": turn + 1}
             tool = tool_by_name.get(tc.name)
+            # 解析参数（HITL 判定与执行都要用）
+            try:
+                call_args = json.loads(tc.arguments or "{}")
+            except json.JSONDecodeError:
+                call_args = {}
+            # 是否需确认：工具若实现 needs_confirm(args) 则以其为准（action 混合型工具可按参数判定），
+            # 否则回退到工具级 auto_approve（True=免确认）。
+            if tool and hasattr(tool, "needs_confirm"):
+                try:
+                    _need_confirm = bool(tool.needs_confirm(call_args))
+                except Exception:  # noqa: BLE001
+                    _need_confirm = not getattr(tool, "auto_approve", False)
+            else:
+                _need_confirm = not getattr(tool, "auto_approve", False) if tool else False
             if not tool:
                 result = ToolResult(content=f"未知工具: {tc.name}", is_error=True)
             elif not tool_allowed(tool, perms):
                 result = ToolResult(content=f"无权限调用工具: {tc.name}", is_error=True)
                 if on_audit:
-                    await on_audit(tc, result, True)
+                    await on_audit(tc, result, True, autonomy="denied")
             elif (getattr(tool, "kind", "read") == "write"
                   and on_pending_action
-                  and not getattr(tool, "auto_approve", False)):
-                # 写操作 → HITL 挂起（auto_approve=True 的高频工具免确认，直接执行）
-                try:
-                    args = json.loads(tc.arguments or "{}")
-                except json.JSONDecodeError:
-                    args = {}
+                  and _need_confirm):
+                # 写操作 → HITL 挂起（auto_approve / needs_confirm=False 的免确认，直接执行）
+                args = call_args
                 action = await on_pending_action(tool, tc, args)
                 yield {
                     "type": "pending_action", "action_id": action.id, "tool_name": tool.name,
@@ -139,14 +150,15 @@ async def run_react_loop(
                 yield {"type": "_suspended", "action_id": action.id}
                 return
             else:
-                try:
-                    args = json.loads(tc.arguments or "{}")
-                except json.JSONDecodeError:
-                    args = {}
+                args = call_args
+                # auto_write：本次是「写工具且未经 HITL 确认直接执行」（如用户开免确认 / auto_approve）。
+                # 工具据此调整产出（如录单在无人核验时直接落 confirmed）。
+                _auto_write = getattr(tool, "kind", "read") == "write"
                 ctx = ToolContext(
                     db=db, ps=ps, tenant_id=ps.tenant_id, user_id=ps.user_id,
                     conversation_id=conversation_id, agent_id=agent_id, room_id=room_id,
                     config=((tool_config or {}).get("builtin", {}).get(tc.name) or {}),
+                    auto_write=_auto_write,
                 )
                 _t0 = time.time()
                 try:
@@ -157,7 +169,10 @@ async def run_react_loop(
                     result = ToolResult(content=f"工具执行错误: {str(e)[:150]}", is_error=True)
                 result.latency_ms = int((time.time() - _t0) * 1000)
                 if on_audit:
-                    await on_audit(tc, result, False)
+                    # autonomy：写工具走到这里 = 未经 HITL 直接执行（"自动"）；
+                    # 只读工具无副作用，标 "read"。
+                    _autonomy = "auto" if getattr(tool, "kind", "read") == "write" else "read"
+                    await on_audit(tc, result, False, autonomy=_autonomy)
 
             yield {
                 "type": "tool_result", "id": tc.id, "name": tc.name,

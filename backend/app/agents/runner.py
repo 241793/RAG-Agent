@@ -494,11 +494,22 @@ class AgentRunner:
         except Exception:  # noqa: BLE001
             logger.exception("schedule_compress_failed")
 
-    def _audit_tool(self, tc: ToolCall, result: ToolResult, denied: bool = False) -> None:
-        """记录 AI 工具调用审计（进审计表，随业务 session 提交）。"""
+    def _audit_tool(self, tc: ToolCall, result: ToolResult, denied: bool = False,
+                    autonomy: str = "read") -> None:
+        """记录 AI 工具调用审计（进审计表，随业务 session 提交）。
+
+        - autonomy：read=只读 / auto=写操作**自动执行**（未经人工确认）/ confirmed=人工确认后执行 / denied=无权限。
+        - sensitive：敏感操作（改数据/对外/高危）→ 审计显著标记，便于在日志页过滤查看。
+        """
         from app.middleware.request_id import actor_type_ctx
 
         try:
+            from app.agents.tools.base import is_sensitive, tool_risk_level
+            from app.agents.tools.registry import registry
+
+            tool = registry.get_admin(tc.name) or registry.get_builtin(tc.name)
+            sensitive = bool(tool and is_sensitive(tool))
+            risk = tool_risk_level(tool) if tool else 0
             record_audit(
                 self.db,
                 action="agent.tool_call",
@@ -509,6 +520,9 @@ class AgentRunner:
                     "is_error": result.is_error,
                     "latency_ms": result.latency_ms,
                     "conversation_id": self.conversation.id if self.conversation else None,
+                    "sensitive": sensitive,
+                    "risk_level": risk,
+                    "autonomy": autonomy,
                 },
                 result="failure" if (denied or result.is_error) else "success",
                 error="permission_denied" if denied else None,
@@ -672,8 +686,8 @@ class AgentRunner:
         """委托给共享的 react.run_react_loop（HITL/审计通过回调接入）。"""
         from app.agents.react import run_react_loop
 
-        async def _audit(tc, result, denied: bool):
-            self._audit_tool(tc, result, denied=denied)
+        async def _audit(tc, result, denied: bool, autonomy: str = "read"):
+            self._audit_tool(tc, result, denied=denied, autonomy=autonomy)
 
         async def _pending(tool, tc, args):
             tool_records.append({

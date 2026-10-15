@@ -73,6 +73,12 @@ from app.agents.tools.complement_tools import PERSONAL_TOOLS  # noqa: E402
 for _pt in PERSONAL_TOOLS:
     registry.register(_pt)
 
+# 产出型工具：把「用户提供的数据」转成结果（如文本→结构化台账）。与 analyze_table 同类，
+# 必须常驻——否则模型看不到工具，只能手工排版+反问（实测踩过的坑）。
+from app.agents.tools.ops_tools2 import ExtractRecordsTool  # noqa: E402
+
+registry.register(ExtractRecordsTool())
+
 # 管理类工具（read/write；需 agent.tool_config.admin.enabled 显式启用）
 from app.agents.tools.admin_tools import ADMIN_TOOLS  # noqa: E402
 

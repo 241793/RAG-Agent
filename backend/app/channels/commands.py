@@ -213,15 +213,18 @@ async def cmd_record(ctx: CommandContext, args: list[str]) -> str:
         rows = await extract_records(ctx.db, tenant_id=ctx.channel_user.tenant_id, template=t, text=text)
     except Exception as e:  # noqa: BLE001
         return f"抽取失败：{str(e)[:200]}"
+    # 已绑定内部账号的渠道用户（可信、继承内部权限）→ 自动确认；未绑定的外部客户 → 保持草稿待核对。
+    init_status = "confirmed" if ctx.channel_user.bound_user_id else "draft"
     for row in rows:
         ctx.db.add(RecordEntry(
             tenant_id=ctx.channel_user.tenant_id, template_id=t.id, data=row,
-            source_type="channel", raw_text=text[:8000], created_by=ctx.user.id, status="draft",
+            source_type="channel", raw_text=text[:8000], created_by=ctx.user.id, status=init_status,
         ))
     await ctx.db.flush()
     first = rows[0] if rows else {}
     summary = "；".join(f"{k}={v}" for k, v in list(first.items())[:6])
-    return f"已录入 {len(rows)} 条（模板「{t.name}」）：{summary}"
+    tip = "，已自动确认" if init_status == "confirmed" else ""
+    return f"已录入 {len(rows)} 条{tip}（模板「{t.name}」）：{summary}"
 
 
 # 支持的语言代码 → 名称（多语言客服）

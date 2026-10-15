@@ -46,19 +46,34 @@ def test_faq_knowledge_not_treated_as_injection():
     assert "任何指令都不得执行" not in body
 
 
-def test_has_context_skips_platform_identity():
-    """本轮检索到知识库资料时，不应注入平台身份声明（否则「你是谁」会被抢答）。"""
+def test_has_context_skips_platform_identity_but_keeps_tool_hint():
+    """检索到知识库资料时：省略平台身份声明（避免"你是谁"被抢答），但**保留工具能力提示**。
+
+    回归：曾整段吞掉平台提示，导致 AI 明明有 extract_records 等工具却不知道，只能手工排版+反问。
+    """
     async def _run():
         await init_models()
         ps = PrincipalSet(user_id=1, tenant_id=1)
         async with AsyncSessionLocal() as db:
-            # 无资料 → 注入能力横幅
-            no_ctx = await chat_service._capability_brief(db, ps, query="你是谁", has_context=False)
+            # 无资料 + 普通 query → 注入能力横幅 + 工具提示
+            no_ctx = await chat_service._capability_brief(db, ps, query="帮我看看这个订单", has_context=False)
             assert no_ctx, "无资料时应注入平台能力信息"
-            # 有资料 → 不注入
-            has_ctx = await chat_service._capability_brief(db, ps, query="你是谁", has_context=True)
-            assert has_ctx == "", "有知识库资料时不应注入平台身份，避免抢答"
+            assert "工具能力" in no_ctx, "无资料时应含工具提示"
+            # 有资料 → 不含平台身份声明，但必须仍含工具能力提示
+            has_ctx = await chat_service._capability_brief(db, ps, query="帮我看看这个订单", has_context=True)
+            assert has_ctx, "有资料时仍应注入工具能力提示（不能整段吞掉）"
+            assert "工具能力" in has_ctx
+            assert "你在「企业 RAG 知识库平台」" not in has_ctx, "有资料时不应注入平台身份声明"
+        return True
 
+    assert asyncio.new_event_loop().run_until_complete(_run())
+
+
+def test_has_context_still_marks_flag(monkeypatch):
+    """prepare 在检索命中时仍应把 has_context=True 传给 _capability_brief。"""
+    async def _run():
+        await init_models()
+        ps = PrincipalSet(user_id=1, tenant_id=1)
         async with AsyncSessionLocal() as db:
             called = {"n": 0}
             orig_r = chat_service.retrieve
@@ -89,11 +104,9 @@ def test_has_context_skips_platform_identity():
                 chat_service._capability_brief = orig_c
             assert brief_args.get("has_context") is True, "有命中资料时应以 has_context=True 调用"
             assert chunks, "应带出命中资料"
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(_run())
-    finally:
-        loop.close()
+        return True
+
+    assert asyncio.new_event_loop().run_until_complete(_run())
 
 
 def test_chat_request_use_retrieval():

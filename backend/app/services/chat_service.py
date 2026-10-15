@@ -200,12 +200,15 @@ async def _capability_brief(db: AsyncSession, ps: PrincipalSet, *, query: str = 
     if not getattr(settings, "inject_capabilities_default", True):
         return ""
     try:
+        from app.agents.capabilities import build_tool_hint
         from app.agents.platform_guide import GUIDE_BRIEF, GUIDE_FULL, is_guide_query
 
-        # 本轮检索到知识库资料时，不注入任何平台身份/手册声明——避免抢答知识库内容
-        # （典型：「你是谁」若知识库有定义，应以知识库为准）。
+        is_admin = bool(getattr(ps, "is_admin", False))
+        # 本轮检索到知识库资料时：省略「平台身份/界面手册」（避免与知识库内容抢答），
+        # **但仍注入工具能力提示**——工具清单与知识内容无关，砍掉会导致 AI 明明有
+        # extract_records 等工具却不知道，只能手工排版+反问（实测踩过的坑）。
         if has_context:
-            return ""
+            return build_tool_hint(is_admin)
         # 用户在问"某界面怎么用/在哪/如何操作"→ 注入完整使用手册
         if is_guide_query(query):
             return GUIDE_FULL
@@ -214,7 +217,6 @@ async def _capability_brief(db: AsyncSession, ps: PrincipalSet, *, query: str = 
             build_capability_banner, build_capability_brief, is_capability_query,
         )
 
-        is_admin = bool(getattr(ps, "is_admin", False))
         if is_capability_query(query):
             from app.middleware.auth_dep import get_user_permission_codes
             from app.models import User
@@ -224,9 +226,9 @@ async def _capability_brief(db: AsyncSession, ps: PrincipalSet, *, query: str = 
             return await build_capability_brief(
                 db, perms=perms, is_admin=is_admin, tenant_id=ps.tenant_id
             )
-        # 其余情况：注入「能力横幅 + 使用手册速览」，让 AI 默认就知道平台怎么用。
+        # 其余情况：注入「能力横幅 + 工具提示 + 使用手册速览」，让 AI 默认就知道平台怎么用。
         banner = build_capability_banner(is_admin)
-        return f"{banner}\n\n{GUIDE_BRIEF}"
+        return f"{banner}\n\n{build_tool_hint(is_admin)}\n\n{GUIDE_BRIEF}"
     except Exception:  # noqa: BLE001
         return ""
 
@@ -381,14 +383,20 @@ async def stream_answer(
                 await db.commit()
                 return action
 
-            async def _audit(tc, result, denied):
+            async def _audit(tc, result, denied, autonomy="read"):
                 try:
+                    from app.agents.tools.base import is_sensitive, tool_risk_level
+                    from app.agents.tools.registry import registry as _reg
                     from app.services.audit_service import record_audit
 
+                    _t = _reg.get_builtin(tc.name) or _reg.get_admin(tc.name)
                     record_audit(
                         db, action="chat.tool_call", resource_type="tool", resource_id=tc.name,
                         after={"arguments": tc.arguments[:1000], "is_error": result.is_error,
-                               "latency_ms": result.latency_ms, "conversation_id": conversation.id},
+                               "latency_ms": result.latency_ms, "conversation_id": conversation.id,
+                               "sensitive": bool(_t and is_sensitive(_t)),
+                               "risk_level": tool_risk_level(_t) if _t else 0,
+                               "autonomy": autonomy},
                         result="failure" if (denied or result.is_error) else "success",
                         error="permission_denied" if denied else None,
                         tenant_id=ps.tenant_id, actor_id=ps.user_id, actor_type="user",
@@ -643,14 +651,20 @@ async def resume_answer(
         await db.commit()
         return a
 
-    async def _audit(tc, result, denied):
+    async def _audit(tc, result, denied, autonomy="read"):
         try:
+            from app.agents.tools.base import is_sensitive, tool_risk_level
+            from app.agents.tools.registry import registry as _reg
             from app.services.audit_service import record_audit
 
+            _t = _reg.get_builtin(tc.name) or _reg.get_admin(tc.name)
             record_audit(
                 db, action="chat.tool_call", resource_type="tool", resource_id=tc.name,
                 after={"arguments": tc.arguments[:1000], "is_error": result.is_error,
-                       "latency_ms": result.latency_ms, "conversation_id": conv.id},
+                       "latency_ms": result.latency_ms, "conversation_id": conv.id,
+                       "sensitive": bool(_t and is_sensitive(_t)),
+                       "risk_level": tool_risk_level(_t) if _t else 0,
+                       "autonomy": autonomy},
                 result="failure" if (denied or result.is_error) else "success",
                 error="permission_denied" if denied else None,
                 tenant_id=ps.tenant_id, actor_id=ps.user_id, actor_type="user",

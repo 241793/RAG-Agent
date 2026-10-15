@@ -59,6 +59,33 @@ def is_capability_query(query: str) -> bool:
     return any(k in q for k in _CAP_KEYWORDS)
 
 
+def build_tool_hint(is_admin: bool = False) -> str:
+    """工具能力提示（**与知识库内容无关**，检索命中时也应注入）。
+
+    与 build_capability_banner 的区别：横幅含"你在哪个平台"这类身份声明，检索命中知识库时
+    可能与之抢答；而本提示只讲"你有哪些工具、什么场景调什么"，不涉及身份，安全常驻。
+    """
+    base = (
+        "[工具能力] 你可调用平台工具完成实际动作（不是只做文字回复）。"
+        "常见：知识库检索 knowledge_retrieval；读写/生成文件 generate_file/read_file；"
+        "表格统计 analyze_table；生成正式文档 generate_office_doc；个人待办 manage_reminder；"
+        "管理自己的会话 manage_conversation。"
+    )
+    if is_admin:
+        base += (
+            "管理能力（需权限，写操作会先弹确认）：建/改知识库、文档、智能体、技能、定时任务、"
+            "渠道、用户/角色/部门、模型配置等；"
+            "**把聊天/通话/邮件等文本抽成结构化台账用 extract_records**（先 list_templates 拿模板 id）；"
+            "录单模板用 manage_record_template；待办/会话见上。"
+            "不确认某项平台操作能否做时，用 check_my_capabilities 查权限。"
+        )
+    base += (
+        " 原则：用户给了可执行的数据/诉求时，**优先调用相应工具直接完成**，"
+        "而不是把内容整理成表格再反问——除非确实缺关键信息。"
+    )
+    return base
+
+
 def build_capability_banner(is_admin: bool = False) -> str:
     """常驻极短横幅（替代完整能力摘要，省 token）。"""
     role = "管理员" if is_admin else "用户"
