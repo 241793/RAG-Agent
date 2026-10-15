@@ -7,6 +7,7 @@ from app.api.v1 import (
     audit,
     auth,
     channels,
+    changelog,
     chat,
     chat_room,
     document,
@@ -77,3 +78,4 @@ api_router.include_router(channels.router)
 api_router.include_router(system.router)
 api_router.include_router(system_ops.router)
 api_router.include_router(update.router)
+api_router.include_router(changelog.router)

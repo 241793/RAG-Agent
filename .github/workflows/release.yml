@@ -47,6 +47,19 @@ jobs:
           fi
           echo "version=$CODE_VER" >> "$GITHUB_OUTPUT"
 
+      - name: 校验 CHANGELOG.md 含当前版本段落
+        # 应用内「更新日志」优先读 CHANGELOG.md；缺少版本段落会导致发版后滚动条空白
+        run: |
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.version }}"
+          if ! grep -qE "^##\s+\[?v?${VER}\]?(\s|$)" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md 缺少 $VER 的段落，请先在文件顶部补充该版本条目"
+            echo "--- 现有版本段落 ---"
+            grep -E "^##\s+\[?" CHANGELOG.md || true
+            exit 1
+          fi
+          echo "CHANGELOG.md 已包含 $VER ✓"
+
   # ---------- 产物 1：Docker 镜像 → GHCR ----------
   docker:
     name: 构建并推送 Docker 镜像
@@ -190,22 +203,58 @@ jobs:
       - name: 列出待发布文件
         run: ls -lh dist
 
+      - name: 从 CHANGELOG.md 提取本版本段落作为 Release 正文
+        # 正文 = 纯更新内容：应用内「更新日志」在拿不到本地文件时会回退读取它，
+        # 所以这里不能混入 docker 安装命令之类的模板文字。
+        # 安装说明放 job summary 与 README，不污染更新内容。
+        env:
+          VER: ${{ needs.version-check.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 用 index() 做纯字符串匹配，避开 awk 正则里 [] 的转义坑
+          # （实测 `\[` 在 awk 中会被当成普通 [，导致匹配不到任何内容）
+          awk -v ver="$VER" '
+            /^## / {
+              if (started) exit
+              if (index($0, "[" ver "]") > 0 || index($0, "## " ver) == 1) { started = 1 }
+            }
+            started { print }
+          ' CHANGELOG.md > release_body.md
+          if [ ! -s release_body.md ]; then
+            echo "::error::未能从 CHANGELOG.md 提取 $VER 段落"
+            exit 1
+          fi
+          echo "--- Release 正文 ---"
+          cat release_body.md
+
+      - name: 安装说明写入 job summary
+        env:
+          VER: ${{ needs.version-check.outputs.version }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## 交付物（v$VER）
+
+          - **Docker 镜像**（GHCR 要求全小写镜像名）：
+            \`\`\`bash
+            docker pull ghcr.io/241793/rag-agent:$VER
+            docker run -d -p 6677:6677 -v "\$PWD/data:/app/backend/data" \\
+              ghcr.io/241793/rag-agent:$VER
+            \`\`\`
+            首次登录 \`admin / admin123\`，访问 http://127.0.0.1:6677
+          - **桌面版**：解压 \`*-win-x64.zip\`，运行 \`RAG知识库.exe\`
+          - **源码包**：\`*-src.zip\`
+
+          升级：桌面版可在应用内「关于/检查更新」一键更新；Docker 在宿主机执行
+          \`docker compose pull && docker compose up -d\`。
+          EOF
+
       - name: 创建 Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.version-check.outputs.version }}
           name: v${{ needs.version-check.outputs.version }}
-          generate_release_notes: true
+          # 用 CHANGELOG 提取的正文；不再由 GitHub 自动生成（会混入 commit 列表，
+          # 污染应用内更新日志的兜底内容）
+          generate_release_notes: false
+          body_path: release_body.md
           files: dist/*.zip
-          body: |
-            ## 交付物
-
-            - **Docker 镜像**（GHCR 要求全小写镜像名）：
-              ```bash
-              docker pull ghcr.io/241793/rag-agent:${{ needs.version-check.outputs.version }}
-              docker run -d -p 6677:6677 -v "$PWD/data:/app/backend/data" \
-                ghcr.io/241793/rag-agent:${{ needs.version-check.outputs.version }}
-              ```
-              首次登录 `admin / admin123`，访问 http://127.0.0.1:6677
-            - **桌面版**：解压 `*-win-x64.zip`，运行 `RAG知识库.exe`
-            - **源码包**：`*-src.zip`

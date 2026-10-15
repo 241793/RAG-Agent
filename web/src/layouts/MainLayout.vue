@@ -105,6 +105,9 @@
         </div>
       </header>
 
+      <!-- 更新日志滚动条：所有已登录用户可见（独立于下方管理员专属的版本检查） -->
+      <ChangelogTicker />
+
       <main class="content">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
@@ -138,6 +141,7 @@ import NotificationBell from '@/components/NotificationBell.vue'
 import ChatDock from '@/components/ChatDock.vue'
 import ErrorBoundary from '@/components/ErrorBoundary.vue'
 import AboutUpdateDialog from '@/components/AboutUpdateDialog.vue'
+import ChangelogTicker from '@/components/ChangelogTicker.vue'
 
 const router = useRouter()
 const route = useRoute()

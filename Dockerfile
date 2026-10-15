@@ -36,6 +36,8 @@ RUN apt-get update \
 
 COPY backend/ ./backend/
 COPY --from=web /src/web/dist ./web/dist
+# 更新日志：容器内也能读到，无需访问 GitHub（changelog_service 读 RESOURCE_DIR=/app）
+COPY CHANGELOG.md ./CHANGELOG.md
 
 # SQLite 库 + 上传文件 + 技能包 + 日志统一落在 /app/backend/data 下
 VOLUME ["/app/backend/data"]

@@ -185,8 +185,7 @@ cd ../desktop && npm install && npm run dist
 
 侧边栏底部显示当前版本，点击打开「关于 / 检查更新」：
 
-- **检查**：查询 GitHub Release 与当前版本比较（15 分钟缓存；离线/限流时只提示、不报错）
-- **桌面版**：可一键下载 → 校验 sha256 → 解压 → **重启并应用**。更新包完整性用 Release 资源自带的
+- **检查**：查询 GitHub Release 与当前版本比较（15 分钟缓存；离线/限流时只提示、不报错）- **桌面版**：可一键下载 → 校验 sha256 → 解压 → **重启并应用**。更新包完整性用 Release 资源自带的
   `sha256` 摘要校验，校验失败即丢弃，不会安装被篡改的包
 - **Docker / 源码**：**只提示新版本与对应命令，不做自更新**
 
@@ -226,6 +225,22 @@ docker run -d -p 6677:6677 -v "$PWD/data:/app/backend/data" ghcr.io/241793/rag-a
 > **注意**：v1.0.0 是引入本功能前的版本，从 v1.0.0 升级到 v1.0.1 仍需手动替换；
 > **自 v1.0.1 起**应用内更新才生效。
 > 无代码签名证书时，新版 exe 首次启动会有 SmartScreen「未知发布者」提示，属预期。
+
+### 更新日志（滚动条）
+
+顶部 header 下方有一条**横向滚动**的更新日志，**所有已登录用户**可见（点击展开多版本历史）。
+
+内容来源（本地优先，GitHub 兜底）：
+
+| 顺序 | 来源 | 说明 |
+|---|---|---|
+| 1 | `CHANGELOG.md`（仓库根） | 打进桌面版包内、COPY 进 Docker 镜像 → **内网/离线也能显示** |
+| 2 | GitHub Release 正文 | 本地读不到时回退（正文由 CI 从 `CHANGELOG.md` 同名段落提取，不含安装命令） |
+
+**发版时你要做的**：在 `CHANGELOG.md` 顶部按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)
+格式加一段。CI 会校验 tag 与 `app_version` 一致**且** `CHANGELOG.md` 含该版本段落，缺失则发版失败。
+
+滚动条按版本记忆关闭状态（`localStorage: changelog_dismissed_<版本>`），下个版本自动重新出现。
 
 ---
 

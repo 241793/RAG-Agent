@@ -15,12 +15,19 @@ PROJECT_ROOT = Path(SPECPATH).parent          # backend/ 的上级 = 项目根
 WEB_DIST = PROJECT_ROOT / "web" / "dist"
 BACKEND_DIR = Path(SPECPATH)                   # backend/
 
-# 数据文件：前端 dist 打进包内（冻结时经 sys._MEIPASS 访问）
+# 数据文件：前端 dist + 更新日志，打进包内（冻结时经 sys._MEIPASS 访问）
 datas = []
 if WEB_DIST.exists():
     datas.append((str(WEB_DIST), "web/dist"))
 else:
     print(f"[WARN] 前端未构建，跳过：{WEB_DIST}  （先 cd web && npm run build）")
+
+# CHANGELOG.md：桌面版离线时更新日志也要能显示（changelog_service 读 RESOURCE_DIR）
+CHANGELOG = PROJECT_ROOT / "CHANGELOG.md"
+if CHANGELOG.exists():
+    datas.append((str(CHANGELOG), "."))
+else:
+    print(f"[WARN] 更新日志缺失，桌面版将回退到 GitHub Release：{CHANGELOG}")
 
 # 需要显式声明的隐藏导入（动态 import / C 扩展，PyInstaller 静态分析易漏）
 hiddenimports = [

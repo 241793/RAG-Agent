@@ -1246,6 +1246,27 @@ export const updateApi = {
   apply: () => http.post<{ ok: boolean; message?: string; error?: string }>('/system/update/apply', {}).then((r) => r.data),
 }
 
+// ---------------- 更新日志（所有已登录用户可见） ----------------
+
+export interface ChangelogSection { title: string; items: string[] }
+export interface ChangelogVersion {
+  version: string
+  date?: string | null
+  url?: string | null
+  sections: ChangelogSection[]
+}
+export interface ChangelogResult {
+  ok: boolean
+  source: 'local' | 'release' | 'none'
+  current: string
+  latest: ChangelogVersion | null
+  history: ChangelogVersion[]
+  cached?: boolean
+}
+export const changelogApi = {
+  get: (force = false) => http.get<ChangelogResult>('/changelog', { params: { force } }).then((r) => r.data),
+}
+
 export interface SystemInfo {
   db_kind: string
   version: string
