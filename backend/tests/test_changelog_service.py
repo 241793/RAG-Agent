@@ -51,11 +51,34 @@ def test_parse_ignores_preamble_and_h1():
 
 
 def test_parse_unreleased_and_no_date():
+    """`[Unreleased]` 默认被过滤（内含开发待办，不该展示给终端用户）。"""
     text = "## [Unreleased]\n### 新增\n- 进行中\n"
-    vs = C.parse_changelog(text)
+    assert C.parse_changelog(text) == []
+    # 显式要求保留时才解析
+    vs = C.parse_changelog(text, keep_unreleased=True)
     assert vs[0]["version"] == "Unreleased"
     assert vs[0]["date"] is None
     assert vs[0]["sections"][0]["items"] == ["进行中"]
+
+
+def test_parse_no_date_version_still_parsed():
+    """无日期的正式版本号仍要解析。"""
+    vs = C.parse_changelog("## [1.0.2]\n### 修复\n- 修一处\n")
+    assert vs[0]["version"] == "1.0.2"
+    assert vs[0]["date"] is None
+
+
+def test_parse_skips_unreleased_between_versions():
+    """Unreleased 夹在中间时不得干扰其它版本块的解析。"""
+    text = (
+        "## [Unreleased]\n- 待办\n\n"
+        "## [1.0.2] - 2026-05-05\n### 修复\n- 修复项\n\n"
+        "## [1.0.1] - 2026-04-04\n### 新增\n- 新增项\n"
+    )
+    vs = C.parse_changelog(text)
+    assert [v["version"] for v in vs] == ["1.0.2", "1.0.1"]
+    assert vs[0]["sections"][0]["items"] == ["修复项"]
+    assert vs[1]["sections"][0]["items"] == ["新增项"]
 
 
 def test_parse_items_before_any_section():

@@ -31,7 +31,12 @@ _CACHE_TTL = 300  # 5 分钟：本地文件变动不频繁，也避免频繁读�
 _cache: dict[str, object] = {"ts": 0.0, "data": None}
 
 
-def parse_changelog(text: str) -> list[dict]:
+# 「未发布」段（Keep a Changelog 约定）不是给终端用户看的更新日志：
+# 它常含开发待办，展示到滚动条上会泄露内部信息。运行时一律过滤掉。
+_SKIP_VERSIONS = {"unreleased", "未发布"}
+
+
+def parse_changelog(text: str, *, keep_unreleased: bool = False) -> list[dict]:
     """把 Keep-a-Changelog 文本解析为版本块列表（新→旧）。
 
     返回 `[{version, date, sections:[{title, items:[...]}]}, ...]`
@@ -52,6 +57,10 @@ def parse_changelog(text: str) -> list[dict]:
         m2 = _H2_RE.match(line)
         if m2:
             name, date = m2.group(1).strip(), (m2.group(2) or "").strip()
+            # 跳过「未发布」段（内含开发待办，不应展示给终端用户）
+            if not keep_unreleased and name.lower() in _SKIP_VERSIONS:
+                cur, cur_sec = None, None
+                continue
             # 跳过「更新日志」这类文档大标题之外的一级标题干扰
             cur = {"version": name, "date": date or None, "sections": []}
             versions.append(cur)
