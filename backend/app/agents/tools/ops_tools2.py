@@ -1828,6 +1828,7 @@ class ManageEmailSourceTool(WriteToolMixin):
             "action": {"type": "string", "enum": ["list", "create", "update", "delete", "test", "sync"]},
             "source_id": {"type": "integer"},
             "name": {"type": "string"},
+            "source_account_id": {"type": "integer", "description": "可选：引用个人邮箱账号（复用其 IMAP 凭证，见 manage_mail.list_accounts）"},
             "imap_host": {"type": "string"},
             "imap_port": {"type": "integer"},
             "use_ssl": {"type": "boolean"},
@@ -1871,13 +1872,22 @@ class ManageEmailSourceTool(WriteToolMixin):
             kb = await ctx.db.get(KnowledgeBase, int(args.get("kb_id") or 0))
             if not kb or kb.tenant_id != ctx.tenant_id:
                 return ToolResult(content="目标知识库不存在", is_error=True)
-            if not args.get("imap_host") or not args.get("username"):
-                return ToolResult(content="create 需要 imap_host 与 username", is_error=True)
+            said = int(args.get("source_account_id") or 0)
+            # 引用个人邮箱账号时，IMAP 字段可省略（从账号取）；须校验归属
+            if said:
+                from app.models import MailAccount
+
+                acc = await ctx.db.get(MailAccount, said)
+                if not acc or acc.tenant_id != ctx.tenant_id or acc.user_id != ctx.user_id:
+                    return ToolResult(content="邮箱账号不存在或不属于你", is_error=True)
+            elif not args.get("imap_host") or not args.get("username"):
+                return ToolResult(content="create 需要 source_account_id（个人邮箱）或 imap_host+username", is_error=True)
             s = EmailSource(
                 tenant_id=ctx.tenant_id, name=str(args.get("name") or "邮件源"),
-                imap_host=args["imap_host"], imap_port=int(args.get("imap_port") or 993),
-                use_ssl=bool(args.get("use_ssl", True)), username=args["username"],
-                password=encrypt(args["password"]) if args.get("password") else None,
+                source_account_id=said or None,
+                imap_host=str(args.get("imap_host") or ""), imap_port=int(args.get("imap_port") or 993),
+                use_ssl=bool(args.get("use_ssl", True)), username=str(args.get("username") or ""),
+                password=(encrypt(args["password"]) if (args.get("password") and not said) else None),
                 folder=str(args.get("folder") or "INBOX"), kb_id=kb.id,
                 ingest_mode=str(args.get("ingest_mode") or "both"),
                 allow_from=args.get("allow_from"), subject_keywords=args.get("subject_keywords"),
@@ -1892,8 +1902,8 @@ class ManageEmailSourceTool(WriteToolMixin):
             return ToolResult(content="邮件源不存在", is_error=True)
 
         if action == "update":
-            for f in ("name", "imap_host", "imap_port", "use_ssl", "username", "folder",
-                      "kb_id", "ingest_mode", "allow_from", "subject_keywords", "enabled"):
+            for f in ("name", "source_account_id", "imap_host", "imap_port", "use_ssl", "username",
+                      "folder", "kb_id", "ingest_mode", "allow_from", "subject_keywords", "enabled"):
                 if args.get(f) is not None:
                     setattr(s, f, args[f])
             if args.get("password"):
@@ -1907,9 +1917,9 @@ class ManageEmailSourceTool(WriteToolMixin):
             return ToolResult(content=f"已删除邮件源 #{sid}")
 
         if action == "test":
-            from app.services.email_ingest_service import test_source
+            from app.services.email_ingest_service import _resolve_account, test_source
 
-            r = await test_source(s)
+            r = await test_source(s, account=await _resolve_account(ctx.db, s))
             return ToolResult(content=r.get("message", ""), is_error=not r.get("ok"))
 
         if action == "sync":

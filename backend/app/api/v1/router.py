@@ -15,6 +15,7 @@ from app.api.v1 import (
     event_subscriptions,
     files,
     kb,
+    mail,
     mcp,
     notifications,
     notify_channels,
@@ -43,6 +44,7 @@ api_router.include_router(auth.router)
 api_router.include_router(kb.router)
 api_router.include_router(document.router)
 api_router.include_router(email_sources.router)
+api_router.include_router(mail.router)
 api_router.include_router(eval_api.router)
 api_router.include_router(event_subscriptions.router)
 api_router.include_router(retrieval.router)

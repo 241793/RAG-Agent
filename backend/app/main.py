@@ -154,6 +154,13 @@ async def lifespan(app: FastAPI):
         periodic_email_poll(settings.email_poll_interval_seconds)
     )
 
+    # 个人邮箱账号轮询（收件箱）
+    from app.tasks.mail_tasks import periodic_mail_poll
+
+    mail_task = asyncio.create_task(
+        periodic_mail_poll(getattr(settings, "email_poll_interval_seconds", 300) or 300)
+    )
+
     # 客服工单 SLA 超时扫描
     from app.tasks.sla_tasks import periodic_sla_check
 
@@ -184,6 +191,7 @@ async def lifespan(app: FastAPI):
     health_task.cancel()
     log_task.cancel()
     email_task.cancel()
+    mail_task.cancel()
     sla_task.cancel()
     reminder_task.cancel()
     try:
@@ -211,7 +219,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.1.0",
+    version=settings.app_version,
     lifespan=lifespan,
     docs_url="/docs",
     openapi_url="/openapi.json",
@@ -269,6 +277,7 @@ async def health() -> dict:
 
     return {
         "status": overall,
+        "version": settings.app_version,
         "db_driver": settings.database_url.split("://")[0],
         "vector_backend": settings.resolved_vector_backend,
         "checks": checks,

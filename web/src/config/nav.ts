@@ -40,6 +40,7 @@ export const NAV: (NavItem | NavGroup)[] = [
     ],
   },
   { key: '/todo', icon: 'Calendar', label: '待办日程', tip: '待办事项与日程提醒' },
+  { key: '/mail', icon: 'Message', label: '邮件', tip: '个人邮箱收发，AI 可代管' },
   { key: '/approvals', icon: 'Stamp', label: '审批中心', perm: 'workflow:read', tip: 'AI 发起写操作时的待人工确认项' },
   {
     key: 'g-dev',

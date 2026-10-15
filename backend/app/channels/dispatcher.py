@@ -129,7 +129,7 @@ async def handle_inbound(
         await db.commit()
 
         # 处理入站媒体：下载 → 落盘 → 附件 + 图片（给视觉模型）
-        attachments, images = await _persist_attachments(db, ps, msg)
+        attachments, images = await _persist_attachments(db, ps, msg, channel=channel, cu=cu)
 
         # 客服：仅在「服务模式=support」时才处理转人工；qa 模式一律当普通问题
         support = (getattr(channel, "service_mode", "qa") or "qa") == "support"
@@ -207,8 +207,11 @@ async def handle_inbound(
                         extra_media=knowledge_media)
 
 
-async def _persist_attachments(db, ps, msg: InboundMessage) -> tuple[list[dict], list[dict]]:
-    """下载入站媒体 → 存 storage + Artifact → 返回 (附件dict列表, images列表)。"""
+async def _persist_attachments(db, ps, msg: InboundMessage, *, channel=None, cu=None) -> tuple[list[dict], list[dict]]:
+    """下载入站媒体 → 存 storage + Artifact → 返回 (附件dict列表, images列表)。
+
+    若渠道开启了「附件入库」(attach_ingest)，命中文档类型的附件会额外建 Document 并异步入库。
+    """
     from app.channels import media as medi
     from app.ingest.storage import get_storage
     from app.models import Artifact
@@ -244,6 +247,17 @@ async def _persist_attachments(db, ps, msg: InboundMessage) -> tuple[list[dict],
             "type": att.get("type") or "file", "file_key": file_key, "name": name,
             "mime": mime, "size": len(data), "url": f"/api/v1/chat/attachments/{file_key}",
         }
+        # 附件入库：命中渠道策略时把文档灌进知识库（失败不阻塞问答回复）
+        if channel is not None:
+            try:
+                doc_id = await _maybe_ingest_attachment(
+                    db, ps=ps, channel=channel, cu=cu, name=name, data=data,
+                    ext=ext, mime=mime, file_key=file_key,
+                )
+                if doc_id:
+                    att_rec["doc_id"] = doc_id
+            except Exception:  # noqa: BLE001
+                logger.exception("channel_attach_ingest_failed", name=name)
         out.append(att_rec)
         if (att.get("type") == "image"):
             import base64
@@ -253,6 +267,74 @@ async def _persist_attachments(db, ps, msg: InboundMessage) -> tuple[list[dict],
     if out:
         await db.commit()
     return out, images
+
+
+# 渠道附件入库默认允许的扩展名（可在渠道配置 attach_types 覆盖）
+_DEFAULT_ATTACH_TYPES = {"pdf", "docx", "xlsx", "pptx", "md", "txt", "csv", "html"}
+
+
+async def _maybe_ingest_attachment(db, *, ps, channel, cu, name, data, ext, mime, file_key) -> int | None:
+    """按渠道「附件入库」策略决定是否把该附件灌进知识库，返回新建 Document id 或 None。
+
+    三道闸：① 策略（off/bound/all）；② 资源（大小/类型白名单）；③ 幂等（content_hash 去重）。
+    """
+    from sqlalchemy import select
+
+    from app.models import Document
+    from app.tasks.ingest_tasks import enqueue_document
+
+    mode = getattr(channel, "attach_ingest", "off") or "off"
+    if mode == "off":
+        return None
+    # 闸①：用户维度——bound 仅放行已绑定内部账号的渠道用户
+    if mode == "bound" and not getattr(cu, "bound_user_id", None):
+        return None
+    # 闸②：资源维度——大小 + 类型白名单
+    max_mb = int(getattr(channel, "attach_max_mb", 20) or 20)
+    if len(data) > max_mb * 1024 * 1024:
+        logger.info("channel_attach_too_large", name=name, size=len(data), max_mb=max_mb)
+        return None
+    allowed = _DEFAULT_ATTACH_TYPES
+    raw_types = (getattr(channel, "attach_types", None) or "").strip()
+    if raw_types:
+        allowed = {t.strip().lower().lstrip(".") for t in raw_types.split(",") if t.strip()}
+    if (ext or "").lower().lstrip(".") not in allowed:
+        return None
+    # 目标知识库：attach_kb_ids 优先，回落 default_kb_ids
+    kb_ids = getattr(channel, "attach_kb_ids", None) or getattr(channel, "default_kb_ids", None) or []
+    if not kb_ids:
+        return None
+    kb_id = int(kb_ids[0])
+    # 校验该库属于本租户（防配置越权）
+    from app.models import KnowledgeBase
+
+    kb = await db.get(KnowledgeBase, kb_id)
+    if not kb or kb.tenant_id != ps.tenant_id:
+        return None
+    # 闸③：幂等——同库内同内容哈希去重
+    chash = _content_hash(data)
+    dup = (await db.execute(
+        select(Document).where(Document.kb_id == kb_id, Document.content_hash == chash)
+    )).scalar_one_or_none()
+    if dup:
+        return None
+    doc = Document(
+        tenant_id=ps.tenant_id, kb_id=kb_id, title=name[:200],
+        source_type="channel", file_key=file_key, file_name=name, file_ext=(ext or "").lower(),
+        file_size=len(data), content_hash=chash, status="pending", uploaded_by=ps.user_id,
+    )
+    db.add(doc)
+    await db.flush()
+    await db.commit()
+    await enqueue_document(doc.id)
+    logger.info("channel_attach_ingested", doc_id=doc.id, name=name, kb_id=kb_id)
+    return doc.id
+
+
+def _content_hash(data: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
 
 
 async def _run_rag(ps, conversation_id: int, query: str, use_retrieval: bool,

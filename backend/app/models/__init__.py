@@ -17,6 +17,8 @@ from app.models.artifact import Artifact
 from app.models.channel import Channel
 from app.models.channel_user import ChannelUser
 from app.models.email_source import EmailSource
+from app.models.mail_account import MailAccount
+from app.models.mail_message import MailMessage
 from app.models.eval import EvalDataset, EvalQuestion, EvalResult, EvalRun
 from app.models.event_subscription import EventSubscription
 from app.models.mcp import McpServer
@@ -123,6 +125,8 @@ __all__ = [
     "SsoConfig",
     "McpServer",
     "EmailSource",
+    "MailAccount",
+    "MailMessage",
     "SystemSetting",
     "IdMixin",
     "TimestampMixin",

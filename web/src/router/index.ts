@@ -30,6 +30,7 @@ const router = createRouter({
         { path: 'retrieval', name: 'retrieval', component: () => import('@/pages/kb/RetrievalDebugPage.vue') },
         { path: 'eval', name: 'eval', component: () => import('@/pages/kb/EvalPage.vue') },
         { path: 'todo', name: 'todo', component: () => import('@/pages/todo/TodoPage.vue') },
+        { path: 'mail', name: 'mail', component: () => import('@/pages/mail/MailPage.vue') },
         { path: 'approvals', name: 'approvals', component: () => import('@/pages/approvals/ApprovalPage.vue') },
         { path: 'account', name: 'account', component: () => import('@/pages/account/AccountPage.vue') },
         { path: 'admin/users', name: 'admin-users', component: () => import('@/pages/admin/UserPage.vue') },

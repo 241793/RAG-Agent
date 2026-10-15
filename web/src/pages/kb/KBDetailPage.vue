@@ -177,10 +177,21 @@
 
             <div v-if="canWrite" class="toolbar">
               <el-button v-if="isEntry" type="primary" :icon="Plus" @click="openEntry()">添加图文条目</el-button>
-              <el-upload v-else :before-upload="beforeUpload" :show-file-list="false" multiple>
-                <el-button type="primary" :icon="Upload">上传文档</el-button>
-              </el-upload>
+              <template v-else>
+                <el-upload :before-upload="beforeUpload" :show-file-list="false" multiple>
+                  <el-button type="primary" :icon="Upload">上传文档</el-button>
+                </el-upload>
+                <el-upload :before-upload="beforeUpload" :show-file-list="false" multiple :directory="true" :accept="''">
+                  <el-button :icon="FolderOpened">上传文件夹</el-button>
+                </el-upload>
+              </template>
             </div>
+          </div>
+
+          <!-- 拖拽上传区 -->
+          <div v-if="canWrite && !isEntry" class="drop-zone" @dragover.prevent @drop.prevent="onDrop">
+            <el-icon class="dz-ico"><UploadFilled /></el-icon>
+            <div class="dz-text">拖拽文件到这里上传，或点上方「上传文档 / 上传文件夹」</div>
           </div>
 
           <el-alert
@@ -768,7 +779,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowDown, ArrowLeft, ArrowUp, Clock, Delete, Download, Edit, Files,
-  FolderAdd, Lock, MoreFilled, Plus, PriceTag, Refresh, Scissor, Search, Setting, Upload, View,
+  FolderAdd, FolderOpened, Lock, MoreFilled, Plus, PriceTag, Refresh, Scissor, Search, Setting, Upload, UploadFilled, View,
 } from '@element-plus/icons-vue'
 import PageContainer from '@/components/PageContainer.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -1133,6 +1144,16 @@ async function beforeUpload(file: any) {
   }
   return false
 }
+
+/** 拖拽上传：把落下的文件逐个走 beforeUpload（与点选上传同一路径）。 */
+async function onDrop(e: DragEvent) {
+  const files = Array.from(e.dataTransfer?.files || [])
+  if (!files.length) return
+  for (const f of files) {
+    if ((f as any).type === '' && (f as any).size === 0) continue // 目录占位，跳过
+    await beforeUpload(f)
+  }
+}
 function onEntryFile(file: any) {
   entryFiles.value.push(file as File)
   return false
@@ -1494,6 +1515,14 @@ onBeforeUnmount(() => { if (pollTimer) { clearInterval(pollTimer); pollTimer = n
 .panel-title { font-size: 15px; font-weight: 600; color: var(--text-title); }
 .toolbar { display: flex; align-items: center; gap: 8px; }
 .toolbar.wrap { flex-wrap: wrap; }
+.drop-zone {
+  margin: 10px 0 14px; padding: 22px; border: 1.5px dashed var(--border-strong, #cbd5e1);
+  border-radius: 10px; text-align: center; color: var(--text-muted);
+  background: var(--bg-subtle, #f8fafc); transition: border-color .15s, background .15s;
+}
+.drop-zone:hover { border-color: var(--color-primary, #2563eb); background: var(--color-primary-subtle, #eff6ff); }
+.dz-ico { font-size: 28px; color: var(--color-primary, #2563eb); margin-bottom: 6px; }
+.dz-text { font-size: 13px; }
 .kv-row { display: flex; gap: 8px; margin-bottom: 12px; }
 .kb-tag {
   font-size: 12px; padding: 2px 8px; border-radius: 999px;

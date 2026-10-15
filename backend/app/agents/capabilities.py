@@ -69,7 +69,7 @@ def build_tool_hint(is_admin: bool = False) -> str:
         "[工具能力] 你可调用平台工具完成实际动作（不是只做文字回复）。"
         "常见：知识库检索 knowledge_retrieval；读写/生成文件 generate_file/read_file；"
         "表格统计 analyze_table；生成正式文档 generate_office_doc；个人待办 manage_reminder；"
-        "管理自己的会话 manage_conversation。"
+        "个人邮箱 manage_mail（收发自己的邮件）；管理自己的会话 manage_conversation。"
     )
     if is_admin:
         base += (
@@ -162,7 +162,8 @@ async def build_capability_brief(
                      "问答评测用 manage_eval（建数据集/加题/跑评测/看结果）。")
     else:
         lines.append("个人待办/日程用 manage_reminder（创建/列出/完成/删除，可设到期时间与重复）；"
-                     "管理自己的问答会话用 manage_conversation（列出/重命名/删除/导出）。")
+                     "管理自己的问答会话用 manage_conversation（列出/重命名/删除/导出）；"
+                     "个人邮箱收发用 manage_mail（列账号/看收件箱/读信/写信/回复/标记，只能操作自己的邮箱）。")
     return "\n".join(lines)
 
 

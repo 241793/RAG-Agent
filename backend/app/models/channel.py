@@ -1,7 +1,7 @@
 """外部 IM 渠道配置（QQ机器人/微信/企业微信/飞书）。密钥经 core.crypto 加密。"""
 from __future__ import annotations
 
-from sqlalchemy import JSON, BigInteger, Boolean, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -28,6 +28,12 @@ class Channel(Base, IdMixin, TimestampMixin, TenantMixin):
     reply_mode: Mapped[str] = mapped_column(String(16), default="rag")  # rag/agent
     command_prefix: Mapped[str] = mapped_column(String(8), default="/")
     greeting: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ---- 渠道附件入库（外部用户发来的文档进知识库）----
+    # off=不入库(默认,最安全) / bound=仅已绑定内部账号的渠道用户 / all=所有渠道用户(管理员显式开)
+    attach_ingest: Mapped[str] = mapped_column(String(8), default="off")
+    attach_kb_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)  # 空→回落 default_kb_ids
+    attach_max_mb: Mapped[int] = mapped_column(Integer, default=20)  # 单文件大小上限
+    attach_types: Mapped[str | None] = mapped_column(String(256), nullable=True)  # 逗号分隔扩展名白名单，空=默认集
     status: Mapped[str] = mapped_column(String(16), default="active")  # active/deleted
     # 运行时状态（UI 展示）
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

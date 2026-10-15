@@ -117,6 +117,27 @@
           <el-input v-model="form.command_prefix" placeholder="/" style="width: 120px" />
         </el-form-item>
         <el-form-item label="欢迎语（用户首次对话时发送）"><el-input v-model="form.greeting" type="textarea" :rows="2" /></el-form-item>
+        <el-divider content-position="left">附件入库</el-divider>
+        <el-form-item label="外部用户发的文档是否入库" extra="默认关闭。选「仅已绑定账号」=只有绑定了内部账号的渠道用户可入库；「所有渠道用户」请谨慎开启">
+          <el-select v-model="form.attach_ingest" clearable placeholder="不选 = 关闭（默认）" style="width: 100%">
+            <el-option value="off" label="关闭（不入库）" />
+            <el-option value="bound" label="仅已绑定内部账号的渠道用户" />
+            <el-option value="all" label="所有渠道用户（谨慎）" />
+          </el-select>
+        </el-form-item>
+        <template v-if="form.attach_ingest && form.attach_ingest !== 'off'">
+          <el-form-item label="入库到知识库" extra="留空则用上面的「指定知识库」；仅取第一个">
+            <el-select v-model="form.attach_kb_ids" multiple style="width: 100%">
+              <el-option v-for="k in kbs" :key="k.id" :value="k.id" :label="k.name" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="单文件大小上限(MB)">
+            <el-input-number v-model="form.attach_max_mb" :min="1" :max="200" />
+          </el-form-item>
+          <el-form-item label="允许的扩展名" extra="逗号分隔，留空=默认（pdf/docx/xlsx/pptx/md/txt/csv/html）">
+            <el-input v-model="form.attach_types" placeholder="pdf,docx,xlsx" />
+          </el-form-item>
+        </template>
         <el-form-item label="启用"><el-switch v-model="form.enabled" /></el-form-item>
       </el-form>
       <template #footer>
@@ -204,7 +225,7 @@ const edit = ref<ChannelItem | null>(null)
 const kind = ref('qqbot')
 const cfg = reactive<Record<string, any>>({})
 const wxToken = ref('')
-const form = reactive<any>({ name: '', enabled: true, reply_mode: 'rag', service_mode: 'qa', default_lang: null, kb_mode: 'auto', default_kb_ids: [], default_agent_id: null, command_prefix: '/', greeting: '' })
+const form = reactive<any>({ name: '', enabled: true, reply_mode: 'rag', service_mode: 'qa', default_lang: null, kb_mode: 'auto', default_kb_ids: [], default_agent_id: null, command_prefix: '/', greeting: '', attach_ingest: 'off', attach_kb_ids: [], attach_max_mb: 20, attach_types: '' })
 const scanChannel = ref<ChannelItem | null>(null)
 const formScan = ref(false)
 const usersOpen = ref(false)
@@ -241,7 +262,7 @@ async function load() {
 function openModal(c?: ChannelItem) {
   edit.value = c || null
   Object.keys(cfg).forEach((k) => delete cfg[k])
-  Object.assign(form, { name: '', enabled: true, reply_mode: 'rag', service_mode: 'qa', default_lang: null, kb_mode: 'auto', default_kb_ids: [], default_agent_id: null, command_prefix: '/', greeting: '' })
+  Object.assign(form, { name: '', enabled: true, reply_mode: 'rag', service_mode: 'qa', default_lang: null, kb_mode: 'auto', default_kb_ids: [], default_agent_id: null, command_prefix: '/', greeting: '', attach_ingest: 'off', attach_kb_ids: [], attach_max_mb: 20, attach_types: '' })
   wxToken.value = ''
   if (c) {
     kind.value = c.kind
@@ -249,6 +270,8 @@ function openModal(c?: ChannelItem) {
       name: c.name, enabled: c.enabled, reply_mode: c.reply_mode || 'rag', service_mode: c.service_mode || 'qa',
       default_lang: c.default_lang ?? null, kb_mode: c.kb_mode || 'auto', default_kb_ids: c.default_kb_ids || [],
       default_agent_id: c.default_agent_id ?? null, command_prefix: c.command_prefix || '/', greeting: c.greeting || '',
+      attach_ingest: c.attach_ingest || 'off', attach_kb_ids: c.attach_kb_ids || [],
+      attach_max_mb: c.attach_max_mb ?? 20, attach_types: c.attach_types || '',
     })
     for (const f of CONFIG_FIELDS[c.kind] || []) cfg[f.key] = (c.config || {})[f.key] ?? ''
     if (c.kind === 'wxclaw') wxToken.value = String((c.config || {}).token ?? '')

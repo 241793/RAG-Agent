@@ -79,6 +79,11 @@ from app.agents.tools.ops_tools2 import ExtractRecordsTool  # noqa: E402
 
 registry.register(ExtractRecordsTool())
 
+# 个人邮件管理（用户级：读写自己的邮箱）：常驻，AI 默认能收发邮件
+from app.agents.tools.mail_tools import ManageMailTool  # noqa: E402
+
+registry.register(ManageMailTool())
+
 # 管理类工具（read/write；需 agent.tool_config.admin.enabled 显式启用）
 from app.agents.tools.admin_tools import ADMIN_TOOLS  # noqa: E402
 

@@ -1,5 +1,7 @@
 # 企业级 RAG 知识库智能体平台(源码非正式版)
 
+**当前版本：v1.0.0**
+
 可对接企业内部系统、也供员工直接使用，具备多权限体系、智能体与自动化能力的企业级 RAG 平台。
 
 后端 FastAPI + SQLAlchemy 2.0 async，前端 Vue 3 + TypeScript + Vite + Element Plus，**默认 SQLite 零依赖起步**，可平滑切换 PostgreSQL(+pgvector)/MySQL。
@@ -53,7 +55,8 @@
 - **待办日程**：待办/日程/提醒，支持到期推送、重复规则（cron）、提前提醒；AI 可直接代建/代查
 - **审批中心**：集中处理工作流中的人工审批节点，支持批准/拒绝并填写意见
 - **对话导出/分享**、文档批量合并导出
-- **邮件入库**：配置 IMAP，邮件正文与附件自动入库知识库
+- **邮件入库**：配置 IMAP，邮件正文与附件自动入库知识库（可直接选用个人邮箱，免重复配置）
+- **个人邮件**：用户级邮箱收发（IMAP 收 + SMTP 发），收件箱/已发送/已删除、可选自动入库；**AI 可代管**（读信/写信/回复，发信需确认）
 - **定时任务**：cron / 间隔 / 一次性 / **事件触发**；失败重试、任务级通知；支持**依赖链**（A 成功后自动触发 B）；**执行产物随通知附带**（如生成的报表作为邮件附件）
 - **事件订阅 Webhook**：外部系统订阅平台事件（工单/文档/工作流…），带 HMAC 签名回调
 - **通知渠道**：站内 / Webhook / 企业微信 / 钉钉 / 邮件 / 外部渠道（把已接入的 QQ/微信/企微/飞书兼作推送出口）
@@ -190,7 +193,7 @@ pip install asyncmy             # MySQL
 backend/
   app/
     core/          # 配置/数据库/安全/日志/错误
-    models/        # SQLAlchemy ORM（61 张表）
+    models/        # SQLAlchemy ORM（63 张表）
     schemas/       # Pydantic DTO
     api/v1/        # 36 个路由模块（kb/document/chat/agents/channels/service/…）
     services/      # permission(权限唯一入口)/retrieval/chat/eval/service_ticket/skill_runtime/…

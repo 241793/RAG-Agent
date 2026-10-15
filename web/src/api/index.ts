@@ -585,9 +585,13 @@ export interface ChannelItem {
   service_mode?: 'qa' | 'support'
   default_lang?: string | null
   default_agent_id?: number | null
-  reply_mode: 'rag' | 'agent'
+  reply_mode: 'rag' | 'smart' | 'agent'
   command_prefix: string
   greeting?: string | null
+  attach_ingest?: 'off' | 'bound' | 'all'
+  attach_kb_ids?: number[]
+  attach_max_mb?: number
+  attach_types?: string | null
   callback_url: string
 }
 
@@ -1282,6 +1286,7 @@ export const eventSubApi = {
 export interface EmailSourceItem {
   id: number
   name: string
+  source_account_id?: number | null
   imap_host: string
   imap_port: number
   use_ssl: boolean
@@ -1292,6 +1297,9 @@ export interface EmailSourceItem {
   ingest_mode: 'both' | 'attach' | 'body'
   allow_from?: string | null
   subject_keywords?: string | null
+  auto_tags?: string[] | null
+  tag_rules?: Record<string, string[]> | null
+  uid_cursor?: number
   enabled: boolean
   status: string
   last_error?: string | null
@@ -1300,11 +1308,78 @@ export interface EmailSourceItem {
 }
 export const emailSourceApi = {
   list: () => http.get<EmailSourceItem[]>('/email-sources').then((r) => r.data),
+  myAccounts: () => http.get<{ id: number; label: string; email_addr: string; folder: string }[]>('/email-sources/my-accounts').then((r) => r.data),
   create: (data: Record<string, any>) => http.post<EmailSourceItem>('/email-sources', data).then((r) => r.data),
   update: (id: number, data: Record<string, any>) => http.patch<EmailSourceItem>(`/email-sources/${id}`, data).then((r) => r.data),
   remove: (id: number) => http.delete(`/email-sources/${id}`).then((r) => r.data),
   test: (id: number) => http.post<{ ok: boolean; message: string }>(`/email-sources/${id}/test`).then((r) => r.data),
   sync: (id: number) => http.post<{ ok: boolean; message: string; ingested: number }>(`/email-sources/${id}/sync`).then((r) => r.data),
+}
+
+// ---------------- 个人邮件 ----------------
+export interface MailAccountItem {
+  id: number
+  label: string
+  email_addr: string
+  from_name?: string | null
+  imap_host: string
+  imap_port: number
+  imap_use_ssl: boolean
+  imap_username: string
+  imap_password_set: boolean
+  folder: string
+  smtp_host?: string | null
+  smtp_port: number
+  smtp_use_ssl: boolean
+  smtp_starttls: boolean
+  smtp_username?: string | null
+  smtp_password_set: boolean
+  auto_ingest: boolean
+  default_kb_id?: number | null
+  allow_from?: string | null
+  subject_keywords?: string | null
+  auto_tags?: string[] | null
+  last_poll_at?: number | null
+  ingested_count: number
+  enabled: boolean
+  status: string
+  last_error?: string | null
+}
+
+export interface MailMessageItem {
+  id: number
+  account_id: number
+  folder: string
+  subject: string
+  from_addr: string
+  from_name?: string | null
+  to_addrs?: string[] | null
+  date?: number | null
+  snippet?: string | null
+  seen: boolean
+  answered: boolean
+  starred: boolean
+  has_attachments: boolean
+  document_id?: number | null
+  body_text?: string | null
+  body_html?: string | null
+  cc_addrs?: string[] | null
+  attachments?: { filename: string; size?: number; storage_path?: string }[] | null
+}
+
+export const mailApi = {
+  listAccounts: () => http.get<MailAccountItem[]>('/mail/accounts').then((r) => r.data),
+  createAccount: (data: Record<string, any>) => http.post<MailAccountItem>('/mail/accounts', data).then((r) => r.data),
+  updateAccount: (id: number, data: Record<string, any>) => http.put<MailAccountItem>(`/mail/accounts/${id}`, data).then((r) => r.data),
+  removeAccount: (id: number) => http.delete(`/mail/accounts/${id}`).then((r) => r.data),
+  testAccount: (id: number) => http.post<{ ok: boolean; message: string }>(`/mail/accounts/${id}/test`).then((r) => r.data),
+  syncAccount: (id: number) => http.post<{ ok: boolean; message: string; new: number }>(`/mail/accounts/${id}/sync`).then((r) => r.data),
+  messages: (accountId: number, params?: { folder?: string; q?: string; unread?: boolean }) =>
+    http.get<MailMessageItem[]>('/mail/messages', { params: { account_id: accountId, ...params } }).then((r) => r.data),
+  message: (id: number) => http.get<MailMessageItem>(`/mail/messages/${id}`).then((r) => r.data),
+  action: (id: number, action: string) => http.post(`/mail/messages/${id}/${action}`).then((r) => r.data),
+  send: (data: { account_id: number; to: string[]; cc?: string[]; subject: string; body_text: string; reply_to_id?: number }) =>
+    http.post<{ ok: boolean; message: string }>('/mail/send', data).then((r) => r.data),
 }
 
 // ---------------- 客服工单 ----------------

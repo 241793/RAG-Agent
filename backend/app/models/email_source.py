@@ -18,6 +18,9 @@ class EmailSource(Base, IdMixin, TimestampMixin, TenantMixin):
     __tablename__ = "email_source"
 
     name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # 可选：引用某个个人邮箱账号（MailAccount）复用其 IMAP 连接凭证，避免重复录入。
+    # 为空则用本记录自带的 imap_host/username/password 等字段。
+    source_account_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     imap_host: Mapped[str] = mapped_column(String(256), nullable=False)
     imap_port: Mapped[int] = mapped_column(Integer, default=993)
     use_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -35,7 +38,13 @@ class EmailSource(Base, IdMixin, TimestampMixin, TenantMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(16), default="active")  # active|error|disabled
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # 已处理的邮件 UID（去重），JSON 存最近 N 个
+    # 已处理的邮件 UID（去重兜底），JSON 存最近 N 个
     seen_uids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # UID 游标增量：已处理的最大 UID（配合 UIDVALIDITY 可靠增量，支持任意积压）
+    uid_cursor: Mapped[int] = mapped_column(Integer, default=0)
+    uid_validity: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # 邮箱 UIDVALIDITY
+    # 自动标签：固定附加 + 按主题关键词打标 {关键词: [标签]}
+    auto_tags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    tag_rules: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_sync_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # ms
     ingested_count: Mapped[int] = mapped_column(Integer, default=0)

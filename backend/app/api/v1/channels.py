@@ -37,6 +37,11 @@ class ChannelIn(BaseModel):
     reply_mode: str | None = None  # rag | agent
     command_prefix: str | None = None
     greeting: str | None = None
+    # 渠道附件入库
+    attach_ingest: str | None = None  # off | bound | all
+    attach_kb_ids: list[int] | None = None
+    attach_max_mb: int | None = None
+    attach_types: str | None = None  # 逗号分隔扩展名白名单
 
 
 def _norm_choice(v: str | None, allowed: tuple[str, ...], default: str) -> str:
@@ -58,6 +63,10 @@ def _to_out(c: Channel) -> dict:
         "default_lang": getattr(c, "default_lang", None),
         "default_agent_id": c.default_agent_id, "reply_mode": c.reply_mode,
         "command_prefix": c.command_prefix, "greeting": c.greeting,
+        "attach_ingest": getattr(c, "attach_ingest", "off") or "off",
+        "attach_kb_ids": getattr(c, "attach_kb_ids", None) or [],
+        "attach_max_mb": getattr(c, "attach_max_mb", 20) or 20,
+        "attach_types": getattr(c, "attach_types", None),
         "callback_url": f"/api/v1/channels/callback/{c.id}",
     }
 
@@ -124,6 +133,10 @@ async def create_channel(
         reply_mode=_norm_choice(body.reply_mode, ("rag", "smart", "agent"), "rag"),
         command_prefix=(body.command_prefix or "").strip() or "/",
         greeting=(body.greeting or "").strip() or None,
+        attach_ingest=_norm_choice(body.attach_ingest, ("off", "bound", "all"), "off"),
+        attach_kb_ids=body.attach_kb_ids,
+        attach_max_mb=int(body.attach_max_mb) if body.attach_max_mb else 20,
+        attach_types=(body.attach_types or "").strip() or None,
     )
     db.add(c)
     await db.flush()
@@ -157,6 +170,10 @@ async def update_channel(
     c.reply_mode = _norm_choice(body.reply_mode, ("rag", "smart", "agent"), "rag")
     c.command_prefix = (body.command_prefix or "").strip() or "/"
     c.greeting = (body.greeting or "").strip() or None
+    c.attach_ingest = _norm_choice(body.attach_ingest, ("off", "bound", "all"), "off")
+    c.attach_kb_ids = body.attach_kb_ids
+    c.attach_max_mb = int(body.attach_max_mb) if body.attach_max_mb else 20
+    c.attach_types = (body.attach_types or "").strip() or None
     await db.flush()
     await db.commit()
     from app.channels.manager import channel_manager
