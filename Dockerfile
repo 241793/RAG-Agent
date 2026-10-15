@@ -24,8 +24,14 @@ ENV PYTHONUNBUFFERED=1 \
 
 COPY backend/requirements.txt ./backend/requirements.txt
 # INSTALL_PG=true 时额外装 PostgreSQL 驱动（用 docker compose --profile pg 时由 build.args 传入）
+# fonts-wqy-zenhei：PDF 渲染中文字体（slim 基础镜像不含任何字体，缺了中文会变乱码）。
+#   刻意不用 fonts-noto-cjk —— 它是 CFF/PostScript 轮廓，reportlab 的 TTFont 会直接拒绝
+#   （ttfonts.py: 'postscript outlines are not supported'），必须选 TrueType 轮廓的字体。
 ARG INSTALL_PG=false
-RUN pip install --no-cache-dir -r ./backend/requirements.txt \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-wqy-zenhei \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir -r ./backend/requirements.txt \
     && if [ "$INSTALL_PG" = "true" ]; then pip install --no-cache-dir asyncpg pgvector; fi
 
 COPY backend/ ./backend/

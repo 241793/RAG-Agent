@@ -193,7 +193,16 @@ async def _run_office():
     pdf = pymupdf.open(stream=pdata, filetype="pdf")
     assert pdf.page_count >= 2, "封面 + 正文应 ≥2 页"
     text = "\n".join(p.get_text() for p in pdf)
-    assert "报告" in text and "第 2 页" in text, text[:200]
+    from app.agents.tools.office_render import _pdf_register_fonts
+
+    reg, _ = _pdf_register_fonts()
+    hint = (
+        f"\n>>> PDF 中文字体未注册（当前使用 {reg}），中文被渲染为占位符。"
+        "\n>>> 本机：装中文字体；CI/Docker：apt-get install -y fonts-wqy-zenhei"
+        "\n>>> 注意必须 TrueType 轮廓（fonts-noto-cjk 是 CFF，reportlab 会拒绝）。"
+    )
+    assert reg != "Helvetica", "未找到可用中文字体，PDF 中文会乱码。" + hint
+    assert "报告" in text and "第 2 页" in text, text[:200] + hint
 
 
 def test_office_render():

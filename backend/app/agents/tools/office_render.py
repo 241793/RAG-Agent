@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 from pathlib import Path
 
@@ -427,43 +428,108 @@ def render_xlsx(content: str, rows: list | None = None, charts: list | None = No
 # ==================== PDF ====================
 _FONT_CACHE: dict[str, str] = {}
 
+# 已知中文字体候选：(常规体名, 粗体名, 常规体路径, 粗体路径)
+# 前置这些是为了在 Windows/macOS 上优先用系统自带的高质量字体。
+_FONT_CANDS: list[tuple[str, str, str, str]] = [
+    ("MicrosoftYaHei", "MicrosoftYaHei-Bold", r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\msyhbd.ttc"),
+    ("SimSun", "SimHei", r"C:\Windows\Fonts\simsun.ttc", r"C:\Windows\Fonts\msyhbd.ttc"),
+    ("PingFang", "PingFang-Bold", "/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/PingFang.ttc"),
+]
+
+# 精简镜像 / CI runner 常无预置路径：按目录扫描补齐。
+# 只收 TrueType 轮廓（.ttf/.ttc）——reportlab 的 TTFont 不支持 CFF/OTF 轮廓，
+# 因此 NotoSansCJK 的 .otf 变体刻意排除，WenQuanYi 等 TrueType 字体优先。
+_FONT_SCAN_DIRS = (
+    "/usr/share/fonts",
+    "/usr/local/share/fonts",
+    "/usr/share/fonts/truetype",
+    "/usr/share/fonts/opentype",
+)
+
+# (字体名, 文件名 glob) —— 顺序即优先级
+_FONT_SCAN_PATTERNS: list[tuple[str, str]] = [
+    ("WenQuanYi", "wqy-zenhei.ttc"),
+    ("WenQuanYiMicroHei", "wqy-microhei.ttc"),
+    ("DroidSansFallback", "DroidSansFallbackFull.ttf"),
+    ("NotoSansSC", "NotoSansSC-*.ttf"),
+    ("NotoSansCJK", "NotoSansCJK-Regular.ttc"),
+    ("SourceHanSansSC", "SourceHanSansSC-*.ttc"),
+]
+
+
+def _discover_cjk_fonts() -> list[tuple[str, str, str, str]]:
+    """扫描系统字体目录，返回额外候选（应对 Docker slim / CI runner 无预置路径）。
+
+    可用环境变量覆盖：RAG_PDF_FONT / RAG_PDF_FONT_BOLD 指向自带字体文件。
+    """
+    import glob
+    import os
+
+    cands: list[tuple[str, str, str, str]] = []
+    seen: set[str] = set()
+
+    # 1) 显式环境变量（最高优先，便于离线/自托管字体）
+    env_reg = os.environ.get("RAG_PDF_FONT", "").strip()
+    env_bold = os.environ.get("RAG_PDF_FONT_BOLD", "").strip() or env_reg
+    if env_reg and Path(env_reg).is_file():
+        cands.append(("RagCustomFont", "RagCustomFont-Bold", env_reg, env_bold))
+        seen.add("RagCustomFont")
+
+    # 2) 目录扫描
+    for name, pattern in _FONT_SCAN_PATTERNS:
+        if name in seen:
+            continue
+        for d in _FONT_SCAN_DIRS:
+            if not Path(d).is_dir():
+                continue
+            hits = sorted(glob.glob(str(Path(d) / "**" / pattern), recursive=True))
+            if hits:
+                cands.append((name, f"{name}-Bold", hits[0], hits[0]))
+                seen.add(name)
+                break
+    return cands
+
 
 def _pdf_register_fonts() -> tuple[str, str]:
-    """注册中文字体 → (常规体, 粗体)。找不到则回退 Helvetica。"""
+    """注册中文字体 → (常规体, 粗体)。
+
+    查找顺序：环境变量指定 → Windows/macOS 系统路径 → 系统目录扫描。
+    全部落空才回退 Helvetica（此时中文会变乱码，故 Docker/CI 必须装中文字体）。
+    """
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
     if _FONT_CACHE.get("regular"):
         return _FONT_CACHE["regular"], _FONT_CACHE.get("bold") or _FONT_CACHE["regular"]
-    cands = [
-        ("MicrosoftYaHei", "MicrosoftYaHei-Bold", r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\msyhbd.ttc"),
-        ("SimSun", "SimHei", r"C:\Windows\Fonts\simsun.ttc", r"C:\Windows\Fonts\msyhbd.ttc"),
-        ("NotoSansCJK", "NotoSansCJK-Bold",
-         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
-        ("WenQuanYi", "WenQuanYi-Bold",
-         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
-    ]
-    for reg_name, bold_name, reg_path, bold_path in cands:
+
+    for reg_name, bold_name, reg_path, bold_path in [*_discover_cjk_fonts(), *_FONT_CANDS]:
         try:
             if not Path(reg_path).is_file():
                 continue
             if reg_name not in pdfmetrics.getRegisteredFontNames():
                 pdfmetrics.registerFont(TTFont(reg_name, reg_path))
             bold = reg_name
-            if Path(bold_path).is_file() and bold_name not in pdfmetrics.getRegisteredFontNames():
-                try:
-                    pdfmetrics.registerFont(TTFont(bold_name, bold_path))
+            if bold_path != reg_path and Path(bold_path).is_file():
+                if bold_name not in pdfmetrics.getRegisteredFontNames():
+                    try:
+                        pdfmetrics.registerFont(TTFont(bold_name, bold_path))
+                    except Exception:  # noqa: BLE001
+                        pass
+                if bold_name in pdfmetrics.getRegisteredFontNames():
                     bold = bold_name
-                except Exception:  # noqa: BLE001
-                    bold = reg_name
             pdfmetrics.registerFontFamily(reg_name, normal=reg_name, bold=bold, italic=reg_name, boldItalic=bold)
             _FONT_CACHE["regular"] = reg_name
             _FONT_CACHE["bold"] = bold
             return reg_name, bold
         except Exception:  # noqa: BLE001
             continue
+    # 全部落空：中文会渲染成乱码（reportlab 用 Helvetica 画 CJK 得到的是占位符）。
+    # 显式告警而不静默，避免此类问题在容器里悄悄产出乱码 PDF。
+    logging.getLogger(__name__).warning(
+        "pdf_cjk_font_missing: 未找到可用中文字体，PDF 中文将显示为乱码。"
+        "修复：apt-get install -y fonts-wqy-zenhei（Docker/CI），"
+        "或用 RAG_PDF_FONT 指向自带字体文件。"
+    )
     _FONT_CACHE["regular"] = _FONT_CACHE["bold"] = "Helvetica"
     return "Helvetica", "Helvetica"
 

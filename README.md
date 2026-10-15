@@ -151,6 +151,8 @@ docker run -d -p 6677:6677 -v "$PWD/data:/app/backend/data" rag-knowledgebase:1.
 
 数据（SQLite 库 + 上传文件 + 技能包）统一落在容器内 `/app/backend/data`，已挂 `VOLUME`，映射出来后**重建容器不丢数据**。健康检查走 `/health`（真实探 DB 连通性）。
 
+> **中文字体**：镜像内已装 `fonts-wqy-zenhei`。AI 生成 PDF 走 reportlab 嵌入字体，若基础镜像缺中文字体，PDF 里的中文会**静默变成乱码**（`I`/`II` 之类的占位符）。reportlab 只接受 **TrueType** 轮廓字体，因此**不能用 `fonts-noto-cjk`**（它是 CFF/PostScript 轮廓，会被直接拒绝）。自托管字体可用 `RAG_PDF_FONT` / `RAG_PDF_FONT_BOLD` 环境变量指定。
+
 ### 桌面版（终端用户 / Windows）
 
 ```bash

@@ -35,6 +35,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
+      - name: 安装中文字体
+        # PDF 渲染测试依赖 CJK 字体；ubuntu runner 默认不含，缺了中文会变乱码。
+        # 必须用 TrueType 轮廓的字体（fonts-wqy-zenhei）；fonts-noto-cjk 是 CFF
+        # 轮廓，reportlab 会拒绝加载。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-wqy-zenhei
+
       - name: 运行测试
         # tests/conftest.py 自行设置独立测试库/存储目录，无需 .env
         run: pytest -q
