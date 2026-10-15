@@ -95,7 +95,12 @@ def detect_deployment() -> str:
 def _hint_for(deployment: str, version: str, image: str) -> str:
     """不同部署形态对应的人工更新命令（桌面版走应用内更新，无需命令）。"""
     if deployment == "docker":
-        return f"docker pull {image}:{version} && docker compose up -d"
+        # 容器无法替换自身镜像，因此拿到新镜像得在**宿主机**执行
+        return (
+            f"docker compose pull && docker compose up -d\n"
+            f"# 或手动：docker pull {image}:{version}\n"
+            f"# 数据在挂载卷 ./data（容器内 /app/backend/data）中，重建容器不丢数据"
+        )
     if deployment == "source":
         return "git pull && cd web && npm ci && npm run build，然后重启后端"
     return "在「关于/更新」中点击「立即更新」，下载完成后会自动重启应用"

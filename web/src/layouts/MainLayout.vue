@@ -42,7 +42,7 @@
 
       <div class="sider-foot">
         <div
-          v-show="!collapsed"
+          v-if="appVersion && !collapsed"
           class="ver-chip"
           :title="`当前版本 v${appVersion}${deploymentLabel ? ' · ' + deploymentLabel : ''}（点击检查更新）`"
           @click="showAbout = true"
@@ -157,14 +157,15 @@ const deploymentLabel = computed(
 )
 
 onMounted(async () => {
-  if (!auth.user) auth.fetchMe()
-  // 版本号与更新状态：无 system:manage 权限时接口会 403，静默忽略即可
+  if (!auth.user) await auth.fetchMe()
+  // 版本/更新接口需 system:manage 权限，非管理员不发请求（否则每次加载都刷 401）
+  if (!auth.hasPermission('system:manage')) return
   try {
     const info = await systemOpsApi.info()
     appVersion.value = info.version
     deployment.value = info.deployment
   } catch {
-    /* 未授权或接口不可用：不显示版本 */
+    /* 接口不可用：不显示版本 */
   }
   try {
     const r = await updateApi.check()

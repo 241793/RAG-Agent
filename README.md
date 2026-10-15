@@ -188,7 +188,25 @@ cd ../desktop && npm install && npm run dist
 - **检查**：查询 GitHub Release 与当前版本比较（15 分钟缓存；离线/限流时只提示、不报错）
 - **桌面版**：可一键下载 → 校验 sha256 → 解压 → **重启并应用**。更新包完整性用 Release 资源自带的
   `sha256` 摘要校验，校验失败即丢弃，不会安装被篡改的包
-- **Docker / 源码**：只提示新版本与对应命令，不做自更新
+- **Docker / 源码**：**只提示新版本与对应命令，不做自更新**
+
+#### 为什么 Docker 不能自更新
+
+容器**无法替换自己的镜像**（正在运行的容器不能改自身文件系统映像），这是容器模型的限制，不是本功能没做。
+在容器里执行 `docker pull` 也只是拉到文件系统里、不会生效。Docker 部署请**在宿主机**执行：
+
+```bash
+docker compose pull && docker compose up -d      # 推荐
+# 或手动指定版本
+docker pull ghcr.io/241793/rag-agent:1.0.1
+docker run -d -p 6677:6677 -v "$PWD/data:/app/backend/data" ghcr.io/241793/rag-agent:1.0.1
+```
+
+数据在挂载卷 `./data`（容器内 `/app/backend/data`），**重建容器不丢数据**，
+所以 `pull + up -d` 是安全的。
+
+> 想进一步减少停机：把 `db`（如 postgres）与 `app` 分开，只重建 `app`；
+> 或前面挂一层反向代理做滚动切换。
 
 更新如何落地（桌面版）：Windows 不允许覆盖正在运行的 exe，所以**换盘由应用退出后的外部脚本执行**：
 
