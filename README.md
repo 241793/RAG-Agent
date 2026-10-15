@@ -181,6 +181,34 @@ cd ../desktop && npm install && npm run dist
 
 > 首次推送到 GHCR 的包默认是 **private**，需在 GitHub Packages 页面手动改为 public；再次推送沿用该可见性。
 
+### 应用内更新
+
+侧边栏底部显示当前版本，点击打开「关于 / 检查更新」：
+
+- **检查**：查询 GitHub Release 与当前版本比较（15 分钟缓存；离线/限流时只提示、不报错）
+- **桌面版**：可一键下载 → 校验 sha256 → 解压 → **重启并应用**。更新包完整性用 Release 资源自带的
+  `sha256` 摘要校验，校验失败即丢弃，不会安装被篡改的包
+- **Docker / 源码**：只提示新版本与对应命令，不做自更新
+
+更新如何落地（桌面版）：Windows 不允许覆盖正在运行的 exe，所以**换盘由应用退出后的外部脚本执行**：
+
+```
+应用内点「立即更新」
+  → 后端流式下载 zip 到 %APPDATA%\RAG知识库\updates\download\
+  → 校验 sha256 → 解压到 …\updates\staging\vX.Y.Z\
+  → 点「重启并应用」→ 后端写 …\updates\apply.requested
+  → Electron 轮询到信号 → 拉起 apply_update.bat → 退出（释放 exe 文件锁）
+  → 脚本等进程退出 → 备份 → robocopy 覆盖 → 启动新版
+  → 失败则还原 .bak 并启动旧版（不会变砖），日志写 …\updates\update_apply.log
+```
+
+用户数据在 `%APPDATA%\RAG知识库\data`，与安装目录分离，**更新不影响数据**。
+相关设置：`update_check_enabled` / `update_repo`（系统设置 → 高级）。
+
+> **注意**：v1.0.0 是引入本功能前的版本，从 v1.0.0 升级到 v1.0.1 仍需手动替换；
+> **自 v1.0.1 起**应用内更新才生效。
+> 无代码签名证书时，新版 exe 首次启动会有 SmartScreen「未知发布者」提示，属预期。
+
 ---
 
 ## 配置模型（关键）

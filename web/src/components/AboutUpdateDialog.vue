@@ -52,12 +52,33 @@
         <pre class="notes-body">{{ result.notes }}</pre>
       </div>
 
-      <!-- 桌面版：可自更新（阶段 2 接入下载） -->
+      <!-- 桌面版：可自更新 -->
       <div v-if="result.can_self_update" class="actions">
-        <el-button type="primary" disabled>
-          立即更新（下载更新器开发中）
-        </el-button>
-        <span class="dim small">该功能将在下个版本提供；当前请手动下载替换</span>
+        <template v-if="phase === 'downloading'">
+          <div class="prog-line">
+            <span>正在下载更新包…</span>
+            <span class="dim">{{ pct }}%<template v-if="mbTotal"> · {{ mbReceived }} / {{ mbTotal }} MB</template></span>
+          </div>
+          <el-progress :percentage="pct" :stroke-width="10" style="width: 100%" />
+        </template>
+        <template v-else-if="phase === 'extracting'">
+          <div class="prog-line"><span>正在解压…</span></div>
+          <el-progress :percentage="100" :indeterminate="true" :duration="1.2" :stroke-width="10" style="width: 100%" />
+        </template>
+        <template v-else-if="ready">
+          <el-alert title="更新包已下载并校验完成" type="success" :closable="false" show-icon />
+          <el-button type="primary" :loading="applying" @click="apply">
+            重启并应用更新
+          </el-button>
+          <span class="dim small">应用将关闭并自动重启，用户数据不受影响</span>
+        </template>
+        <template v-else>
+          <el-button type="primary" :loading="downloading" @click="startDownload">
+            立即更新（约 {{ assetMB }} MB）
+          </el-button>
+          <span v-if="dlError" class="err">{{ dlError }}</span>
+          <span v-else class="dim small">下载完成后可一键重启应用</span>
+        </template>
       </div>
 
       <!-- 非桌面版：给出对应命令 -->
@@ -86,9 +107,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { updateApi, type UpdateCheckResult } from '@/api'
 import { errMsg } from '@/api/http'
 
@@ -107,6 +128,28 @@ const visible = computed({
 const result = ref<UpdateCheckResult | null>(null)
 const loading = ref(false)
 const loadedOnce = ref(false)
+
+// ---- 下载 / 应用状态 ----
+const phase = ref<'idle' | 'downloading' | 'extracting' | 'ready' | 'failed'>('idle')
+const received = ref(0)
+const total = ref(0)
+const ready = ref(false)
+const dlError = ref('')
+let pollTimer: number | null = null
+
+const downloading = computed(() => phase.value === 'downloading' || phase.value === 'extracting')
+const applying = ref(false)
+
+const pct = computed(() => {
+  if (!total.value) return received.value ? 5 : 0
+  return Math.min(100, Math.round((received.value / total.value) * 100))
+})
+const assetMB = computed(() => {
+  const s = result.value?.asset?.size || 0
+  return s ? Math.round(s / 1048576) : '?'
+})
+const mbTotal = computed(() => (total.value ? (total.value / 1048576).toFixed(1) : ''))
+const mbReceived = computed(() => (received.value / 1048576).toFixed(1))
 
 const deploymentLabel = computed(() => {
   const d = props.deployment || result.value?.deployment
@@ -141,6 +184,93 @@ function onOpen() {
   // 打开即检查（走 15 分钟缓存，不会频繁打 GitHub）
   check(false)
 }
+
+// ---- 下载 / 应用 ----
+
+function stopPoll() {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+function startPoll() {
+  stopPoll()
+  pollTimer = window.setInterval(async () => {
+    try {
+      const p = await updateApi.progress()
+      total.value = p.total || 0
+      received.value = p.received || 0
+      if (p.phase === 'extracting') phase.value = 'extracting'
+      if (p.phase === 'ready') {
+        phase.value = 'ready'
+        ready.value = true
+        stopPoll()
+      } else if (p.phase === 'failed') {
+        phase.value = 'failed'
+        dlError.value = p.error || '更新失败'
+        stopPoll()
+      }
+    } catch {
+      /* 轮询失败忽略，下次再试 */
+    }
+  }, 1000)
+}
+
+async function startDownload() {
+  dlError.value = ''
+  ready.value = false
+  phase.value = 'downloading'
+  received.value = 0
+  total.value = result.value?.asset?.size || 0
+  startPoll()
+  try {
+    const r = await updateApi.download()
+    if (!r.ok) {
+      dlError.value = r.error || '下载失败'
+      phase.value = 'failed'
+      stopPoll()
+      return
+    }
+    // 后端已完成下载+校验+解压
+    phase.value = 'ready'
+    ready.value = true
+    stopPoll()
+    ElMessage.success(r.message || '更新包已就绪')
+  } catch (e) {
+    dlError.value = errMsg(e)
+    phase.value = 'failed'
+    stopPoll()
+  }
+}
+
+async function apply() {
+  try {
+    await ElMessageBox.confirm(
+      '应用将关闭并自动重启以完成更新，期间约需数秒。确定继续？',
+      '重启并应用更新',
+      { confirmButtonText: '立即重启', cancelButtonText: '稍后', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  applying.value = true
+  try {
+    const r = await updateApi.apply()
+    if (!r.ok) {
+      ElMessage.error(r.error || '无法应用更新')
+      applying.value = false
+      return
+    }
+    ElMessage.success(r.message || '正在重启并应用更新…')
+    // 之后应用会被 Electron 退出并重启，此处无需清理
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+    applying.value = false
+  }
+}
+
+onBeforeUnmount(stopPoll)
 </script>
 
 <style scoped>
@@ -240,5 +370,17 @@ function onOpen() {
 }
 .small {
   font-size: 12px;
+}
+.prog-line {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.err {
+  color: #ef4444;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 </style>

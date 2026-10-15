@@ -1,4 +1,4 @@
-"""更新检查服务：查询 GitHub Release，判断是否有新版本。
+"""更新检查服务：查询 GitHub Release，判断是否有新版本；桌面版可下载并应用更新。
 
 设计要点（勿凭直觉改动）：
 
@@ -10,6 +10,9 @@
 4. **优雅降级是硬要求**：离线/限流/超时一律返回 `ok=False`，绝不抛 500、
    绝不臆造版本号（臆造会让用户看到不存在的「新版本」）。
 5. 部署形态决定「更新」的含义：只有桌面版能自更新；Docker/源码只回报可执行命令。
+6. **Windows 不允许覆盖运行中的 exe**：本模块只负责「下载 → 校验 → 解压到暂存区 →
+   写信号文件」，真正的换盘必须由应用退出后的外部脚本（`apply_update.bat`）执行。
+   见 `write_apply_script()`。
 """
 from __future__ import annotations
 
@@ -199,3 +202,293 @@ async def check_update(*, force: bool = False) -> dict:
 def clear_cache() -> None:
     """清空缓存（测试与手动刷新用）。"""
     _cache.update({"ts": 0.0, "data": None, "repo": None})
+
+
+# ==================== 下载 / 校验 / 应用（桌面版自更新）====================
+
+# 进度状态（进程内，供前端轮询）。单机自更新场景无需持久化。
+_progress: dict[str, object] = {
+    "phase": "idle",   # idle | downloading | verifying | extracting | ready | failed
+    "total": 0,
+    "received": 0,
+    "error": None,
+    "version": None,
+}
+
+# 允许下载的主机（GitHub 发布包会 302 到 objects.githubusercontent.com）
+_ALLOWED_DL_HOSTS = ("github.com", "objects.githubusercontent.com", "codeload.github.com")
+
+
+def _updates_root():
+    """更新工作目录：放在可写数据目录下（桌面版 = %APPDATA%/RAG知识库/updates）。
+
+    刻意不放安装目录 —— 否则替换安装目录时会连自己一起覆盖。
+    """
+    from app.core.config import BASE_DIR
+
+    d = BASE_DIR / "updates"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def get_progress() -> dict:
+    return dict(_progress)
+
+
+def reset_progress() -> None:
+    """重置进度（放弃更新时调用）。"""
+    _progress.update({"phase": "idle", "total": 0, "received": 0, "error": None, "version": None})
+
+
+def is_safe_version(v: str) -> bool:
+    """版本号白名单：仅允许数字与点（如 1.0.10）。
+
+    该值会进入路径（staging/vX.Y.Z）与脚本参数，必须严格限制，
+    否则 '1.0/../../evil' 之类可造成路径穿越或参数注入。
+    """
+    return bool(re.fullmatch(r"\d+(\.\d+)*", (v or "").strip()))
+
+
+def _set_progress(**kw) -> None:
+    _progress.update(kw)
+
+
+def _check_download_url(url: str) -> str | None:
+    """下载前的 URL 校验：仅 https + 白名单主机 + 过 SSRF 守卫。"""
+    from urllib.parse import urlparse
+
+    from app.agents.tools.builtin import _check_url
+
+    p = urlparse(url)
+    if p.scheme != "https":
+        return f"更新包必须使用 https（实际 {p.scheme}）"
+    host = (p.hostname or "").lower()
+    if host not in _ALLOWED_DL_HOSTS:
+        return f"更新包主机不在白名单内：{host}"
+    err = _check_url(url, None)
+    if err:
+        return err
+    return None
+
+
+async def download_update(*, url: str, digest: str | None, version: str) -> dict:
+    """流式下载更新包到 updates/download/ 并校验 sha256。永不抛异常。
+
+    208MB 必须流式写盘，不得整体读入内存。
+    """
+    import hashlib
+
+    import httpx
+
+    err = _check_download_url(url)
+    if err:
+        _set_progress(phase="failed", error=err)
+        return {"ok": False, "error": err}
+
+    dl_dir = _updates_root() / "download"
+    dl_dir.mkdir(parents=True, exist_ok=True)
+    # 文件名固定，避免归档；版本号已由调用方校验
+    target = dl_dir / "update.zip"
+
+    expect = None
+    if digest and digest.startswith("sha256:"):
+        expect = digest.split(":", 1)[1].strip().lower()
+
+    _set_progress(phase="downloading", total=0, received=0, error=None, version=version)
+    h = hashlib.sha256()
+    received = 0
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0), follow_redirects=True) as c:
+            async with c.stream("GET", url) as resp:
+                if resp.status_code != 200:
+                    msg = f"下载失败：HTTP {resp.status_code}"
+                    _set_progress(phase="failed", error=msg)
+                    return {"ok": False, "error": msg}
+                # 重定向后的**最终 URL 也必须校验** —— 否则恶意 Release 可先指向
+                # 白名单主机、再 302 到任意地址，绕过上面的初始校验。
+                final = str(resp.url)
+                err2 = _check_download_url(final)
+                if err2:
+                    msg = f"下载被重定向到非白名单地址，已中止：{err2}"
+                    logger.error("update_redirect_blocked", final=final[:200])
+                    _set_progress(phase="failed", error=msg)
+                    return {"ok": False, "error": msg}
+                total = int(resp.headers.get("content-length") or 0)
+                _set_progress(total=total)
+                with open(target, "wb") as f:
+                    async for chunk in resp.aiter_bytes(1024 * 256):
+                        f.write(chunk)
+                        h.update(chunk)
+                        received += len(chunk)
+                        _set_progress(received=received)
+    except Exception as e:  # noqa: BLE001
+        msg = f"下载中断：{str(e)[:150]}"
+        logger.warning("update_download_failed", err=msg)
+        _set_progress(phase="failed", error=msg)
+        return {"ok": False, "error": msg}
+
+    # 校验
+    _set_progress(phase="verifying")
+    actual = h.hexdigest()
+    if expect and actual != expect:
+        try:
+            target.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+        msg = f"更新包校验失败（期望 {expect[:12]}…，实际 {actual[:12]}…），已丢弃"
+        logger.error("update_digest_mismatch", expect=expect, actual=actual)
+        _set_progress(phase="failed", error=msg)
+        return {"ok": False, "error": msg}
+    if not expect:
+        # 无 digest 时仍继续，但明确告知未做完整性校验
+        logger.warning("update_no_digest", version=version)
+
+    return {"ok": True, "path": str(target), "size": received,
+            "sha256": actual, "verified": bool(expect)}
+
+
+def extract_update(*, zip_path: str, version: str) -> dict:
+    """把更新包解压到 updates/staging/vX.Y.Z/。永不抛异常。
+
+    防 Zip Slip：逐个条目校验目标路径必须落在 staging 目录内。
+    """
+    import zipfile
+
+    staging = _updates_root() / "staging" / f"v{version}"
+    try:
+        _set_progress(phase="extracting")
+        # 清掉同版本残留，保证干净解压
+        if staging.exists():
+            import shutil
+
+            shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+
+        root = staging.resolve()
+        with zipfile.ZipFile(zip_path) as z:
+            for m in z.infolist():
+                dest = (staging / m.filename).resolve()
+                if not str(dest).startswith(str(root)):
+                    msg = f"更新包含非法路径（疑似 Zip Slip）：{m.filename}"
+                    logger.error("update_zip_slip", name=m.filename)
+                    _set_progress(phase="failed", error=msg)
+                    return {"ok": False, "error": msg}
+            z.extractall(staging)
+
+        _set_progress(phase="ready", version=version)
+        return {"ok": True, "staging": str(staging)}
+    except Exception as e:  # noqa: BLE001
+        msg = f"解压失败：{str(e)[:150]}"
+        logger.exception("update_extract_failed")
+        _set_progress(phase="failed", error=msg)
+        return {"ok": False, "error": msg}
+
+
+def build_apply_script() -> str:
+    """生成换盘脚本内容（纯函数，便于测试）。
+
+    路径一律由**命令行参数**传入（%1=staging %2=install_dir %3=exe_name %4=log）：
+    后端并不知道自己的安装目录，安装目录只有 Electron（app.getPath('exe')）能可靠给出；
+    并且参数化可避免把用户路径拼进脚本体导致的转义/注入问题。
+
+    流程：等主进程退出 → 备份 exe → robocopy 覆盖 → 启动新版；失败则回滚。
+    刻意不用 /MIR：避免 purge 删掉仍被占用或不该删的文件。
+    """
+    return r"""@echo off
+setlocal enableextensions
+set "SRC=%~1"
+set "DST=%~2"
+set "EXE=%~3"
+set "LOG=%~4"
+
+if "%SRC%"=="" exit /b 2
+if "%DST%"=="" exit /b 2
+if "%EXE%"=="" set "EXE=RAG知识库.exe"
+
+rem 日志只写纯 ASCII（不写含中文的时间戳）—— %date%/%time% 是本地编码(GBK)，
+rem 与脚本的 UTF-8 混写会产生乱码，反而妨碍排障。
+echo [%date% %time%] apply rc-start >> "%LOG%"
+
+rem ---- 1) 等待主进程退出（最多 60 次 * 2s = 120s）----
+rem 注意：必须用 goto 循环而非 (...) 块 —— 块内 %n% 在解析期就展开，
+rem 会导致计数永不增长、循环退不出来。
+set /a n=0
+:wait
+set /a n+=1
+tasklist /FI "IMAGENAME eq %EXE%" 2>nul | find /I "%EXE%" >nul
+if errorlevel 1 goto gone
+if %n% GEQ 60 goto gone
+timeout /t 2 /nobreak >nul
+goto wait
+:gone
+rem 给文件锁一点释放时间
+timeout /t 3 /nobreak >nul
+
+rem ---- 2) 备份现有可执行文件 ----
+if exist "%DST%\%EXE%" copy /Y "%DST%\%EXE%" "%DST%\%EXE%.bak" >nul 2>&1
+
+rem ---- 3) 覆盖（robocopy 返回码 < 8 视为成功）----
+robocopy "%SRC%" "%DST%" /E /R:3 /W:2 /NFL /NDL /NJH /NJS >nul
+set RC=%ERRORLEVEL%
+echo [%date% %time%] robocopy rc=%RC% >> "%LOG%"
+if %RC% GEQ 8 goto rollback
+
+rem ---- 4) 启动新版 ----
+start "" "%DST%\%EXE%"
+echo [%date% %time%] ok >> "%LOG%"
+exit /b 0
+
+:rollback
+echo [%date% %time%] FAILED rc=%RC% rollback >> "%LOG%"
+> "%~dp4.update_failed.log" echo update failed rc=%RC% rolled back
+if exist "%DST%\%EXE%.bak" copy /Y "%DST%\%EXE%.bak" "%DST%\%EXE%" >nul 2>&1
+start "" "%DST%\%EXE%"
+exit /b 1
+"""
+
+
+def write_apply_script(updates_dir: str | None = None) -> str:
+    """把换盘脚本写到 updates/ 下，返回脚本路径。
+
+    写在数据目录（%APPDATA%/RAG知识库/updates）而非安装目录 —— 否则替换安装目录时
+    会把正在运行的脚本自己覆盖掉。
+    """
+    from pathlib import Path
+
+    root = Path(updates_dir) if updates_dir else _updates_root()
+    root.mkdir(parents=True, exist_ok=True)
+    script = root / "apply_update.bat"
+    # 用 utf-8-sig（带 BOM）以便 cmd 配合 chcp 65001 正确读中文；换行用 CRLF
+    script.write_text(build_apply_script().replace("\n", "\r\n"), encoding="utf-8-sig")
+    return str(script)
+
+
+def write_pending(*, version: str, staging_dir: str, script_path: str) -> str:
+    """写待应用信息（版本、暂存目录、脚本路径）。后端已知这些，写在数据目录。"""
+    import json
+
+    root = _updates_root()
+    f = root / "pending.json"
+    f.write_text(
+        json.dumps(
+            {"version": version, "staging": staging_dir, "script": script_path},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return str(f)
+
+
+def write_apply_signal() -> str:
+    """写「可以换盘了」信号文件。
+
+    Electron 主进程轮询到它后：读取 pending.json，自己补上安装目录与 exe 名，
+    然后 spawn apply_update.bat 并退出（释放 exe 文件锁）。
+    """
+    root = _updates_root()
+    sig = root / "apply.requested"
+    sig.write_text("1", encoding="utf-8")
+    return str(sig)
+
+

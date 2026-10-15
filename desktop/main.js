@@ -99,6 +99,7 @@ function createWindow() {
 
 async function boot() {
   createWindow()
+  startUpdateWatcher()
 
   const exe = resolveBackend()
   if (!exe) {
@@ -120,6 +121,71 @@ async function boot() {
 }
 
 app.whenReady().then(boot)
+
+// ==================== 更新：轮询信号 → 退出 → 换盘 → 重启 ====================
+// 分工说明：后端负责下载/校验/解压到暂存区并写信号文件；换盘必须由外部脚本执行，
+// 因为 Windows 不允许覆盖正在运行的 exe（本进程与后端 exe 都会被锁）。
+// 本进程只负责：发现信号 → 拉起脚本 → 退出（释放文件锁）。
+const UPDATE_POLL_MS = 3000
+let updateApplied = false
+
+function updatesDir() {
+  return path.join(app.getPath('userData'), 'updates')
+}
+
+function startUpdateWatcher() {
+  setInterval(() => {
+    if (updateApplied || !app.isPackaged) return
+    const signal = path.join(updatesDir(), 'apply.requested')
+    if (!fs.existsSync(signal)) return
+
+    updateApplied = true
+    try {
+      applyUpdate(signal)
+    } catch (e) {
+      console.error('[update] apply failed:', e)
+      updateApplied = false
+    }
+  }, UPDATE_POLL_MS)
+}
+
+function applyUpdate(signal) {
+  const dir = updatesDir()
+  const pendingPath = path.join(dir, 'pending.json')
+  if (!fs.existsSync(pendingPath)) {
+    console.error('[update] pending.json missing, abort')
+    return
+  }
+  const pending = JSON.parse(fs.readFileSync(pendingPath, 'utf8'))
+  const script = pending.script || path.join(dir, 'apply_update.bat')
+  if (!fs.existsSync(script)) {
+    console.error('[update] apply script missing:', script)
+    return
+  }
+
+  // 安装目录与 exe 名只有本进程能可靠给出（后端不知道自己的安装位置）
+  const exePath = app.getPath('exe')
+  const installDir = path.dirname(exePath)
+  const exeName = path.basename(exePath)
+  const logPath = path.join(dir, 'update_apply.log')
+
+  console.log('[update] applying', pending.version, '->', installDir)
+  const child = spawn(
+    'cmd.exe',
+    ['/c', script, pending.staging, installDir, exeName, logPath],
+    { detached: true, stdio: 'ignore', windowsHide: true }
+  )
+  child.unref()
+
+  // 清理信号，避免重启后又触发一次
+  try { fs.unlinkSync(signal) } catch (e) { /* ignore */ }
+
+  // 先杀后端（释放 rag-backend.exe 的文件锁），再退出自身
+  if (backendProc) {
+    try { backendProc.kill() } catch (e) { /* ignore */ }
+  }
+  app.quit()
+}
 
 app.on('window-all-closed', () => {
   if (backendProc) {

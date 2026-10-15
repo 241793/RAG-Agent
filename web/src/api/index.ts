@@ -1233,6 +1233,17 @@ export interface UpdateCheckResult {
 export const updateApi = {
   check: (force = false) =>
     http.get<UpdateCheckResult>('/system/update/check', { params: { force } }).then((r) => r.data),
+  download: () =>
+    http.post<{ ok: boolean; version?: string; verified?: boolean; size?: number; message?: string; error?: string }>(
+      '/system/update/download',
+      {},
+      { timeout: 0 }, // 208MB 下载，不用默认超时
+    ).then((r) => r.data),
+  progress: () =>
+    http.get<{ phase: string; total: number; received: number; error?: string | null; version?: string | null }>(
+      '/system/update/progress',
+    ).then((r) => r.data),
+  apply: () => http.post<{ ok: boolean; message?: string; error?: string }>('/system/update/apply', {}).then((r) => r.data),
 }
 
 export interface SystemInfo {
