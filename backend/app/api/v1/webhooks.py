@@ -98,5 +98,6 @@ async def invoke_webhook(
         t.inputs = {**(t.inputs or {}), "_webhook": payload}
         await db.flush()
 
-    asyncio.create_task(execute_task(t.id, manual=True))
+    from app.tasks.bg import spawn
+    spawn("webhook_run", execute_task(t.id, manual=True))
     return {"message": "已触发", "task_id": t.id}

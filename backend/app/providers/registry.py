@@ -33,21 +33,27 @@ class ResolvedModel:
     extra_headers: dict | None
     embedding_dim: int | None
     params: dict
+    max_retries: int = 2
 
 
-def _build_driver(kind: str, base_url: str, api_key: str | None, timeout: int, extra_headers: dict | None):
-    key = (kind, base_url, api_key, timeout, str(extra_headers))
+def _build_driver(
+    kind: str, base_url: str, api_key: str | None, timeout: int, extra_headers: dict | None,
+    max_retries: int = 2,
+):
+    key = (kind, base_url, api_key, timeout, str(extra_headers), max_retries)
     if key in _DRIVER_CACHE:
         return _DRIVER_CACHE[key]
 
     if kind in ("anthropi", "claud"):
         from app.providers.drivers.anthropi import AnthropiDriver
 
-        drv = AnthropiDriver(base_url=base_url, api_key=api_key, timeout=timeout, extra_headers=extra_headers)
+        drv = AnthropiDriver(base_url=base_url, api_key=api_key, timeout=timeout,
+                             extra_headers=extra_headers, max_retries=max_retries)
     elif kind == "ollama":
         from app.providers.drivers.ollama import OllamaDriver
 
-        drv = OllamaDriver(base_url=base_url, api_key=api_key, timeout=timeout, extra_headers=extra_headers)
+        drv = OllamaDriver(base_url=base_url, api_key=api_key, timeout=timeout,
+                           extra_headers=extra_headers, max_retries=max_retries)
     elif kind == "local_bge":
         from app.providers.drivers.local_bge import LocalBGEDriver
 
@@ -68,7 +74,8 @@ def _build_driver(kind: str, base_url: str, api_key: str | None, timeout: int, e
         from app.providers.drivers.openai_compat import OpenAICompatibleDriver
 
         drv = OpenAICompatibleDriver(
-            base_url=base_url, api_key=api_key, timeout=timeout, extra_headers=extra_headers
+            base_url=base_url, api_key=api_key, timeout=timeout, extra_headers=extra_headers,
+            max_retries=max_retries,
         )
     _DRIVER_CACHE[key] = drv
     return drv
@@ -112,6 +119,7 @@ async def resolve_models(
                 extra_headers=mp.extra_headers,
                 embedding_dim=mc.embedding_dim,
                 params=mc.params or {},
+                max_retries=int(getattr(mp, "max_retries", 2) or 0),
             )
         )
     return resolved
@@ -124,7 +132,7 @@ async def get_llm(
     if not models:
         raise ValidationError("未配置对话模型，请先在模型管理中配置 Provider 与 chat 模型")
     rm = models[0]
-    return _build_driver(rm.provider_kind, rm.base_url, rm.api_key, rm.timeout, rm.extra_headers), rm
+    return _build_driver(rm.provider_kind, rm.base_url, rm.api_key, rm.timeout, rm.extra_headers, rm.max_retries), rm
 
 
 async def get_embedding(
@@ -137,7 +145,7 @@ async def get_embedding(
     if not models:
         raise ValidationError("未配置向量模型，请先在模型管理中配置 embedding 模型")
     rm = models[0]
-    return _build_driver(rm.provider_kind, rm.base_url, rm.api_key, rm.timeout, rm.extra_headers), rm
+    return _build_driver(rm.provider_kind, rm.base_url, rm.api_key, rm.timeout, rm.extra_headers, rm.max_retries), rm
 
 
 async def get_rerank(
@@ -147,4 +155,4 @@ async def get_rerank(
     if not models:
         return None
     rm = models[0]
-    return _build_driver(rm.provider_kind, rm.base_url, rm.api_key, rm.timeout, rm.extra_headers), rm
+    return _build_driver(rm.provider_kind, rm.base_url, rm.api_key, rm.timeout, rm.extra_headers, rm.max_retries), rm

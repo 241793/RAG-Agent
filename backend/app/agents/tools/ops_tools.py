@@ -144,7 +144,8 @@ class RunScheduledTaskNowTool(WriteToolMixin):
         t = await ctx.db.get(ScheduledTask, int(args.get("task_id") or 0))
         if not t or t.tenant_id != ctx.tenant_id:
             return ToolResult(content="定时任务不存在", is_error=True)
-        asyncio.create_task(execute_task(t.id, manual=True))
+        from app.tasks.bg import spawn
+        spawn("sched_manual", execute_task(t.id, manual=True))
         return ToolResult(content=f"已触发运行任务 #{t.id}")
 
 

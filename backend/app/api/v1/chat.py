@@ -39,15 +39,16 @@ async def _assert_conv_access(db: AsyncSession, conv_id: int, user: User) -> Con
 
 @router.get("/conversations", response_model=list[ConversationOut])
 async def list_conversations(
+    before_id: int | None = None,
+    limit: int = 100,
     user: User = Depends(require_permission("chat:use")), db: AsyncSession = Depends(get_db)
 ) -> list[ConversationOut]:
+    """列出我的会话（按 id 倒序）。before_id 游标用于「加载更多」。"""
+    stmt = select(Conversation).where(Conversation.user_id == user.id)
+    if before_id:
+        stmt = stmt.where(Conversation.id < before_id)
     rows = (
-        await db.execute(
-            select(Conversation)
-            .where(Conversation.user_id == user.id)
-            .order_by(Conversation.id.desc())
-            .limit(100)
-        )
+        await db.execute(stmt.order_by(Conversation.id.desc()).limit(max(1, min(limit, 500))))
     ).scalars().all()
     return [ConversationOut.model_validate(r) for r in rows]
 
@@ -107,20 +108,37 @@ async def delete_conversation(
 
 @router.get("/conversations/{conv_id}/messages", response_model=list[MessageOut])
 async def list_messages(
-    conv_id: int, user: User = Depends(require_permission("chat:use")), db: AsyncSession = Depends(get_db)
+    conv_id: int,
+    before_id: int | None = None,
+    limit: int | None = None,
+    user: User = Depends(require_permission("chat:use")),
+    db: AsyncSession = Depends(get_db),
 ) -> list[MessageOut]:
+    """列出会话消息。
+
+    分页：传 limit（+可选 before_id 游标）时只返回**最近 limit 条**（按 id 升序），
+    用于长会话增量加载历史；不传则返回全部（向后兼容）。
+    """
     await _assert_conv_access(db, conv_id, user)
-    rows = (
-        await db.execute(
-            select(Message).where(Message.conversation_id == conv_id).order_by(Message.id.asc())
-        )
-    ).scalars().all()
+    stmt = select(Message).where(Message.conversation_id == conv_id)
+    if limit is not None:
+        # 游标：取 before_id 之前的 limit 条（按 id 倒序取，再反转为升序）
+        stmt = stmt.order_by(Message.id.desc()).limit(max(1, min(limit, 500)))
+        if before_id:
+            stmt = stmt.where(Message.id < before_id)
+        rows = list((await db.execute(stmt)).scalars().all())
+        rows.reverse()
+    else:
+        rows = (
+            await db.execute(stmt.order_by(Message.id.asc()))
+        ).scalars().all()
     out = [MessageOut.model_validate(r) for r in rows]
     # 兜底：历史消息若未记录 artifacts（旧版本生成的文件），按「产物时间落在相邻
     # assistant 消息之间」精确归属；已有 artifacts 的消息不重复处理。
+    # 分页模式下不做此兜底（时间边界仅覆盖本页，会失准）——新消息已带 artifacts 字段。
     from app.models import Artifact
 
-    need = any(mo.role == "assistant" and not mo.artifacts for mo in out)
+    need = limit is None and any(mo.role == "assistant" and not mo.artifacts for mo in out)
     if need:
         arts = (
             await db.execute(

@@ -488,7 +488,8 @@ async def run_agent(
                             "message_id": assistant_id, "run_id": run_id,
                         })
 
-                bg = asyncio.create_task(_run_workflow())
+                from app.tasks.bg import spawn
+                bg = spawn("workflow_run", _run_workflow())
                 _BG_TASKS.add(bg)
                 bg.add_done_callback(_BG_TASKS.discard)
 

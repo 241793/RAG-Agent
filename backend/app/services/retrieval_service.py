@@ -419,7 +419,8 @@ async def retrieve(
         try:
             import asyncio
 
-            asyncio.create_task(_log_miss(ps.tenant_id, query, pf.accessible_kb_ids, ps.user_id))
+            from app.tasks.bg import spawn
+            spawn("log_miss", _log_miss(ps.tenant_id, query, pf.accessible_kb_ids, ps.user_id))
         except Exception:  # noqa: BLE001
             pass
     return RetrievalResponse(

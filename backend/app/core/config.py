@@ -157,6 +157,8 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 1440
     refresh_token_expire_minutes: int = 10080
     file_token_expire_minutes: int = 30  # 文件访问签名 URL 有效期
+    # 生成产物默认保留天数（0=永不过期）；到期由后台清理任务回收（文件+记录）
+    artifact_ttl_days: int = 30
     # 登录防爆破
     login_rate_per_min: int = 10             # 单 IP 每分钟登录尝试上限（0=关闭）
     login_max_failures: int = 5              # 连续失败多少次锁定账号

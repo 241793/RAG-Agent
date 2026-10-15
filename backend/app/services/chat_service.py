@@ -55,6 +55,27 @@ SYSTEM_PROMPT = """你是企业知识助手。回答时**必须明确区分**两
 PLAIN_SYSTEM_PROMPT = "你是一个乐于助人的智能助手。请用简体中文，条理清晰地回答用户问题。"
 
 
+# 会话级串行锁：同一会话的并发轮次必须串行，否则两条消息会各自读到相同历史、
+# message_count 读改写竞态、上下文互相看不到。锁按 conversation_id 惰性创建。
+_CONV_LOCKS: dict[int, "asyncio.Lock"] = {}
+
+
+def _conv_lock(conversation_id: int):
+    import asyncio
+
+    lock = _CONV_LOCKS.get(conversation_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _CONV_LOCKS[conversation_id] = lock
+    return lock
+
+
+def release_conv_lock(conversation_id: int) -> None:
+    """会话结束时释放其锁（避免 _CONV_LOCKS 无限增长）。"""
+    _CONV_LOCKS.pop(conversation_id, None)
+
+
+
 def _build_context(chunks: list[RetrievedChunk]) -> tuple[str, list[Citation]]:
     if not chunks:
         return (
@@ -255,6 +276,35 @@ async def stream_answer(
     skill_ids：启用的技能（能力包/工具/集合）。传 None=自动装载本租户全部可用技能，
     传 []=不装技能。技能工具与「提示词」会一并进入 ReAct 链路（与智能体一致）。
     """
+    # 会话级串行：同一会话的并发轮次排队执行，避免历史/计数竞态与上下文串扰。
+    async with _conv_lock(conversation.id):
+        async for evt in _stream_answer_locked(
+            db, ps=ps, conversation=conversation, query=query, top_k=top_k,
+            model_config_id=model_config_id, temperature=temperature, images=images,
+            attachments=attachments, use_retrieval=use_retrieval, use_tools=use_tools,
+            allow_auto_write=allow_auto_write, skill_ids=skill_ids, request=request,
+        ):
+            yield evt
+
+
+async def _stream_answer_locked(
+    db: AsyncSession,
+    *,
+    ps: PrincipalSet,
+    conversation: Conversation,
+    query: str,
+    top_k: int | None = None,
+    model_config_id: int | None = None,
+    temperature: float | None = None,
+    images: list[dict] | None = None,
+    attachments: list[dict] | None = None,
+    use_retrieval: bool = True,
+    use_tools: bool = False,
+    allow_auto_write: bool = False,
+    skill_ids: list[int] | None = None,
+    request=None,
+) -> AsyncIterator[dict]:
+    """stream_answer 的实现体（已在会话锁内调用）。"""
     t0 = time.time()
     # 先取上下文历史（务必在落当前用户消息之前，否则会把本轮算进历史）
     from app.services.context_service import load_context
@@ -270,8 +320,17 @@ async def stream_answer(
         created_at=int(time.time() * 1000),
     )
     db.add(user_msg)
-    conversation.message_count = (conversation.message_count or 0) + 1
+    await db.flush()
+    # 原子自增，避免读改写竞态（即便同会话已串行，也防跨进程/多 worker 场景的脏计数）
+    from sqlalchemy import update as _upd
+
+    await db.execute(
+        _upd(Conversation)
+        .where(Conversation.id == conversation.id)
+        .values(message_count=Conversation.message_count + 1)
+    )
     await db.commit()
+    await db.refresh(conversation)
 
     yield {"type": "meta", "conversation_id": conversation.id}
 
@@ -490,7 +549,6 @@ async def stream_answer(
         created_at=int(time.time() * 1000),
     )
     db.add(asst)
-    conversation.message_count = (conversation.message_count or 0) + 1
     db.add(
         UsageLog(
             tenant_id=ps.tenant_id,
@@ -506,6 +564,14 @@ async def stream_answer(
             success=True,
             created_at=int(time.time() * 1000),
         )
+    )
+    await db.flush()
+    from sqlalchemy import update as _upd2
+
+    await db.execute(
+        _upd2(Conversation)
+        .where(Conversation.id == conversation.id)
+        .values(message_count=Conversation.message_count + 1)
     )
     await db.commit()
     # 异步触发上下文压缩（不阻塞响应）
@@ -551,6 +617,25 @@ async def resume_answer(
     messages 跨请求需重建：system(能力摘要) + 历史 + assistant(tool_calls) + tool(result)。
     续跑仍走 run_react_loop（可继续调用更多工具或最终作答），并把助手消息落库。
     """
+    # 与 stream_answer 共用会话锁：续跑同样改会话历史，须串行。
+    lock_id = action.conversation_id or 0
+    async with _conv_lock(lock_id):
+        async for evt in _resume_answer_locked(
+            db, ps=ps, action=action, tool=tool,
+            tool_result_text=tool_result_text, allow_auto_write=allow_auto_write,
+        ):
+            yield evt
+
+
+async def _resume_answer_locked(
+    db: AsyncSession,
+    *,
+    ps: PrincipalSet,
+    action,
+    tool,
+    tool_result_text: str,
+    allow_auto_write: bool = False,
+) -> AsyncIterator[dict]:
     from app.agents.react import run_react_loop
     from app.agents.tools.registry import registry as _reg
     from app.agents.tools.registry import resolve_admin_pool, resolve_tools

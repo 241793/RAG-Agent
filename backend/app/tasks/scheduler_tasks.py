@@ -190,7 +190,8 @@ async def _trigger_dependents(task_id: int) -> None:
             if did in _RUNNING:
                 continue
             logger.info("scheduled_task_dependent_triggered", upstream=task_id, downstream=did)
-            asyncio.create_task(execute_task(did))
+            from app.tasks.bg import spawn
+            spawn("sched_dep", execute_task(did))
     except Exception:  # noqa: BLE001
         logger.exception("trigger_dependents_failed", task_id=task_id)
 
@@ -401,7 +402,8 @@ async def scheduler_loop(interval_seconds: int = 30) -> None:
                     )
                     if res.rowcount == 1:
                         await db.commit()
-                        asyncio.create_task(execute_task(t.id))
+                        from app.tasks.bg import spawn
+                        spawn("sched_due", execute_task(t.id))
                 await db.commit()
         except Exception:  # noqa: BLE001
             logger.exception("scheduler_loop_error")

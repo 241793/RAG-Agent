@@ -129,7 +129,7 @@ async def test_provider(
     p = await db.get(ModelProvider, provider_id)
     if not p:
         raise NotFoundError("Provider 不存在")
-    drv = _build_driver(p.kind, p.base_url, p.api_key, p.timeout, p.extra_headers)
+    drv = _build_driver(p.kind, p.base_url, p.api_key, p.timeout, p.extra_headers, getattr(p, 'max_retries', 2))
     t0 = time.time()
     try:
         if body.purpose == "embedding":
@@ -181,7 +181,7 @@ async def check_provider_health(
     p = await db.get(ModelProvider, provider_id)
     if not p:
         raise NotFoundError("Provider 不存在")
-    drv = _build_driver(p.kind, p.base_url, p.api_key, p.timeout, p.extra_headers)
+    drv = _build_driver(p.kind, p.base_url, p.api_key, p.timeout, p.extra_headers, getattr(p, 'max_retries', 2))
     t0 = time.time()
     ok = False
     message = ""
@@ -257,7 +257,7 @@ async def list_provider_models(
     p = await db.get(ModelProvider, provider_id)
     if not p:
         raise NotFoundError("Provider 不存在")
-    drv = _build_driver(p.kind, p.base_url, p.api_key, p.timeout, p.extra_headers)
+    drv = _build_driver(p.kind, p.base_url, p.api_key, p.timeout, p.extra_headers, getattr(p, 'max_retries', 2))
     try:
         models = await drv.list_models()
         return {"ok": True, "models": models}

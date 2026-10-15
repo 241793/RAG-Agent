@@ -111,6 +111,19 @@ async def lifespan(app: FastAPI):
         logger.exception("settings_overrides_failed")
     if settings.task_backend == "memory":
         await start_workers(2)
+
+    # HITL 恢复：把「审批通过但未执行完」的卡死动作标记失败（进程重启兜底）
+    try:
+        from app.core.db import AsyncSessionLocal
+        from app.tasks.hitl_recover import recover_stuck_actions
+
+        async with AsyncSessionLocal() as _hdb:
+            n = await recover_stuck_actions(_hdb)
+            if n:
+                logger.warning("hitl_recovered_on_startup", count=n)
+    except Exception:  # noqa: BLE001
+        logger.exception("hitl_recover_failed")
+
     # 后台产物过期清理循环
     import asyncio
 
@@ -184,6 +197,13 @@ async def lifespan(app: FastAPI):
         await mcp_manager.stop_all()
     except Exception:  # noqa: BLE001
         pass
+    # 取消并等待在途后台任务（工作流/评测/调度/事件等），防半写与资源泄漏
+    from app.tasks.bg import shutdown as bg_shutdown
+
+    try:
+        await bg_shutdown()
+    except Exception:  # noqa: BLE001
+        pass
     if settings.task_backend == "memory":
         await stop_workers()
     logger.info("app_stopped")
@@ -219,11 +239,39 @@ app.include_router(openai_router)
 
 @app.get("/health")
 async def health() -> dict:
+    """存活 + 就绪探活：真实探测 DB 连通性与关键子系统状态（供运维/负载均衡使用）。"""
+    checks: dict = {}
+    overall = "ok"
+
+    # DB 连通性（真实执行一次轻查询）
+    try:
+        from sqlalchemy import text as _text
+
+        from app.core.db import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as _db:
+            await _db.execute(_text("SELECT 1"))
+        checks["db"] = "ok"
+    except Exception as e:  # noqa: BLE001
+        checks["db"] = f"fail: {str(e)[:120]}"
+        overall = "degraded"
+
+    # 后台任务积压
+    try:
+        from app.tasks.bg import pending_count
+
+        checks["bg_tasks"] = pending_count()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 任务队列（memory 后端）
+    checks["task_backend"] = settings.task_backend
+
     return {
-        "status": "ok",
-        "db": settings.database_url.split("://")[0],
+        "status": overall,
+        "db_driver": settings.database_url.split("://")[0],
         "vector_backend": settings.resolved_vector_backend,
-        "task_backend": settings.task_backend,
+        "checks": checks,
     }
 
 

@@ -37,8 +37,24 @@ async def cleanup_expired_artifacts(db: AsyncSession) -> int:
     return n
 
 
+async def cleanup_retrieval_misses(db: AsyncSession, *, keep_days: int = 30) -> int:
+    """清理旧的未命中记录（retrieval_miss），防无限增长。返回删除条数。"""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import delete as _del
+
+    from app.models import RetrievalMiss
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=keep_days)
+    res = await db.execute(_del(RetrievalMiss).where(RetrievalMiss.created_at < cutoff))
+    if res.rowcount:
+        await db.commit()
+        logger.info("retrieval_misses_cleaned", count=res.rowcount)
+    return res.rowcount or 0
+
+
 async def periodic_cleanup(interval_seconds: int = 6 * 3600) -> None:
-    """后台循环：定期清理过期产物（供 lifespan 启动）。"""
+    """后台循环：定期清理过期产物 + 旧未命中记录（供 lifespan 启动）。"""
     import asyncio
 
     from app.core.db import AsyncSessionLocal
@@ -48,5 +64,6 @@ async def periodic_cleanup(interval_seconds: int = 6 * 3600) -> None:
         try:
             async with AsyncSessionLocal() as db:
                 await cleanup_expired_artifacts(db)
+                await cleanup_retrieval_misses(db)
         except Exception:  # noqa: BLE001
             logger.exception("artifact_cleanup_failed")

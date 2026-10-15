@@ -148,7 +148,8 @@ async def run_now(
     from app.tasks.scheduler_tasks import execute_task
 
     t = await _get(db, task_id, user.tenant_id)
-    asyncio.create_task(execute_task(t.id, manual=True))
+    from app.tasks.bg import spawn
+    spawn("sched_run", execute_task(t.id, manual=True))
     return {"message": "已触发执行"}
 
 

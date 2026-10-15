@@ -389,7 +389,8 @@ async def send_message(
         import asyncio
 
         for bid in bot_ids:
-            asyncio.create_task(maybe_trigger_bots(room.id, bid, content, user.id))
+            from app.tasks.bg import spawn
+            spawn("room_bots", maybe_trigger_bots(room.id, bid, content, user.id))
     return out
 
 

@@ -114,18 +114,27 @@ async def upload_document(
 @router.get("", response_model=list[DocumentOut])
 async def list_documents(
     kb_id: int,
+    before_id: int | None = None,
+    limit: int | None = None,
     user: User = Depends(require_permission("doc:read")),
     db: AsyncSession = Depends(get_db),
 ) -> list[Document]:
+    """列出某知识库的文档（按 id 倒序）。
+
+    分页：传 limit（+可选 before_id）时只返回该页；不传则返回全部（兼容文档管理页的
+    全量展示/批量操作场景）。
+    """
     kb = await db.get(KnowledgeBase, kb_id)
     if not kb or kb.tenant_id != user.tenant_id:
         raise NotFoundError("知识库不存在")
     await _ensure_read(db, user, kb)
-    rows = (
-        await db.execute(
-            select(Document).where(Document.kb_id == kb_id).order_by(Document.id.desc())
-        )
-    ).scalars().all()
+    stmt = select(Document).where(Document.kb_id == kb_id)
+    if before_id:
+        stmt = stmt.where(Document.id < before_id)
+    stmt = stmt.order_by(Document.id.desc())
+    if limit is not None:
+        stmt = stmt.limit(max(1, min(limit, 500)))
+    rows = (await db.execute(stmt)).scalars().all()
     return list(rows)
 
 

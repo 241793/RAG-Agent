@@ -24,11 +24,12 @@ from app.providers.base import (
     ToolCall,
     ToolCallDelta,
 )
+from app.providers.drivers._retry import RetryMixin
 
 ANTHROPI_VERSION = "2023-06-01"
 
 
-class AnthropiDriver:
+class AnthropiDriver(RetryMixin):
     def __init__(
         self,
         *,
@@ -36,11 +37,13 @@ class AnthropiDriver:
         api_key: str | None = None,
         timeout: int = 60,
         extra_headers: dict | None = None,
+        max_retries: int = 2,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or ""
         self.timeout = timeout
         self.extra_headers = extra_headers or {}
+        self.max_retries = max(0, int(max_retries))
 
     def _headers(self) -> dict:
         return {
@@ -143,8 +146,9 @@ class AnthropiDriver:
         if stream:
             return self._stream_chat(payload)
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(f"{self.base_url}/v1/messages", json=payload, headers=self._headers())
-            resp.raise_for_status()
+            resp = await self._request_with_retry(
+                client, "POST", f"{self.base_url}/v1/messages", json=payload, headers=self._headers()
+            )
             data = resp.json()
         blocks = data.get("content", [])
         text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")

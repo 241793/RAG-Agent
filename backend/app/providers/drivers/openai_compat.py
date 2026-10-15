@@ -14,9 +14,10 @@ from app.providers.base import (
     ToolCall,
     ToolCallDelta,
 )
+from app.providers.drivers._retry import RetryMixin
 
 
-class OpenAICompatibleDriver:
+class OpenAICompatibleDriver(RetryMixin):
     def __init__(
         self,
         *,
@@ -24,17 +25,20 @@ class OpenAICompatibleDriver:
         api_key: str | None = None,
         timeout: int = 60,
         extra_headers: dict | None = None,
+        max_retries: int = 2,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or "sk-noauth"
         self.timeout = timeout
         self.extra_headers = extra_headers or {}
+        self.max_retries = max(0, int(max_retries))
 
     def _headers(self) -> dict:
         h = {"Content-Type": "application/json", **self.extra_headers}
         if self.api_key:
             h["Authorization"] = f"Bearer {self.api_key}"
         return h
+
 
     @staticmethod
     def _serialize_messages(messages: list[ChatMessage]) -> list[dict]:
@@ -91,10 +95,9 @@ class OpenAICompatibleDriver:
         if stream:
             return self._stream_chat(payload)
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions", json=payload, headers=self._headers()
+            resp = await self._request_with_retry(
+                client, "POST", f"{self.base_url}/chat/completions", json=payload, headers=self._headers()
             )
-            resp.raise_for_status()
             data = resp.json()
         choice = data["choices"][0]
         message = choice.get("message", {})
@@ -182,12 +185,10 @@ class OpenAICompatibleDriver:
             for i in range(0, len(texts), batch_size):
                 batch = texts[i : i + batch_size]
                 try:
-                    resp = await client.post(
-                        f"{self.base_url}/embeddings",
-                        json={"model": model, "input": batch},
-                        headers=self._headers(),
+                    resp = await self._request_with_retry(
+                        client, "POST", f"{self.base_url}/embeddings",
+                        json={"model": model, "input": batch}, headers=self._headers(),
                     )
-                    resp.raise_for_status()
                 except httpx.HTTPStatusError as e:
                     from app.core.errors import UpstreamError
 
@@ -212,12 +213,11 @@ class OpenAICompatibleDriver:
     # ---- Rerank（部分兼容服务提供 /rerank）----
     async def rerank(self, query: str, docs: list[str], *, model: str, top_n: int) -> list[tuple[int, float]]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(
-                f"{self.base_url}/rerank",
+            resp = await self._request_with_retry(
+                client, "POST", f"{self.base_url}/rerank",
                 json={"model": model, "query": query, "documents": docs, "top_n": top_n},
                 headers=self._headers(),
             )
-            resp.raise_for_status()
             data = resp.json()
         results = data.get("results") or data.get("data") or []
         return [(r["index"], r.get("relevance_score", r.get("score", 0.0))) for r in results]

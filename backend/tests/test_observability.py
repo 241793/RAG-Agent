@@ -63,6 +63,7 @@ async def test_embedding_driver_raises_upstream_error(monkeypatch):
     class FakeResp:
         status_code = 404
         text = "Not Found"
+        request = httpx.Request("POST", "http://x")
         def raise_for_status(self):
             raise httpx.HTTPStatusError("404", request=httpx.Request("POST", "http://x"), response=self)
 
@@ -70,6 +71,7 @@ async def test_embedding_driver_raises_upstream_error(monkeypatch):
         def __init__(self, *a, **k): pass
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
+        async def request(self, *a, **k): return FakeResp()
         async def post(self, *a, **k): return FakeResp()
 
     monkeypatch.setattr(oc.httpx, "AsyncClient", FakeClient)

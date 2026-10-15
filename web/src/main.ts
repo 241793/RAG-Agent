@@ -1,6 +1,6 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import * as ElIcons from '@element-plus/icons-vue'
 import 'element-plus/dist/index.css'
@@ -16,4 +16,12 @@ app.use(ElementPlus, { locale: zhCn })
 for (const [key, comp] of Object.entries(ElIcons)) {
   app.component(key, comp as any)
 }
+
+// 全局错误边界：组件渲染/生命周期里未捕获的异常不至于白屏，统一提示并记录。
+app.config.errorHandler = (err, _instance, info) => {
+  console.error('[app error]', info, err)
+  const msg = err instanceof Error ? err.message : String(err)
+  ElMessage.error(`页面出现异常（${info}）：${msg.slice(0, 120)}`)
+}
+
 app.mount('#app')

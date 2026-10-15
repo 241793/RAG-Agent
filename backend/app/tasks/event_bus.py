@@ -50,7 +50,8 @@ async def publish(event_name: str, *, tenant_id: int, payload: dict | None = Non
                     t.inputs = {**(t.inputs or {}), "_event": event_name, **payload}
                     db.add(t)
                 dispatched += 1
-                asyncio.create_task(execute_task(t.id))
+                from app.tasks.bg import spawn
+                spawn("event_run", execute_task(t.id))
             if dispatched:
                 await db.commit()
     except Exception:  # noqa: BLE001

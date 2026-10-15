@@ -290,10 +290,12 @@ export const docApi = {
 // ---------------- 智能问答 ----------------
 
 export const chatApi = {
-  conversations: () => http.get<Conversation[]>('/chat/conversations').then((r) => r.data),
+  conversations: (params?: { before_id?: number; limit?: number }) =>
+    http.get<Conversation[]>('/chat/conversations', { params }).then((r) => r.data),
   createConversation: (kbIds: number[], title?: string) =>
     http.post<Conversation>('/chat/conversations', { kb_ids: kbIds, title }).then((r) => r.data),
-  messages: (convId: number) => http.get<Message[]>(`/chat/conversations/${convId}/messages`).then((r) => r.data),
+  messages: (convId: number, params?: { before_id?: number; limit?: number }) =>
+    http.get<Message[]>(`/chat/conversations/${convId}/messages`, { params }).then((r) => r.data),
   rename: (convId: number, title: string) =>
     http.patch(`/chat/conversations/${convId}`, { title }).then((r) => r.data),
   setModel: (convId: number, modelConfigId: number | null) =>

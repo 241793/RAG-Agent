@@ -98,7 +98,9 @@
       <main class="content">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
-            <component :is="Component" />
+            <ErrorBoundary>
+              <component :is="Component" />
+            </ErrorBoundary>
           </transition>
         </router-view>
       </main>
@@ -117,6 +119,7 @@ import { ROUTE_PERMS } from '@/router/routeMeta'
 import { useAuthStore } from '@/stores/auth'
 import NotificationBell from '@/components/NotificationBell.vue'
 import ChatDock from '@/components/ChatDock.vue'
+import ErrorBoundary from '@/components/ErrorBoundary.vue'
 
 const router = useRouter()
 const route = useRoute()

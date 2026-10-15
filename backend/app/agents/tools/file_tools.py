@@ -161,6 +161,14 @@ def _save_artifact(ctx: ToolContext, filename: str, data: bytes, mime: str):
 
     storage = get_storage()
     file_key, chash = storage.save(tenant_id=ctx.tenant_id, filename=filename, data=data)
+    # 默认 TTL：未显式设置时按 settings.artifact_ttl_days 计（0=永不过期），由后台清理回收
+    import time as _t
+
+    from app.core.config import settings
+
+    expires_at = None
+    if getattr(settings, "artifact_ttl_days", 0) > 0:
+        expires_at = int((_t.time() + settings.artifact_ttl_days * 86400) * 1000)
     art = Artifact(
         tenant_id=ctx.tenant_id,
         user_id=ctx.user_id,
@@ -173,6 +181,7 @@ def _save_artifact(ctx: ToolContext, filename: str, data: bytes, mime: str):
         size=len(data),
         source="generated",
         content_hash=chash,
+        expires_at=expires_at,
     )
     ctx.db.add(art)
     return file_key, art, chash

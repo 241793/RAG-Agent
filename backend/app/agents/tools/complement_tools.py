@@ -637,7 +637,8 @@ class ManageEvalTool(WriteToolMixin):
                     except Exception:  # noqa: BLE001
                         pass
 
-            asyncio.create_task(_bg(run.id, ctx.tenant_id))
+            from app.tasks.bg import spawn
+            spawn("eval_run", _bg(run.id, ctx.tenant_id))
             return ToolResult(content=f"已启动评测（运行 #{run.id}，{qn} 题），稍后用 get_run 查看结果",
                               data={"run_id": run.id})
 

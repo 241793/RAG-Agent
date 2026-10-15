@@ -153,6 +153,10 @@
             </div>
           </div>
 
+          <div v-if="hasMoreHistory[curKey]" class="load-earlier">
+            <el-button text :loading="loadingEarlier" @click="loadEarlier">加载更早的消息</el-button>
+          </div>
+
           <div
             v-for="(m, i) in msgs"
             :id="`msg-${i}`"
@@ -333,7 +337,7 @@ import PendingAttachmentProgress from '@/components/PendingAttachmentProgress.vu
 import {
   chatApi, confirmToolAction, docApi, kbApi, providerApi, streamChat, usageApi,
   type Attachment, type ArtifactRef, type Citation, type Conversation, type KB,
-  type ModelConfig, type PendingActionEvt, type StreamHandlers, type UsageTotals,
+  type Message, type ModelConfig, type PendingActionEvt, type StreamHandlers, type UsageTotals,
 } from '@/api'
 import { errMsg } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
@@ -509,24 +513,10 @@ async function openConversation(id: number) {
   const k = String(id)
   if (!streamingKeys.value.has(k)) {
     try {
-      const ms = await chatApi.messages(id)
-      convMsgs.value = {
-        ...convMsgs.value,
-        [k]: ms
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({
-            id: m.id,
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-            reasoning: m.reasoning,
-            citations: m.citations,
-            attachments: m.attachments,
-            artifacts: m.artifacts,
-            feedback: m.feedback,
-            usage: m.usage,
-            model: m.model,
-          })),
-      }
+      // 只取最近一页（长会话不全量拉）；更早的历史用「加载更早」按钮增量取
+      const ms = await chatApi.messages(id, { limit: PAGE_SIZE })
+      convMsgs.value = { ...convMsgs.value, [k]: mapMessages(ms) }
+      hasMoreHistory.value = { ...hasMoreHistory.value, [k]: ms.length >= PAGE_SIZE }
     } catch (e) {
       ElMessage.error(errMsg(e))
     }
@@ -535,6 +525,50 @@ async function openConversation(id: number) {
   if (c?.model_config_id) modelId.value = c.model_config_id
   convSummary.value = c?.summary || null
   scrollToBottom()
+}
+
+const PAGE_SIZE = 50
+const hasMoreHistory = ref<Record<string, boolean>>({})
+const loadingEarlier = ref(false)
+
+function mapMessages(ms: Message[]) {
+  return ms
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({
+      id: m.id,
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+      reasoning: m.reasoning,
+      citations: m.citations,
+      attachments: m.attachments,
+      artifacts: m.artifacts,
+      feedback: m.feedback,
+      usage: m.usage,
+      model: m.model,
+    }))
+}
+
+/** 加载更早的历史消息，前置到当前列表头部。 */
+async function loadEarlier() {
+  const id = convId.value
+  if (!id) return
+  const k = String(id)
+  const cur = convMsgs.value[k] || []
+  const firstId = cur.find((m) => m.id)?.id
+  if (!firstId) return
+  loadingEarlier.value = true
+  try {
+    const older = await chatApi.messages(id, { before_id: firstId, limit: PAGE_SIZE })
+    const mapped = mapMessages(older)
+    if (mapped.length) {
+      convMsgs.value = { ...convMsgs.value, [k]: [...mapped, ...cur] }
+    }
+    hasMoreHistory.value = { ...hasMoreHistory.value, [k]: older.length >= PAGE_SIZE }
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    loadingEarlier.value = false
+  }
 }
 
 function newConversation() {
@@ -972,6 +1006,7 @@ onMounted(async () => {
 
 .msg-area { position: relative; flex: 1; min-height: 0; display: flex; }
 .msg-scroll { flex: 1; min-width: 0; min-height: 0; padding: 18px 20px; }
+.load-earlier { display: flex; justify-content: center; margin-bottom: 8px; }
 
 .chat-empty { text-align: center; padding: 56px 20px; display: flex; flex-direction: column; align-items: center; }
 .ce-logo {
