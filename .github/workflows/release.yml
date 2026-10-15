@@ -1,0 +1,200 @@
+name: Release
+
+# 推 v* tag 时自动构建三产物并发布 Release：
+#   1) Docker 镜像 → GHCR
+#   2) 桌面版 Windows 包（Electron + PyInstaller）→ zip
+#   3) 源码包 → zip
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要构建的 tag（如 v1.0.0）"
+        required: true
+
+permissions:
+  contents: write   # 创建 Release
+  packages: write   # 推 GHCR
+
+jobs:
+  # ---------- 前置校验：tag 必须与代码里的版本号一致 ----------
+  version-check:
+    name: 版本号一致性校验
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: 比对 tag 与 config.py:app_version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          CODE_VER=$(grep -oP 'app_version:\s*str\s*=\s*"\K[^"]+' backend/app/core/config.py)
+          echo "tag=$TAG  代码版本=$CODE_VER"
+          if [ "v$CODE_VER" != "$TAG" ]; then
+            echo "::error::版本不一致：tag 是 $TAG，但 backend/app/core/config.py 的 app_version 是 $CODE_VER"
+            exit 1
+          fi
+          echo "version=$CODE_VER" >> "$GITHUB_OUTPUT"
+
+  # ---------- 产物 1：Docker 镜像 → GHCR ----------
+  docker:
+    name: 构建并推送 Docker 镜像
+    needs: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: 计算小写镜像名（GHCR 要求全小写）
+        id: repo
+        run: echo "image=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.repo.outputs.image }}:${{ needs.version-check.outputs.version }}
+            ${{ steps.repo.outputs.image }}:latest
+          build-args: |
+            INSTALL_PG=true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------- 产物 2：桌面版 Windows 包 ----------
+  desktop:
+    name: 构建桌面版 (Windows)
+    needs: version-check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: 安装 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # 关键顺序：PyInstaller 的 spec 依赖 web/dist，必须先构建前端，
+      # 否则会打出一个没有界面的 exe（spec 找不到 dist 只 WARN 不报错）。
+      - name: 构建前端
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: 打包后端 (PyInstaller)
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+          pyinstaller build_backend.spec --noconfirm
+
+      - name: 打包桌面版 (electron-builder)
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run dist
+
+      - name: 压缩产物
+        shell: pwsh
+        env:
+          VER: ${{ needs.version-check.outputs.version }}
+        run: |
+          $zip = "RAG-knowledgebase-v$env:VER-win-x64.zip"
+          Compress-Archive -Path desktop/release/win-unpacked/* -DestinationPath $zip -Force
+          echo "ZIP=$zip" >> $env:GITHUB_ENV
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-win-x64
+          path: ${{ env.ZIP }}
+          if-no-files-found: error
+
+  # ---------- 产物 3：源码包 ----------
+  source:
+    name: 打包源码
+    needs: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: git archive 打源码 zip
+        env:
+          VER: ${{ needs.version-check.outputs.version }}
+        run: |
+          git archive --format=zip -o "RAG-knowledgebase-v${VER}-src.zip" HEAD
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-zip
+          path: RAG-knowledgebase-v*-src.zip
+          if-no-files-found: error
+
+  # ---------- 汇总：创建 Release 并挂载产物 ----------
+  release:
+    name: 发布 GitHub Release
+    needs: [version-check, desktop, source]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version-check.outputs.version }}
+          name: v${{ needs.version-check.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/desktop-win-x64/*.zip
+            dist/source-zip/*.zip
+          body: |
+            ## 交付物
+
+            - **Docker 镜像**：`ghcr.io/${{ github.repository }}:${{ needs.version-check.outputs.version }}`
+              ```bash
+              docker pull ghcr.io/${{ github.repository }}:${{ needs.version-check.outputs.version }}
+              docker run -d -p 6677:6677 -v "$PWD/data:/app/backend/data" \
+                ghcr.io/${{ github.repository }}:${{ needs.version-check.outputs.version }}
+              ```
+              首次登录 `admin / admin123`，访问 http://127.0.0.1:6677
+            - **桌面版**：解压 `*-win-x64.zip`，运行 `RAG知识库.exe`
+            - **源码包**：`*-src.zip`

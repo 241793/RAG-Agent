@@ -1,0 +1,33 @@
+# 版本控制 / CI
+.git
+.github
+.claud
+.e2e
+
+# 文档与本地脚本
+docs
+scripts
+*.log
+backend_run.log
+
+# Python 虚拟环境与字节码
+backend/.venv
+.venv
+venv
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+
+# 前端依赖与构建产物（镜像内会重新构建）
+**/node_modules
+**/dist
+web/dist
+
+# 桌面打包产物
+desktop/release
+
+# 本地数据（库/上传文件/技能包）——绝不进镜像，运行时用 volume
+data
+backend/data
+*.db
+*.sqlite3

@@ -133,6 +133,54 @@ Vite 跑在 5173 并把 `/api` 代理到 6677。改完后 `npm run build` 让后
 
 ---
 
+## 构建与部署
+
+### Docker（服务器 / 内网部署）
+
+```bash
+# SQLite，零外部依赖
+docker compose up -d --build
+
+# 应用 + PostgreSQL(pgvector)
+docker compose --profile pg up -d --build      # 并把 INSTALL_PG 设为 true
+
+# 或直接构建镜像
+docker build -t rag-knowledgebase:1.0.0 .
+docker run -d -p 6677:6677 -v "$PWD/data:/app/backend/data" rag-knowledgebase:1.0.0
+```
+
+数据（SQLite 库 + 上传文件 + 技能包）统一落在容器内 `/app/backend/data`，已挂 `VOLUME`，映射出来后**重建容器不丢数据**。健康检查走 `/health`（真实探 DB 连通性）。
+
+### 桌面版（终端用户 / Windows）
+
+```bash
+# 1. 先构建前端（PyInstaller 依赖 web/dist，缺了会打出无界面的 exe）
+cd web && npm install && npm run build
+
+# 2. 打包后端（onedir）
+cd ../backend && pyinstaller build_backend.spec --noconfirm
+
+# 3. 打包 Electron 桌面版
+cd ../desktop && npm install && npm run dist
+# 产物：desktop/release/win-unpacked/RAG知识库.exe
+# 单文件便携版：npm run dist:portable
+```
+
+桌面版数据写在 `%APPDATA%/RAG知识库`，不污染安装目录。
+
+### CI / 自动发布（GitHub Actions）
+
+| 工作流 | 触发 | 做什么 |
+|---|---|---|
+| `.github/workflows/ci.yml` | push main / PR | 后端 `pytest` + 前端 `vue-tsc` 类型检查与构建 |
+| `.github/workflows/release.yml` | 推 `v*` tag / 手动 | 校验版本号 → 推 Docker 镜像到 GHCR → 打桌面 exe zip + 源码 zip → 发 GitHub Release |
+
+发版流程：改 `backend/app/core/config.py` 的 `app_version`（及 `pyproject.toml` / `package.json`）→ 提交 → `git tag -a v1.0.0 -m "..."` → `git push origin v1.0.0`。
+
+> 首次推送到 GHCR 的包默认是 **private**，需在 GitHub Packages 页面手动改为 public；再次推送沿用该可见性。
+
+---
+
 ## 配置模型（关键）
 
 首次打开后，进入「**模型管理**」添加 Provider 与模型配置。支持以下类型：

@@ -1,0 +1,62 @@
+# Docker Compose：一键起服务（默认 SQLite；PG 为可选 profile）
+#
+#   仅跑应用（SQLite，零外部依赖）：
+#     docker compose up -d --build
+#   应用 + PostgreSQL(pgvector)：
+#     docker compose --profile pg up -d --build
+#
+# 访问 http://127.0.0.1:6677 ，首次登录 admin / admin123
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # 用 pg profile 时改为 "true"，镜像内会装 asyncpg + pgvector
+      args:
+        INSTALL_PG: ${INSTALL_PG:-false}
+    image: rag-knowledgebase:latest
+    container_name: rag-app
+    restart: unless-stopped
+    ports:
+      - "6677:6677"
+    environment:
+      # 默认 SQLite：/app/backend/data 由 volume 持久化
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/backend/data/rag.db}
+      VECTOR_BACKEND: ${VECTOR_BACKEND:-auto}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      SECRET_KEY: ${SECRET_KEY:-change-me-to-a-long-random-string-in-production}
+      # 用 pg profile 时把下面两行取消注释（或写进 .env）
+      # DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/rag
+      # VECTOR_BACKEND: pgvector
+    volumes:
+      - ./data:/app/backend/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:6677/health',timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # ---- 可选：PostgreSQL + pgvector（用 --profile pg 启用）----
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: rag-db
+    profiles: ["pg"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: rag
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
