@@ -67,6 +67,11 @@ FIELD_META: dict[str, dict[str, Any]] = {
     "github_token": {"label": "GitHub API Token（技能搜索用）", "group": "retrieval", "kind": "secret",
                      "help": "配置后技能搜索配额由 10 次/分钟升至 30 次/分钟；只读公开仓库无需勾选任何 scope"},
     "vector_max_scan": {"label": "向量扫描上限（0=不限）", "group": "retrieval", "kind": "int"},
+    # ---- 在线更新 ----
+    "update_check_enabled": {"label": "允许检查更新", "group": "advanced", "kind": "bool",
+                             "help": "关闭后「关于/更新」不再请求 GitHub Release"},
+    "update_repo": {"label": "更新来源仓库（owner/repo）", "group": "advanced", "kind": "str",
+                    "help": "留空使用内置默认；私有仓库需先配置 GitHub Token"},
     # ---- 内容安全 ----
     "security_guard_enabled": {"label": "启用内容安全检测", "group": "security", "kind": "bool"},
     "security_guard_block_threshold": {"label": "拦截阈值", "group": "security", "kind": "int"},

@@ -26,6 +26,7 @@ from app.core.errors import NotFoundError, ValidationError
 from app.middleware.auth_dep import require_permission
 from app.models import User
 from app.services.audit_service import audited
+from app.services import update_service
 
 router = APIRouter(prefix="/system", tags=["system_ops"])
 
@@ -143,6 +144,8 @@ async def system_info(
 
     return {
         "db_kind": kind,
+        "version": settings.app_version,
+        "deployment": update_service.detect_deployment(),
         "db_url_masked": _mask_db_url(url),
         "db_file": str(sp) if sp else None,
         "db_file_size": _file_size(sp) if sp else 0,

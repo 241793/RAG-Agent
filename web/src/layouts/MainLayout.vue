@@ -41,6 +41,16 @@
       </el-scrollbar>
 
       <div class="sider-foot">
+        <div
+          v-show="!collapsed"
+          class="ver-chip"
+          :title="`当前版本 v${appVersion}${deploymentLabel ? ' · ' + deploymentLabel : ''}（点击检查更新）`"
+          @click="showAbout = true"
+        >
+          <span class="ver-dot" :class="{ has: hasUpdate }" />
+          <span class="ver-text">v{{ appVersion }}</span>
+          <span v-if="hasUpdate" class="ver-new">有新版本</span>
+        </div>
         <el-button text class="collapse-btn" @click="collapsed = !collapsed">
           <el-icon><component :is="collapsed ? 'Expand' : 'Fold'" /></el-icon>
           <span v-show="!collapsed" style="margin-left: 8px">收起侧边栏</span>
@@ -107,6 +117,12 @@
     </div>
 
     <ChatDock v-if="route.path !== '/chat-room'" />
+
+    <AboutUpdateDialog
+      v-model="showAbout"
+      :current-version="appVersion"
+      :deployment="deployment"
+    />
   </div>
 </template>
 
@@ -117,9 +133,11 @@ import { ArrowRight, ArrowDown, Reading } from '@element-plus/icons-vue'
 import { NAV, type NavGroup, type NavItem } from '@/config/nav'
 import { ROUTE_PERMS } from '@/router/routeMeta'
 import { useAuthStore } from '@/stores/auth'
+import { systemOpsApi, updateApi } from '@/api'
 import NotificationBell from '@/components/NotificationBell.vue'
 import ChatDock from '@/components/ChatDock.vue'
 import ErrorBoundary from '@/components/ErrorBoundary.vue'
+import AboutUpdateDialog from '@/components/AboutUpdateDialog.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -128,6 +146,33 @@ const auth = useAuthStore()
 const collapsed = ref(false)
 const user = computed(() => auth.user)
 const avatarStyle = 'background: linear-gradient(135deg,#2563eb,#3b82f6); font-weight:600'
+
+// ---- 版本 / 检查更新 ----
+const appVersion = ref('')
+const deployment = ref('')
+const hasUpdate = ref(false)
+const showAbout = ref(false)
+const deploymentLabel = computed(
+  () => ({ desktop: '桌面版', docker: 'Docker', source: '源码运行' })[deployment.value] || '',
+)
+
+onMounted(async () => {
+  if (!auth.user) auth.fetchMe()
+  // 版本号与更新状态：无 system:manage 权限时接口会 403，静默忽略即可
+  try {
+    const info = await systemOpsApi.info()
+    appVersion.value = info.version
+    deployment.value = info.deployment
+  } catch {
+    /* 未授权或接口不可用：不显示版本 */
+  }
+  try {
+    const r = await updateApi.check()
+    hasUpdate.value = !!r.update_available
+  } catch {
+    /* 后台静默检查失败，不打扰用户 */
+  }
+})
 
 const permOf = (i: NavItem) => ROUTE_PERMS[i.key] || i.perm
 const canSee = (i: NavItem) => auth.hasPermission(permOf(i) as string | undefined)
@@ -178,12 +223,7 @@ function onUserCmd(cmd: string) {
   } else if (cmd === 'guide') {
     router.push('/guide')
   }
-}
-
-onMounted(() => {
-  if (!auth.user) auth.fetchMe()
-})
-</script>
+}</script>
 
 <style scoped>
 .app-shell {
@@ -240,6 +280,35 @@ onMounted(() => {
   font-size: 13px;
 }
 .collapse-btn:hover { background: var(--bg-muted); color: var(--text-title); }
+
+/* 版本 chip（点击打开「关于/更新」） */
+.ver-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px 7px;
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+.ver-chip:hover { background: var(--bg-muted); color: var(--text-title); }
+.ver-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex-shrink: 0;
+}
+.ver-dot.has { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16); }
+.ver-text { font-variant-numeric: tabular-nums; }
+.ver-new {
+  margin-left: auto;
+  color: #f59e0b;
+  font-size: 11px;
+  font-weight: 600;
+}
 
 /* ---- 主区 ---- */
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }

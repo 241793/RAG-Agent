@@ -126,6 +126,9 @@ class Settings(BaseSettings):
     provider_health_interval_min: int = 30  # Provider 健康检查周期（分钟，0=关闭）
     inject_capabilities_default: bool = True  # 向 AI 注入「平台能力 + 账号权限」摘要
     github_token: str = ""  # 搜索技能用（GitHub API Token）；配置后 search 限流 10→30 次/分钟
+    # 在线更新检查
+    update_check_enabled: bool = True   # 是否允许「检查更新」
+    update_repo: str = "241793/RAG-Agent"  # 更新来源仓库（owner/repo，需公开或配 github_token）
     # 检索质量增强
     query_rewrite_enabled: bool = True   # 多轮追问：结合历史改写检索 query
     mmr_enabled: bool = True             # 融合后做 MMR 去冗余（多样性）

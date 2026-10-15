@@ -34,6 +34,7 @@ from app.api.v1 import (
     system,
     system_ops,
     tools,
+    update,
     usage,
     webhooks,
     workflow,
@@ -75,3 +76,4 @@ api_router.include_router(webhooks.router)
 api_router.include_router(channels.router)
 api_router.include_router(system.router)
 api_router.include_router(system_ops.router)
+api_router.include_router(update.router)

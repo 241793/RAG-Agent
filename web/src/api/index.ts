@@ -1209,8 +1209,36 @@ export const settingsApi = {
   restart: () => http.post<{ message: string }>('/system/settings/restart').then((r) => r.data),
 }
 
+export interface UpdateAsset { name: string; size: number; digest?: string | null; url: string }
+export interface UpdateCheckResult {
+  ok: boolean
+  current: string
+  latest?: string | null
+  tag?: string
+  update_available: boolean
+  prerelease?: boolean
+  published_at?: string | null
+  notes?: string
+  html_url?: string | null
+  deployment: string
+  repo?: string
+  releases_url?: string
+  can_self_update?: boolean
+  asset?: UpdateAsset | null
+  hint?: string
+  cached?: boolean
+  disabled?: boolean
+  error?: string
+}
+export const updateApi = {
+  check: (force = false) =>
+    http.get<UpdateCheckResult>('/system/update/check', { params: { force } }).then((r) => r.data),
+}
+
 export interface SystemInfo {
   db_kind: string
+  version: string
+  deployment: string
   db_url_masked: string
   db_file?: string | null
   db_file_size: number
