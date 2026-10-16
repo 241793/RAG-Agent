@@ -2,6 +2,12 @@
  * 侧边栏导航配置（分组 + 叶子项）。
  * icon 用 Element Plus 图标的全局注册名，模板里通过 <component :is="icon" /> 渲染。
  * perm 缺省时由 router/routeMeta.ts 的路由表兜底。
+ *
+ * 组织方式：顶层放高频入口（工作台/问答/聊天/知识库），其余按**功能域**分组：
+ *   业务应用（面向业务同学的日常事务）
+ *   智能体（AI 能力本身的配置与运行）
+ *   渠道与集成（外部系统的接入与通知）
+ *   高级/开发者、组织权限、系统设置、安全与审计
  */
 export interface NavItem {
   key: string
@@ -19,12 +25,21 @@ export interface NavGroup {
 
 export const NAV: (NavItem | NavGroup)[] = [
   { key: '/dashboard', icon: 'Odometer', label: '工作台', tip: '概览、趋势与快捷入口' },
-  { key: '/guide', icon: 'Reading', label: '使用文档', tip: '各界面功能、使用方法与 AI 配合说明' },
   { key: '/chat', icon: 'ChatDotRound', label: '智能问答', tip: '向知识库提问，支持引用溯源、多模型、图片/文件' },
   { key: '/chat-room', icon: 'ChatLineSquare', label: '企业聊天', tip: '全员大群 / 群聊 / 私聊，支持 @机器人、附件、撤回置顶' },
   { key: '/kb', icon: 'Collection', label: '知识库', tip: '上传 / 录入资料，构建可检索的知识' },
-  { key: '/service-tickets', icon: 'Headset', label: '客服工单', perm: 'service:read', tip: '处理外部渠道进来的客户会话与工单' },
-  { key: '/records', icon: 'Document', label: '智能录单', perm: 'record:read', tip: '用 AI 从文本中抽取结构化成表单数据' },
+  {
+    key: 'g-biz',
+    icon: 'Briefcase',
+    label: '业务应用',
+    children: [
+      { key: '/service-tickets', icon: 'Headset', label: '客服工单', perm: 'service:read', tip: '处理外部渠道进来的客户会话与工单' },
+      { key: '/records', icon: 'Document', label: '智能录单', perm: 'record:read', tip: '用 AI 从文本中抽取结构化成表单数据' },
+      { key: '/todo', icon: 'Calendar', label: '待办日程', tip: '待办事项与日程提醒' },
+      { key: '/approvals', icon: 'Stamp', label: '审批中心', perm: 'workflow:read', tip: 'AI 发起写操作时的待人工确认项' },
+      { key: '/mail', icon: 'Message', label: '邮件', tip: '个人邮箱收发，AI 可代管' },
+    ],
+  },
   {
     key: 'g-agent',
     icon: 'Cpu',
@@ -34,14 +49,22 @@ export const NAV: (NavItem | NavGroup)[] = [
       { key: '/skills', icon: 'Grid', label: '技能', perm: 'skill:read' },
       { key: '/admin/tools', icon: 'Tools', label: '工具', perm: 'tool:read' },
       { key: '/admin/mcp', icon: 'Connection', label: 'MCP 服务器', perm: 'mcp:read' },
+      { key: '/admin/models', icon: 'Setting', label: '模型管理', perm: 'model:read', tip: '配置 Provider 与 chat / embedding / rerank 模型' },
       { key: '/scheduled', icon: 'AlarmClock', label: '定时任务', perm: 'schedule:read' },
-      { key: '/channels', icon: 'Promotion', label: '外部渠道', perm: 'channel:read' },
-      { key: '/admin/channel-users', icon: 'Switch', label: '渠道身份绑定', perm: 'channel:read' },
     ],
   },
-  { key: '/todo', icon: 'Calendar', label: '待办日程', tip: '待办事项与日程提醒' },
-  { key: '/mail', icon: 'Message', label: '邮件', tip: '个人邮箱收发，AI 可代管' },
-  { key: '/approvals', icon: 'Stamp', label: '审批中心', perm: 'workflow:read', tip: 'AI 发起写操作时的待人工确认项' },
+  {
+    key: 'g-integration',
+    icon: 'Promotion',
+    label: '渠道与集成',
+    children: [
+      { key: '/channels', icon: 'Promotion', label: '外部渠道', perm: 'channel:read', tip: '接入 QQ / 微信 / 企业微信 / 飞书' },
+      { key: '/admin/channel-users', icon: 'Switch', label: '渠道身份绑定', perm: 'channel:read' },
+      { key: '/admin/notify-channels', icon: 'Bell', label: '通知渠道', perm: 'notify:read' },
+      { key: '/admin/event-subscriptions', icon: 'Bell', label: '事件订阅', perm: 'notify:read' },
+      { key: '/admin/email-sources', icon: 'Message', label: '邮件入库', perm: 'kb:read' },
+    ],
+  },
   {
     key: 'g-dev',
     icon: 'DataAnalysis',
@@ -69,10 +92,6 @@ export const NAV: (NavItem | NavGroup)[] = [
     children: [
       { key: '/admin/settings', icon: 'Setting', label: '系统设置', perm: 'system:manage' },
       { key: '/admin/system-ops', icon: 'Coin', label: '数据库与运维', perm: 'system:manage' },
-      { key: '/admin/notify-channels', icon: 'Bell', label: '通知渠道', perm: 'notify:read' },
-      { key: '/admin/event-subscriptions', icon: 'Bell', label: '事件订阅', perm: 'notify:read' },
-      { key: '/admin/email-sources', icon: 'Message', label: '邮件入库', perm: 'kb:read' },
-      { key: '/admin/models', icon: 'Setting', label: '模型管理' },
       { key: '/admin/api-keys', icon: 'Key', label: 'API 密钥', perm: 'apikey:read' },
       { key: '/admin/sso', icon: 'Lock', label: '单点登录', perm: 'sso:read' },
     ],
