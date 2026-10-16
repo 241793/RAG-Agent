@@ -43,7 +43,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ChatDotRound, TopRight } from '@element-plus/icons-vue'
@@ -153,6 +153,15 @@ onMounted(() => {
   window.addEventListener('resize', clamp)
   loadUnread()
   timer = setInterval(() => { if (!open.value) loadUnread() }, 15000)
+})
+
+// 清理定时器与全局监听：否则组件卸载后仍在轮询、resize 回调仍持有已销毁实例
+onBeforeUnmount(() => {
+  if (timer !== null) {
+    clearInterval(timer)
+    timer = null
+  }
+  window.removeEventListener('resize', clamp)
 })
 </script>
 

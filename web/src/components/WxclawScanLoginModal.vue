@@ -24,7 +24,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import { channelApi } from '@/api'
@@ -102,6 +102,10 @@ async function poll() {
 }
 function teardown() { if (timer) { clearInterval(timer); timer = null } }
 function close() { teardown(); emit('close') }
+
+// 兜底：`@closed` 只在弹窗正常关闭时触发；若父组件在打开状态下直接销毁本组件，
+// 轮询会一直跑下去，故在此再清一次（teardown 幂等）。
+onBeforeUnmount(teardown)
 </script>
 
 <style scoped>

@@ -24,7 +24,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import dayjs from 'dayjs'
 import { notificationApi, type NotificationItem } from '@/api'
 
@@ -59,9 +59,19 @@ async function markAll() {
   items.value = items.value.map((n) => ({ ...n, read: true }))
 }
 
+let timer: number | null = null
+
 onMounted(() => {
   loadUnread()
-  setInterval(loadUnread, 30000)
+  timer = window.setInterval(loadUnread, 30000)
+})
+
+// 必须清理：否则组件卸载后定时器仍在轮询（内存泄漏 + 无谓请求）
+onBeforeUnmount(() => {
+  if (timer !== null) {
+    clearInterval(timer)
+    timer = null
+  }
 })
 </script>
 
