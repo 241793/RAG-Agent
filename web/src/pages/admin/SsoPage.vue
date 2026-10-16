@@ -1,5 +1,5 @@
 <template>
-  <PageContainer title="单点登录" subtitle="配置第三方身份源（OIDC / SAML / 企业微信等）">
+  <PageContainer title="单点登录" subtitle="配置第三方身份源（钉钉 / 飞书 / 企业微信 / 通用 OIDC）">
     <template #extra>
       <el-button :icon="Refresh" circle :loading="loading" @click="load" />
     </template>
@@ -109,13 +109,16 @@ function suggest(provider: string) {
 async function load() {
   loading.value = true
   try {
-    const [providers, configs] = await Promise.all([
-      ssoApi.providers().catch(() => [] as SsoProvider[]),
+    // 以「可配置的提供者类型」为基础列表，再叠加已有配置。
+    // 不能只用 /providers（仅列已启用的）：新部署一条配置都没有 →
+    // 列表为空 → 页面上无从下手配置（死锁）。
+    const [supported, configs] = await Promise.all([
+      ssoApi.supported().catch(() => [] as SsoProvider[]),
       ssoApi.configs().catch(() => [] as any[]),
     ])
     const byProvider: Record<string, any> = {}
     for (const c of configs) byProvider[c.provider] = c
-    rows.value = providers.map((p) => ({ ...p, ...(byProvider[p.provider] || {}) }))
+    rows.value = supported.map((p) => ({ ...p, ...(byProvider[p.provider] || {}) }))
   } catch (e) {
     rows.value = []
     ElMessage.error(errMsg(e))

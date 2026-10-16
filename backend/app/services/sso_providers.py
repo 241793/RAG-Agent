@@ -233,6 +233,21 @@ PROVIDERS = {
     "feishu": (feishu_authorize_url, feishu_exchange),
 }
 
+# 可选提供者元数据：供「单点登录」配置页渲染待配置列表。
+# 没有它会造成死锁 —— 配置页原本只列「已启用」的提供者，
+# 而新部署一个都没有，于是页面上无从下手去配置。
+PROVIDER_META: list[dict] = [
+    {"provider": "dingtalk", "name": "钉钉", "help": "钉钉开放平台应用（需 AppKey/AppSecret）"},
+    {"provider": "feishu", "name": "飞书", "help": "飞书开放平台自建应用（需 App ID/App Secret）"},
+    {"provider": "wecom", "name": "企业微信", "help": "企业微信自建应用（需 CorpID / Secret / AgentID）"},
+    {"provider": "oidc", "name": "通用 OIDC", "help": "任何标准 OIDC 身份源（Authorize/Token/Userinfo URL）"},
+]
+
+
+def supported_providers() -> list[dict]:
+    """返回可配置的提供者类型（只含真正实现了的，避免前端列出点了会报错的项）。"""
+    return [m for m in PROVIDER_META if m["provider"] in PROVIDERS]
+
 
 def _map_claims(cfg, claims: dict) -> SsoProfile:
     """按 attribute_map 把原始 claims 映射为标准 profile。"""

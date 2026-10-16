@@ -162,6 +162,20 @@ def _frontend_base() -> str:
 
 
 # ==================== 配置管理 ====================
+@router.get("/supported")
+async def supported_providers(
+    user: User = Depends(require_permission("sso:read")),
+) -> list[dict]:
+    """列出可配置的提供者类型（含名称与说明）。
+
+    配置页据此渲染「待配置」列表。若改用 /providers（只列已启用的），
+    新部署时一个都没有 → 页面上无从下手配置 → 死锁。
+    """
+    from app.services.sso_providers import supported_providers as _sup
+
+    return _sup()
+
+
 @router.get("/configs/all")
 async def list_configs(
     user: User = Depends(require_permission("sso:read")), db: AsyncSession = Depends(get_db)

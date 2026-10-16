@@ -1162,6 +1162,8 @@ export interface SsoConfigItem {
 }
 export const ssoApi = {
   providers: () => http.get<SsoProvider[]>('/auth/sso/providers').then((r) => r.data),
+  // 可配置的提供者类型（配置页用；不依赖是否已配置）
+  supported: () => http.get<SsoProvider[]>('/auth/sso/supported').then((r) => r.data),
   configs: () => http.get<SsoConfigItem[]>('/auth/sso/configs/all').then((r) => r.data),
   saveConfig: (data: Record<string, any>) => http.post('/auth/sso/configs', data).then((r) => r.data),
   loginUrl: (provider: string) => `${API_BASE}/auth/sso/${provider}/login`,
