@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.core.db import get_db
 from app.core.errors import NotFoundError
 from app.core.security import create_access_token, create_refresh_token, hash_password
-from app.middleware.auth_dep import require_permission
+from app.middleware.auth_dep import get_current_user, require_permission
 from app.models import SsoConfig, User, UserRole
 from app.services.audit_service import record_audit
 from app.services.sso_providers import (
@@ -42,6 +42,80 @@ async def list_providers(db: AsyncSession = Depends(get_db)) -> list[dict]:
         await db.execute(select(SsoConfig).where(SsoConfig.enabled.is_(True)))
     ).scalars().all()
     return [{"provider": r.provider, "name": r.name or r.provider} for r in rows]
+
+
+@router.post("/{provider}/bind")
+async def sso_bind_start(
+    provider: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """发起「绑定」流程：返回 IdP 授权地址，由前端跳转。
+
+    与登录流程共用 authorize 环节，区别是 state 里记了**绑定意图与当前用户**。
+    之所以把用户放进服务端 state 而不是靠回调时的登录态：IdP 回调是浏览器
+    顶层跳转，不会携带 Authorization 头，回调时拿不到「是谁在绑定」。
+    """
+    cfg = (
+        await db.execute(
+            select(SsoConfig).where(SsoConfig.provider == provider, SsoConfig.enabled.is_(True))
+        )
+    ).scalars().first()
+    if not cfg:
+        raise NotFoundError(f"未启用的 SSO 提供者: {provider}")
+
+    _prune()
+    state = new_state()
+    verifier, _ = pkce_pair()
+    redirect_uri = cfg.redirect_uri or _default_redirect(provider)
+    _STATE[state] = {
+        "verifier": verifier,
+        "provider": provider,
+        "ts": time.time(),
+        "bind_user_id": user.id,
+        "bind_tenant_id": user.tenant_id,
+    }
+    url = await build_authorize_url(cfg, state, redirect_uri, verifier)
+    return {"authorize_url": url}
+
+
+@router.get("/bindings")
+async def my_bindings(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """当前账号的第三方绑定情况 + 可绑定的提供者（供「我的账号」页展示）。"""
+    enabled = (
+        await db.execute(select(SsoConfig.provider).where(SsoConfig.enabled.is_(True)))
+    ).scalars().all()
+    return {
+        "bound_provider": user.sso_provider,
+        "bound_subject": user.sso_subject,
+        "available": list(enabled),
+    }
+
+
+@router.post("/unbind")
+async def sso_unbind(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """解绑当前账号的第三方身份。
+
+    注意：若该账号**没有可用密码**（例如原先是 SSO 自动建号、密码为随机值），
+    解绑后将无法登录。此处不阻止（管理员可能另有安排），但前端会提示风险。
+    """
+    if not user.sso_provider:
+        raise NotFoundError("当前账号未绑定任何第三方身份")
+    provider = user.sso_provider
+    user.sso_provider = None
+    user.sso_subject = None
+    await db.flush()
+    record_audit(
+        db, action="user.sso_unbind", resource_type="user", resource_id=user.id,
+        tenant_id=user.tenant_id, actor_id=user.id, actor_name=user.username,
+    )
+    return {"message": f"已解绑：{provider}"}
 
 
 @router.get("/{provider}/login")
@@ -85,6 +159,11 @@ async def sso_callback(
 
     redirect_uri = cfg.redirect_uri or _default_redirect(provider)
     profile = await exchange_and_profile(cfg, code, redirect_uri, st["verifier"])
+
+    # ---- 绑定分支：state 里带了 bind_user_id（由「我的账号」发起）----
+    bind_uid = st.get("bind_user_id")
+    if bind_uid:
+        return await _do_bind(db, provider=provider, profile=profile, bind_uid=bind_uid)
 
     # JIT：按 (provider, subject) 找用户，找不到则创建
     user = (
@@ -149,6 +228,60 @@ async def sso_callback(
     # 用 URL fragment 传 token（不进服务端日志）
     frontend = _frontend_base()
     return RedirectResponse(f"{frontend}/login#access_token={access}&refresh_token={refresh}")
+
+
+def _frontend_url(path: str, query: str = "") -> str:
+    base = _frontend_base().rstrip("/")
+    return f"{base}{path}{('?' + query) if query else ''}"
+
+
+async def _do_bind(db: AsyncSession, *, provider: str, profile, bind_uid: int):
+    """把第三方身份绑定到指定账号，随后跳回「我的账号」页。
+
+    安全要点（绑定比登录更敏感 —— 绑错了等于把身份送人）：
+    1. 该 provider+subject **已被别人绑定** → 拒绝，绝不抢占
+    2. 该账号**已绑定同一 provider 的其它身份** → 拒绝，避免静默改绑
+    3. 绑定结果用 URL query 告知前端，成功/失败都给明确回执
+    """
+    from urllib.parse import quote
+
+    user = (await db.execute(select(User).where(User.id == bind_uid))).scalars().first()
+    if not user:
+        return RedirectResponse(_frontend_url("/account", "sso_bind=error&reason=" + quote("账号不存在")))
+
+    # 1) 该第三方身份是否已被（别的）账号占用
+    taken = (
+        await db.execute(
+            select(User).where(
+                User.sso_provider == provider,
+                User.sso_subject == profile.subject,
+                User.id != user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if taken:
+        return RedirectResponse(
+            _frontend_url("/account", "sso_bind=error&reason=" + quote("该第三方账号已被其他用户绑定"))
+        )
+
+    # 2) 本账号是否已绑定同一 provider 的其它身份
+    if user.sso_provider == provider and user.sso_subject and user.sso_subject != profile.subject:
+        return RedirectResponse(
+            _frontend_url("/account", "sso_bind=error&reason=" + quote(f"本账号已绑定其它 {provider} 身份，请先解绑"))
+        )
+
+    already = user.sso_provider == provider and user.sso_subject == profile.subject
+
+    user.sso_provider = provider
+    user.sso_subject = profile.subject
+    await db.flush()
+    record_audit(
+        db, action="user.sso_bind", resource_type="user", resource_id=user.id,
+        tenant_id=user.tenant_id, actor_id=user.id, actor_name=user.username,
+        after={"provider": provider, "subject": profile.subject},
+    )
+    msg = "已绑定" if not already else "该身份此前已绑定"
+    return RedirectResponse(_frontend_url("/account", "sso_bind=ok&reason=" + quote(msg)))
 
 
 def _default_redirect(provider: str) -> str:

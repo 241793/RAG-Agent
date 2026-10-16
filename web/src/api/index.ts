@@ -1167,6 +1167,17 @@ export const ssoApi = {
   configs: () => http.get<SsoConfigItem[]>('/auth/sso/configs/all').then((r) => r.data),
   saveConfig: (data: Record<string, any>) => http.post('/auth/sso/configs', data).then((r) => r.data),
   loginUrl: (provider: string) => `${API_BASE}/auth/sso/${provider}/login`,
+  // 当前账号的第三方绑定情况（含可绑定的 provider 列表）
+  bindings: () =>
+    http
+      .get<{ bound_provider: string | null; bound_subject: string | null; available: string[] }>(
+        '/auth/sso/bindings',
+      )
+      .then((r) => r.data),
+  // 发起绑定：返回 IdP 授权地址（需整页跳转）
+  startBind: (provider: string) =>
+    http.post<{ authorize_url: string }>(`/auth/sso/${provider}/bind`).then((r) => r.data),
+  unbind: () => http.post<{ message: string }>('/auth/sso/unbind').then((r) => r.data),
 }
 
 // ---------------- 内容安全 ----------------
