@@ -108,6 +108,20 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+@router.get("/register/status")
+async def register_status() -> dict:
+    """公开：自助注册是否开放。
+
+    供登录页决定是否显示「注册」入口。
+    刻意不依赖 /register/departments 是否为空来判断 —— 注册开放但尚未建部门时
+    该端点也会返回空数组，据此判断会误认为注册已关闭。
+    """
+    return {
+        "enabled": bool(settings.registration_enabled),
+        "require_approval": bool(settings.require_admin_approval),
+    }
+
+
 @router.get("/register/departments")
 async def public_departments(db: AsyncSession = Depends(get_db)) -> list[dict]:
     """注册用：返回可选部门（扁平列表，含层级缩进）。

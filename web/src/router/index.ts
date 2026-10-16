@@ -6,6 +6,7 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', name: 'login', component: () => import('@/pages/LoginPage.vue'), meta: { public: true } },
+    { path: '/register', name: 'register', component: () => import('@/pages/RegisterPage.vue'), meta: { public: true } },
     {
       path: '/',
       component: () => import('@/layouts/MainLayout.vue'),

@@ -174,6 +174,25 @@ export const authApi = {
     http
       .post('/auth/password', { old_password: oldPassword, new_password: newPassword })
       .then((r) => r.data),
+  // 自助注册（是否开放由后端 registration_enabled 决定；注册后可能需管理员审核）
+  register: (data: {
+    username: string
+    password: string
+    display_name?: string
+    email?: string
+    department_id?: number | null
+    reason?: string
+  }) => http.post<{ message: string; pending: boolean }>('/auth/register', data).then((r) => r.data),
+  // 注册用可选部门（公开端点，未开放注册时返回空数组）
+  registerDepartments: () =>
+    http
+      .get<{ id: number; name: string; parent_id: number | null; depth: number }[]>(
+        '/auth/register/departments',
+      )
+      .then((r) => r.data),
+  // 注册是否开放（公开端点）
+  registerStatus: () =>
+    http.get<{ enabled: boolean; require_approval: boolean }>('/auth/register/status').then((r) => r.data),
 }
 
 // ---------------- 知识库 ----------------

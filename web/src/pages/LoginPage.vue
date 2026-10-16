@@ -70,6 +70,11 @@
           <el-icon><InfoFilled /></el-icon>
           默认管理员：<code>admin / admin123</code>
         </div>
+
+        <!-- 自助注册入口：仅在后端开放注册时出现 -->
+        <div v-if="registrationOpen" class="lc-register">
+          没有账号？<el-link type="primary" :underline="false" @click="toRegister">立即注册</el-link>
+        </div>
       </div>
     </div>
   </div>
@@ -81,7 +86,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { User, Lock, Connection } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
-import { ssoApi, type SsoProvider } from '@/api'
+import { ssoApi, authApi, type SsoProvider } from '@/api'
 import { errMsg } from '@/api/http'
 
 // 记住密码：仅存用户名 + 一个混淆后的密码串（base64，非明文，避免直接可读）
@@ -107,6 +112,8 @@ const form = reactive({ username: '', password: '' })
 // 单点登录
 const ssoProviders = ref<SsoProvider[]>([])
 const ssoRedirecting = ref(false)
+// 自助注册是否开放（由后端设置决定）
+const registrationOpen = ref(false)
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
@@ -125,8 +132,22 @@ onMounted(() => {
     form.password = 'admin123'
   }
   loadSsoProviders()
+  loadRegisterStatus()
   handleSsoCallback()
 })
+
+/** 是否开放自助注册：关闭时不显示「注册」入口 */
+async function loadRegisterStatus() {
+  try {
+    registrationOpen.value = !!(await authApi.registerStatus()).enabled
+  } catch {
+    registrationOpen.value = false
+  }
+}
+
+function toRegister() {
+  router.push('/register')
+}
 
 // ---- 单点登录 ----
 
@@ -273,6 +294,9 @@ async function submit() {
 .lc-sso { display: flex; flex-direction: column; gap: 10px; }
 .lc-sso-btn { width: 100%; height: 40px; }
 .lc-sso-btn .el-icon { margin-right: 6px; }
+
+/* 自助注册入口 */
+.lc-register { margin-top: 14px; text-align: center; font-size: 13px; color: var(--text-secondary); }
 
 @media (max-width: 820px) {
   .login-brand { display: none; }

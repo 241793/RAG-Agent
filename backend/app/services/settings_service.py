@@ -78,6 +78,16 @@ FIELD_META: dict[str, dict[str, Any]] = {
     "security_guard_flag_threshold": {"label": "标记阈值", "group": "security", "kind": "int"},
     "security_guard_wrap_context": {"label": "给检索内容加边界标记", "group": "security", "kind": "bool"},
     "security_guard_sensitive_words": {"label": "敏感词（逗号分隔）", "group": "security", "kind": "str"},
+    # ---- 账号与登录安全 ----
+    "registration_enabled": {"label": "开放自助注册", "group": "security", "kind": "bool",
+                             "help": "开启后登录页出现「注册」入口；新账号需管理员审核才能登录。默认关闭"},
+    "require_admin_approval": {"label": "注册后需管理员审核", "group": "security", "kind": "bool",
+                               "help": "关闭则注册后可直接登录，建议保持开启"},
+    "login_rate_per_min": {"label": "登录限流（次/分钟/IP）", "group": "security", "kind": "int",
+                           "help": "单 IP 每分钟登录尝试上限，0=关闭。防暴力破解与撞库"},
+    "login_max_failures": {"label": "连续失败锁定阈值", "group": "security", "kind": "int",
+                           "help": "同一账号连续失败多少次后锁定，0=不锁定"},
+    "login_lock_minutes": {"label": "锁定时长（分钟）", "group": "security", "kind": "int"},
     # ---- 连接器 ----
     "connector_allow_private": {"label": "允许连接内网/环回", "group": "connector", "kind": "bool",
                                 "help": "企业内网部署外部知识库时开启"},

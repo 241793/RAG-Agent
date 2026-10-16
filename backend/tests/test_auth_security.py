@@ -306,9 +306,14 @@ def test_dispatch_supports_skip_inapp():
 async def _run_registration_notify():
     from sqlalchemy import select
 
+    from app.core.config import settings
     from app.core.db import AsyncSessionLocal, init_models
     from app.models import Notification, Role, Tenant, User, UserRole
     from app.core.security import hash_password
+
+    # 自助注册默认已关闭；本用例测的是「注册后通知管理员」，故显式开启
+    _prev_reg = settings.registration_enabled
+    settings.registration_enabled = True
 
     await init_models()
     async with AsyncSessionLocal() as db:
@@ -354,6 +359,9 @@ async def _run_registration_notify():
         if u:
             await db.delete(u)
         await db.commit()
+
+    # 还原开关，避免影响其它用例
+    settings.registration_enabled = _prev_reg
 
 
 def test_registration_sends_admin_notification():

@@ -167,7 +167,9 @@ class Settings(BaseSettings):
     login_rate_per_min: int = 10             # 单 IP 每分钟登录尝试上限（0=关闭）
     login_max_failures: int = 5              # 连续失败多少次锁定账号
     login_lock_minutes: int = 15             # 锁定时长（分钟）
-    registration_enabled: bool = True        # 是否允许自助注册（注册后待审核）
+    # 自助注册默认关闭：公网部署时避免被随意注册、灌满审核队列。
+    # 需要开放时在「系统设置 → 安全」里打开，无需改代码。
+    registration_enabled: bool = False       # 是否允许自助注册（注册后待审核）
     require_admin_approval: bool = True      # 注册用户是否必须管理员审核后才能登录
 
     # 存储
