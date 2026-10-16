@@ -57,7 +57,7 @@ async def sso_login(provider: str, db: AsyncSession = Depends(get_db)):
     _prune()
     state = new_state()
     verifier, _ = pkce_pair()
-    redirect_uri = cfg.redirect_uri or _default_redirect()
+    redirect_uri = cfg.redirect_uri or _default_redirect(provider)
     _STATE[state] = {"verifier": verifier, "provider": provider, "ts": time.time()}
     url = await build_authorize_url(cfg, state, redirect_uri, verifier)
     return RedirectResponse(url)
@@ -83,7 +83,7 @@ async def sso_callback(
     if not st:
         raise NotFoundError("SSO state 无效或已过期")
 
-    redirect_uri = cfg.redirect_uri or _default_redirect()
+    redirect_uri = cfg.redirect_uri or _default_redirect(provider)
     profile = await exchange_and_profile(cfg, code, redirect_uri, st["verifier"])
 
     # JIT：按 (provider, subject) 找用户，找不到则创建
@@ -143,8 +143,13 @@ async def sso_callback(
     return RedirectResponse(f"{frontend}/login#access_token={access}&refresh_token={refresh}")
 
 
-def _default_redirect() -> str:
-    return f"{_backend_base()}/api/v1/auth/sso"
+def _default_redirect(provider: str) -> str:
+    """未配置 redirect_uri 时的兜底回调地址。
+
+    必须带上 `/{provider}/callback`，与前端「单点登录」页给出的建议值一致；
+    否则 IdP 会回调到不含 provider 的地址，直接 404。
+    """
+    return f"{_backend_base()}/api/v1/auth/sso/{provider}/callback"
 
 
 def _backend_base() -> str:

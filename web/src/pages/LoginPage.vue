@@ -49,6 +49,23 @@
           </el-button>
         </el-form>
 
+        <!-- 单点登录：仅当管理员在「单点登录」页配置并启用后才出现 -->
+        <template v-if="ssoProviders.length">
+          <el-divider class="lc-divider">或</el-divider>
+          <div class="lc-sso">
+            <el-button
+              v-for="p in ssoProviders"
+              :key="p.provider"
+              class="lc-sso-btn"
+              :disabled="ssoRedirecting"
+              @click="ssoLogin(p.provider)"
+            >
+              <el-icon><Connection /></el-icon>
+              {{ p.name || p.provider }}
+            </el-button>
+          </div>
+        </template>
+
         <div class="lc-hint">
           <el-icon><InfoFilled /></el-icon>
           默认管理员：<code>admin / admin123</code>
@@ -62,8 +79,9 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { User, Lock } from '@element-plus/icons-vue'
+import { User, Lock, Connection } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import { ssoApi, type SsoProvider } from '@/api'
 import { errMsg } from '@/api/http'
 
 // 记住密码：仅存用户名 + 一个混淆后的密码串（base64，非明文，避免直接可读）
@@ -85,6 +103,10 @@ const formRef = ref<FormInstance>()
 const loading = ref(false)
 const remember = ref(false)
 const form = reactive({ username: '', password: '' })
+
+// 单点登录
+const ssoProviders = ref<SsoProvider[]>([])
+const ssoRedirecting = ref(false)
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
@@ -102,7 +124,63 @@ onMounted(() => {
     form.username = 'admin'
     form.password = 'admin123'
   }
+  loadSsoProviders()
+  handleSsoCallback()
 })
+
+// ---- 单点登录 ----
+
+/** 拉取已启用的 SSO 提供者；未配置时整块不显示，不影响账号密码登录 */
+async function loadSsoProviders() {
+  try {
+    ssoProviders.value = (await ssoApi.providers()) || []
+  } catch {
+    /* 接口不可用：静默，不显示 SSO 区域 */
+  }
+}
+
+/** 跳转到后端 SSO 入口（后端 302 到 IdP，回来时落 /login#access_token=...） */
+function ssoLogin(provider: string) {
+  ssoRedirecting.value = true
+  // 用整页跳转（不能在 SPA 内 fetch）：IdP 需要浏览器跳转
+  window.location.href = ssoApi.loginUrl(provider)
+}
+
+/**
+ * 处理 SSO 回调：后端把 token 放在 URL fragment（不进服务端日志）。
+ * 形如 /login#access_token=xxx&refresh_token=yyy
+ */
+async function handleSsoCallback() {
+  const hash = window.location.hash || ''
+  if (!hash || hash.length < 2) return
+  const params = new URLSearchParams(hash.slice(1))
+  const access = params.get('access_token')
+  if (!access) return
+
+  // 立刻清掉地址栏里的 token，避免被复制/留存在历史记录
+  try {
+    history.replaceState(null, '', window.location.pathname + window.location.search)
+  } catch {
+    /* ignore */
+  }
+
+  loading.value = true
+  try {
+    localStorage.setItem('access_token', access)
+    const refresh = params.get('refresh_token')
+    if (refresh) localStorage.setItem('refresh_token', refresh)
+    await auth.fetchMe()
+    if (!auth.user) throw new Error('获取用户信息失败')
+    ElMessage.success('登录成功')
+    router.push((route.query.redirect as string) || '/dashboard')
+  } catch (e) {
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+    ElMessage.error(`单点登录失败：${errMsg(e)}`)
+  } finally {
+    loading.value = false
+  }
+}
 
 async function submit() {
   const ok = await formRef.value?.validate().catch(() => false)
@@ -188,6 +266,13 @@ async function submit() {
   display: flex; align-items: center; gap: 6px; justify-content: center;
 }
 .lc-hint code { background: var(--bg-muted); padding: 1px 6px; border-radius: 5px; color: var(--text-body); }
+
+/* 单点登录 */
+.lc-divider { margin: 18px 0 14px; }
+.lc-divider :deep(.el-divider__text) { font-size: 12.5px; color: var(--text-muted); background: var(--bg-card); }
+.lc-sso { display: flex; flex-direction: column; gap: 10px; }
+.lc-sso-btn { width: 100%; height: 40px; }
+.lc-sso-btn .el-icon { margin-right: 6px; }
 
 @media (max-width: 820px) {
   .login-brand { display: none; }
