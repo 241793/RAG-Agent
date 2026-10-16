@@ -1,5 +1,5 @@
 <template>
-  <PageContainer title="人设模板" subtitle="预置的 system_prompt 模板，配置智能体或行为模式时可一键套用">
+  <PageContainer title="人设模板" subtitle="预置的人设（系统提示词）素材，配置智能体或行为模式时可一键套用">
     <template #extra>
       <el-button v-if="canManage" type="primary" :icon="Plus" @click="openCreate">新建模板</el-button>
     </template>
@@ -17,7 +17,7 @@
         <el-table-column label="说明" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">{{ row.description || '—' }}</template>
         </el-table-column>
-        <el-table-column label="提示词" min-width="240" show-overflow-tooltip>
+        <el-table-column label="人设内容" min-width="240" show-overflow-tooltip>
           <template #default="{ row }"><span class="mono">{{ row.system_prompt }}</span></template>
         </el-table-column>
         <el-table-column label="操作" width="230" fixed="right">
@@ -58,14 +58,14 @@
         <el-form-item label="说明">
           <el-input v-model="form.description" placeholder="一句话说明该模板适合什么场景（选择时会展示）" />
         </el-form-item>
-        <el-form-item label="提示词" required>
+        <el-form-item label="人设内容（提示词）" required>
           <el-input
             v-model="form.system_prompt"
             type="textarea"
             :rows="12"
             placeholder="建议写清四项：角色（你是谁）、语气（怎么说话）、边界（不做什么）、输出格式（怎么组织）"
           />
-          <div class="hint">该文本会作为智能体或行为模式的 system_prompt 初始内容，套用后仍可自由修改</div>
+          <div class="hint">该内容会作为智能体「人设」或行为模式人设的初始文本，套用后仍可自由修改</div>
         </el-form-item>
         <el-row :gutter="12">
           <el-col :span="8">
@@ -93,7 +93,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Plus, Edit, Delete, View } from '@element-plus/icons-vue'
 import PageContainer from '@/components/PageContainer.vue'
 import { personaApi, type PersonaTemplate } from '@/api'
@@ -165,7 +165,7 @@ async function save() {
     return
   }
   if (!form.system_prompt.trim()) {
-    ElMessage.warning('请输入提示词')
+    ElMessage.warning('请输入人设内容')
     return
   }
   saving.value = true

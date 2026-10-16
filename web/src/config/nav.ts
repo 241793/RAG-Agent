@@ -46,7 +46,7 @@ export const NAV: (NavItem | NavGroup)[] = [
     label: '智能体',
     children: [
       { key: '/agents', icon: 'MagicStick', label: '智能体', perm: 'agent:read', tip: '可自定义角色 / 工具 / 知识库范围的 AI 助手' },
-      { key: '/admin/persona-templates', icon: 'CollectionTag', label: '人设模板', perm: 'agent:read', tip: '预置的提示词模板，配置智能体或行为模式时可一键套用' },
+      { key: '/admin/persona-templates', icon: 'CollectionTag', label: '人设模板', perm: 'agent:read', tip: '预置的人设（系统提示词）素材，配置智能体或行为模式时可一键套用' },
       { key: '/skills', icon: 'Grid', label: '技能', perm: 'skill:read' },
       { key: '/admin/tools', icon: 'Tools', label: '工具', perm: 'tool:read' },
       { key: '/admin/mcp', icon: 'Connection', label: 'MCP 服务器', perm: 'mcp:read' },

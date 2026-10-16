@@ -49,7 +49,9 @@
             <el-radio-button value="workflow">工作流编排（DAG）</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="系统提示词"><el-input v-model="form.system_prompt" type="textarea" :rows="4" /></el-form-item>
+        <el-form-item label="人设（系统提示词）">
+          <el-input v-model="form.system_prompt" type="textarea" :rows="4" placeholder="设定这个智能体的身份与说话方式；留空则用默认的通用助手风格。创建后可在「编辑」里套用模板" />
+        </el-form-item>
         <el-form-item label="对话模型（留空用默认）">
           <el-select v-model="form.model_config_id" clearable placeholder="默认" style="width: 100%">
             <el-option v-for="c in chatConfigs" :key="c.id" :value="c.id" :label="c.display_name" />

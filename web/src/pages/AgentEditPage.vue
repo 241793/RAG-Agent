@@ -1,5 +1,5 @@
 <template>
-  <PageContainer :title="`编辑智能体：${agent?.name || ''}`" subtitle="配置智能体的角色、知识库范围、可调用的技能与工具、行为模式">
+  <PageContainer :title="`编辑智能体：${agent?.name || ''}`" subtitle="设定智能体的人设、知识库范围、可调用的技能与工具，以及多套行为模式">
     <template #extra>
       <el-button :icon="ArrowLeft" @click="$router.push('/agents')">返回</el-button>
       <el-button type="primary" :icon="VideoPlay" @click="testOpen = true">测试对话</el-button>
@@ -18,7 +18,40 @@
                 <el-radio-button value="tenant">全租户可见</el-radio-button>
               </el-radio-group>
             </el-form-item>
-            <el-form-item label="系统提示词"><el-input v-model="form.system_prompt" type="textarea" :rows="6" /></el-form-item>
+            <el-form-item label="人设（系统提示词）">
+              <div class="persona-head">
+                <span class="persona-hint">
+                  设定这个智能体的身份与说话方式。写清四项效果最好：
+                  <b>角色</b>（你是谁）、<b>语气</b>（怎么说话）、<b>边界</b>（不做什么）、<b>输出格式</b>（怎么组织）
+                </span>
+                <el-select
+                  v-model="baseTemplateId"
+                  clearable
+                  filterable
+                  size="small"
+                  placeholder="套用模板"
+                  style="width: 190px; flex-shrink: 0"
+                  @change="applyBaseTemplate"
+                >
+                  <el-option label="空白自定义" :value="0" />
+                  <el-option-group v-if="builtinTemplates.length" label="内置模板">
+                    <el-option v-for="t in builtinTemplates" :key="t.id" :value="t.id" :label="t.name" />
+                  </el-option-group>
+                  <el-option-group v-if="customTemplates.length" label="我的模板">
+                    <el-option v-for="t in customTemplates" :key="t.id" :value="t.id" :label="t.name" />
+                  </el-option-group>
+                </el-select>
+              </div>
+              <el-input
+                v-model="form.system_prompt"
+                type="textarea"
+                :rows="7"
+                placeholder="例如：你是本公司的客服助手。语气：礼貌、简洁。边界：不臆造政策，不确定时引导转人工。输出：先给结论，再分点给步骤。"
+              />
+              <div class="persona-hint dim">
+                留空也可以，智能体会用默认的通用助手风格。此处是「人设基座」，行为模式里的提示词会叠加在它之后。
+              </div>
+            </el-form-item>
             <el-form-item label="开场白（新对话时展示）"><el-input v-model="form.greeting" type="textarea" :rows="2" /></el-form-item>
             <el-form-item label="对话模型">
               <el-select v-model="form.model_config_id" clearable placeholder="默认" style="max-width: 320px">
@@ -47,12 +80,16 @@
       </el-tab-pane>
 
       <!-- 行为模式 -->
-      <el-tab-pane label="行为模式" name="modes">
+      <el-tab-pane label="行为模式（多套人设）" name="modes">
         <div class="app-card panel">
           <div class="panel-head">
-            <span class="section-title">行为模式（切换时换提示词/知识库/技能）</span>
+            <span class="section-title">行为模式 —— 同一智能体的多套人设</span>
             <el-button :icon="Plus" @click="openAddMode">添加模式</el-button>
           </div>
+          <p class="persona-hint" style="margin: -6px 0 12px">
+            每套模式是一份独立的人设（提示词，可另加知识库/技能范围）。
+            聊天时在顶部「模式」下拉里切换，即可让同一个智能体换一种身份和说话方式应答。
+          </p>
           <el-table :data="modes" size="small">
             <el-table-column prop="name" label="名称" />
             <el-table-column prop="system_prompt" label="提示词" show-overflow-tooltip />
@@ -128,15 +165,15 @@
     </el-tabs>
 
     <!-- 模式编辑 -->
-    <el-dialog v-model="modeOpen" :title="editMode ? '编辑模式' : '添加模式'" width="640px">
+    <el-dialog v-model="modeOpen" :title="editMode ? '编辑人设（行为模式）' : '添加人设（行为模式）'" width="640px">
       <el-form :model="modeForm" label-position="top">
-        <!-- 从模板快速填充：仅新增时提供（编辑已有模式时不显示，避免误覆盖已写好的提示词） -->
-        <el-form-item v-if="!editMode" label="从模板快速填充">
+        <!-- 从模板快速套用人设：仅新增时提供（编辑已有模式时不显示，避免误覆盖已写好的内容） -->
+        <el-form-item v-if="!editMode" label="从模板快速套用人设">
           <el-select
             v-model="pickedTemplateId"
             clearable
             filterable
-            placeholder="选择一个人设模板（可选），选中后自动填入下方提示词"
+            placeholder="选择一个人设模板（可选），选中后自动填入下方人设内容"
             style="width: 100%"
             @change="applyTemplate"
           >
@@ -165,8 +202,8 @@
             </el-option-group>
           </el-select>
         </el-form-item>
-        <el-form-item label="模式名称" required><el-input v-model="modeForm.name" placeholder="如：写作模式 / 审核模式" /></el-form-item>
-        <el-form-item label="该模式提示词（叠加在基础提示词后）"><el-input v-model="modeForm.system_prompt" type="textarea" :rows="7" placeholder="可直接撰写，或先用上方模板填充后再修改" /></el-form-item>
+        <el-form-item label="人设名称" required><el-input v-model="modeForm.name" placeholder="如：客服人设 / 审核人设 / 写作人设" /></el-form-item>
+        <el-form-item label="人设内容（叠加在基础人设之后）"><el-input v-model="modeForm.system_prompt" type="textarea" :rows="7" placeholder="写清角色 / 语气 / 边界 / 输出格式；也可先用上方模板填充后再修改" /></el-form-item>
         <el-form-item label="知识库覆盖（留空=继承）">
           <el-select v-model="modeForm.kb_ids" multiple clearable style="width: 100%">
             <el-option v-for="k in kbs" :key="k.id" :value="k.id" :label="k.name" />
@@ -208,7 +245,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, VideoPlay, Plus, Edit, Delete, Promotion } from '@element-plus/icons-vue'
 import PageContainer from '@/components/PageContainer.vue'
 import MarkdownBody from '@/components/MarkdownBody.vue'
@@ -272,6 +309,31 @@ async function loadTemplates() {
   } catch {
     templates.value = []
   }
+}
+
+// 基座人设也支持套模板
+const baseTemplateId = ref<number>(0)
+
+/** 选中模板 → 填入基座人设（有内容时先确认，避免误覆盖） */
+function applyBaseTemplate(id: number | null | undefined) {
+  if (!id) return
+  const t = templates.value.find((x) => x.id === id)
+  if (!t) return
+  const fill = () => {
+    form.system_prompt = t.system_prompt
+    ElMessage.success(`已套用模板「${t.name}」`)
+  }
+  if (form.system_prompt?.trim()) {
+    ElMessageBox.confirm('基座人设已有内容，套用模板将覆盖它。继续？', '覆盖确认', {
+      confirmButtonText: '覆盖',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+      .then(fill)
+      .catch(() => {})
+    return
+  }
+  fill()
 }
 
 const testOpen = ref(false)
@@ -349,7 +411,7 @@ function openEditMode(m: AgentMode) {
   modeOpen.value = true
 }
 async function submitMode() {
-  if (!modeForm.name.trim()) { ElMessage.warning('请输入模式名称'); return }
+  if (!modeForm.name.trim()) { ElMessage.warning('请输入人设名称'); return }
   try {
     if (editMode.value) await agentApi.updateMode(agentId, editMode.value.id, { ...modeForm })
     else await agentApi.createMode(agentId, { ...modeForm })
@@ -422,4 +484,9 @@ onMounted(async () => {
 .test-composer { display: flex; gap: 8px; }
 /* 模板下拉里的说明文字 */
 .opt-desc { float: right; color: var(--text-muted); font-size: 12px; margin-left: 12px; }
+/* 人设区块 */
+.persona-head { display: flex; align-items: flex-start; gap: 12px; width: 100%; margin-bottom: 8px; }
+.persona-hint { flex: 1; font-size: 12.5px; color: var(--text-secondary); line-height: 1.6; }
+.persona-hint.dim { color: var(--text-muted); margin-top: 6px; }
+.persona-hint b { color: var(--text-title); }
 </style>
