@@ -69,6 +69,24 @@
           </el-input>
           <div class="hint">在身份源后台把该地址加入「允许的回调地址」白名单</div>
         </el-form-item>
+
+        <el-divider content-position="left"><span class="dv">新用户</span></el-divider>
+        <el-form-item label="首次登录自动建号（JIT）">
+          <el-switch v-model="form.auto_create_user" />
+          <div class="hint">关闭后，仅已存在（或已绑定）的账号可通过 SSO 登录</div>
+        </el-form-item>
+        <el-form-item label="默认角色">
+          <el-select
+            v-model="form.default_role_ids"
+            multiple
+            clearable
+            placeholder="留空则自动授予「普通用户」"
+            style="width: 100%"
+          >
+            <el-option v-for="r in roles" :key="r.id" :label="r.name" :value="r.id" />
+          </el-select>
+          <div class="hint">新建账号将获得这些角色；留空时自动授予内置「普通用户」，避免登录后无任何权限</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="open = false">取消</el-button>
@@ -84,8 +102,16 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Connection, Setting, CopyDocument, MagicStick } from '@element-plus/icons-vue'
 import PageContainer from '@/components/PageContainer.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import { ssoApi, type SsoProvider } from '@/api'
+import { ssoApi, rbacApi, type SsoProvider } from '@/api'
 import { errMsg } from '@/api/http'
+
+interface RoleOpt {
+  id: number
+  name: string
+  code?: string
+}
+
+const roles = ref<RoleOpt[]>([])
 
 interface Row extends SsoProvider {
   enabled?: boolean
@@ -100,6 +126,7 @@ const edit = ref<Row | null>(null)
 const form = reactive<Record<string, any>>({
   enabled: false, client_id: '', client_secret: '', authorize_url: '', token_url: '',
   userinfo_url: '', corp_id: '', agent_id: '', redirect_uri: '',
+  auto_create_user: true, default_role_ids: [] as number[],
 })
 
 function suggest(provider: string) {
@@ -138,6 +165,9 @@ function openConfig(r: Row) {
     corp_id: (r as any).corp_id || '',
     agent_id: (r as any).agent_id || '',
     redirect_uri: r.redirect_uri || '',
+    // 后端默认 auto_create_user=True；未配置过时按默认展示
+    auto_create_user: (r as any).auto_create_user ?? true,
+    default_role_ids: [...((r as any).default_role_ids || [])],
   })
   open.value = true
 }
@@ -160,7 +190,15 @@ async function copy(text: string) {
     ElMessage.warning('复制失败，请手动选择复制')
   }
 }
-onMounted(load)
+onMounted(async () => {
+  await load()
+  // 角色列表用于「默认角色」下拉；无权限时静默（不影响其它字段配置）
+  try {
+    roles.value = (await rbacApi.roles()) || []
+  } catch {
+    roles.value = []
+  }
+})
 </script>
 
 <style scoped>
@@ -176,4 +214,5 @@ onMounted(load)
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sso-actions { display: flex; align-items: center; gap: 8px; }
 .hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.dv { font-size: 12.5px; color: var(--text-secondary); }
 </style>

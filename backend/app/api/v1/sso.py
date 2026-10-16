@@ -116,7 +116,8 @@ async def sso_callback(
         )
         db.add(user)
         await db.flush()
-        # 默认角色
+        # 默认角色：先按配置的 default_role_ids 授予
+        granted = False
         for rid in cfg.default_role_ids or []:
             db.add(
                 UserRole(
@@ -124,6 +125,13 @@ async def sso_callback(
                     scope_type="tenant", scope_id=0,
                 )
             )
+            granted = True
+        # 未配置默认角色时必须兜底授予「普通用户」，否则新用户权限集为空
+        # → 登录后全站 403（与「审核通过注册申请」同一处理，见 rbac._grant_default_viewer_role）
+        if not granted:
+            from app.api.v1.rbac import _grant_default_viewer_role
+
+            await _grant_default_viewer_role(db, tenant_id=tenant_id, user_id=user.id)
         record_audit(
             db, action="user.sso_create", resource_type="user", resource_id=user.id,
             tenant_id=tenant_id, actor_id=user.id, actor_name=username, actor_type="system",
@@ -189,6 +197,9 @@ async def list_configs(
             "client_id": c.client_id, "authorize_url": c.authorize_url,
             "token_url": c.token_url, "userinfo_url": c.userinfo_url,
             "corp_id": c.corp_id, "agent_id": c.agent_id, "redirect_uri": c.redirect_uri,
+            # 新用户相关：缺失会导致前端无法回显，管理员每次都要重填
+            "auto_create_user": c.auto_create_user,
+            "default_role_ids": c.default_role_ids or [],
         }
         for c in rows
     ]
