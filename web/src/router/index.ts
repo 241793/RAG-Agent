@@ -41,6 +41,7 @@ const router = createRouter({
         { path: 'admin/settings', name: 'admin-settings', component: () => import('@/pages/admin/SettingsPage.vue') },
         { path: 'admin/system-ops', name: 'admin-system-ops', component: () => import('@/pages/admin/SystemOpsPage.vue') },
         { path: 'admin/models', name: 'admin-models', component: () => import('@/pages/admin/ModelPage.vue') },
+        { path: 'admin/persona-templates', name: 'admin-persona-templates', component: () => import('@/pages/admin/PersonaTemplatePage.vue') },
         { path: 'admin/notify-channels', name: 'admin-notify', component: () => import('@/pages/admin/NotifyChannelPage.vue') },
         { path: 'admin/event-subscriptions', name: 'admin-events', component: () => import('@/pages/admin/EventSubscriptionPage.vue') },
         { path: 'admin/email-sources', name: 'admin-email', component: () => import('@/pages/admin/EmailSourcePage.vue') },

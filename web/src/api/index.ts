@@ -884,6 +884,32 @@ export const agentApi = {
   removeMode: (id: number, modeId: number) => http.delete(`/agents/${id}/modes/${modeId}`).then((r) => r.data),
 }
 
+// ---------------- 人设模板 ----------------
+
+export interface PersonaTemplate {
+  id: number
+  name: string
+  slug?: string | null
+  description?: string | null
+  system_prompt: string
+  category: string
+  icon?: string | null
+  tags?: string[] | null
+  sort: number
+  enabled: boolean
+  is_builtin: boolean
+}
+export const personaApi = {
+  list: (params?: { category?: string; enabled?: boolean }) =>
+    http.get<PersonaTemplate[]>('/persona-templates', { params }).then((r) => r.data),
+  create: (data: Partial<PersonaTemplate>) =>
+    http.post<PersonaTemplate>('/persona-templates', data).then((r) => r.data),
+  update: (id: number, data: Partial<PersonaTemplate>) =>
+    http.patch<PersonaTemplate>(`/persona-templates/${id}`, data).then((r) => r.data),
+  remove: (id: number) => http.delete(`/persona-templates/${id}`).then((r) => r.data),
+  clone: (id: number) => http.post<PersonaTemplate>(`/persona-templates/${id}/clone`).then((r) => r.data),
+}
+
 export const skillApi = {
   list: () => http.get<Skill[]>('/skills').then((r) => r.data),
   create: (data: Partial<Skill>) => http.post<Skill>('/skills', data).then((r) => r.data),

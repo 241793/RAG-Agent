@@ -44,6 +44,7 @@ from app.models.model_provider import ModelConfig, ModelProvider, UsageLog
 from app.models.chat_room import ChatAnnouncement, ChatMessage, ChatRoom, ChatRoomMember, ChatUserRemark
 from app.models.notification import Notification
 from app.models.notify_channel import NotifyChannel
+from app.models.persona_template import AgentPersonaTemplate
 from app.models.record_template import RecordEntry, RecordTemplate
 from app.models.reminder import Reminder
 from app.models.retrieval_miss import RetrievalMiss
@@ -110,6 +111,7 @@ __all__ = [
     "ScheduledTaskRun",
     "Notification",
     "NotifyChannel",
+    "AgentPersonaTemplate",
     "RecordTemplate",
     "RecordEntry",
     "Reminder",

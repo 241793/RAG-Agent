@@ -191,3 +191,42 @@ class ToolOut(BaseModel):
 
 class ToolTestRequest(BaseModel):
     args: dict = Field(default_factory=dict)
+
+
+# ---- 人设模板 ----
+class PersonaTemplateCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = None
+    system_prompt: str = ""
+    category: str = ""
+    icon: str | None = None
+    tags: list[str] | None = None
+    sort: int = 0
+    enabled: bool = True
+
+
+class PersonaTemplateUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+    description: str | None = None
+    system_prompt: str | None = None
+    category: str | None = None
+    icon: str | None = None
+    tags: list[str] | None = None
+    sort: int | None = None
+    enabled: bool | None = None
+
+
+class PersonaTemplateOut(BaseModel):
+    id: int
+    name: str
+    slug: str | None = None
+    description: str | None = None
+    system_prompt: str
+    category: str
+    icon: str | None = None
+    tags: list | None = None
+    sort: int
+    enabled: bool
+    is_builtin: bool
+
+    model_config = {"from_attributes": True}

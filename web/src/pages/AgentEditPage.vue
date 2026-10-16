@@ -130,8 +130,43 @@
     <!-- 模式编辑 -->
     <el-dialog v-model="modeOpen" :title="editMode ? '编辑模式' : '添加模式'" width="640px">
       <el-form :model="modeForm" label-position="top">
+        <!-- 从模板快速填充：仅新增时提供（编辑已有模式时不显示，避免误覆盖已写好的提示词） -->
+        <el-form-item v-if="!editMode" label="从模板快速填充">
+          <el-select
+            v-model="pickedTemplateId"
+            clearable
+            filterable
+            placeholder="选择一个人设模板（可选），选中后自动填入下方提示词"
+            style="width: 100%"
+            @change="applyTemplate"
+          >
+            <el-option label="空白自定义" :value="0" />
+            <el-option-group v-if="builtinTemplates.length" label="内置模板">
+              <el-option
+                v-for="t in builtinTemplates"
+                :key="t.id"
+                :value="t.id"
+                :label="t.name"
+              >
+                <span>{{ t.name }}</span>
+                <span class="opt-desc">{{ t.description }}</span>
+              </el-option>
+            </el-option-group>
+            <el-option-group v-if="customTemplates.length" label="我的模板">
+              <el-option
+                v-for="t in customTemplates"
+                :key="t.id"
+                :value="t.id"
+                :label="t.name"
+              >
+                <span>{{ t.name }}</span>
+                <span class="opt-desc">{{ t.description }}</span>
+              </el-option>
+            </el-option-group>
+          </el-select>
+        </el-form-item>
         <el-form-item label="模式名称" required><el-input v-model="modeForm.name" placeholder="如：写作模式 / 审核模式" /></el-form-item>
-        <el-form-item label="该模式提示词（叠加在基础提示词后）"><el-input v-model="modeForm.system_prompt" type="textarea" :rows="5" /></el-form-item>
+        <el-form-item label="该模式提示词（叠加在基础提示词后）"><el-input v-model="modeForm.system_prompt" type="textarea" :rows="7" placeholder="可直接撰写，或先用上方模板填充后再修改" /></el-form-item>
         <el-form-item label="知识库覆盖（留空=继承）">
           <el-select v-model="modeForm.kb_ids" multiple clearable style="width: 100%">
             <el-option v-for="k in kbs" :key="k.id" :value="k.id" :label="k.name" />
@@ -178,7 +213,7 @@ import { ArrowLeft, VideoPlay, Plus, Edit, Delete, Promotion } from '@element-pl
 import PageContainer from '@/components/PageContainer.vue'
 import MarkdownBody from '@/components/MarkdownBody.vue'
 import JsonSchemaForm from '@/components/JsonSchemaForm.vue'
-import { agentApi, API_BASE, kbApi, providerApi, skillApi, streamChat, toolApi, type Agent, type AgentMode, type KB, type ModelConfig, type Skill } from '@/api'
+import { agentApi, API_BASE, kbApi, personaApi, providerApi, skillApi, streamChat, toolApi, type Agent, type AgentMode, type KB, type ModelConfig, type PersonaTemplate, type Skill } from '@/api'
 import { errMsg } from '@/api/http'
 
 const route = useRoute()
@@ -214,6 +249,30 @@ const skillParams = reactive<Record<string, any>>({})
 const modeOpen = ref(false)
 const editMode = ref<AgentMode | null>(null)
 const modeForm = reactive<any>({ name: '', system_prompt: '', kb_ids: [], skill_ids: [], is_default: false })
+
+// 人设模板（选择后填充提示词；仅新增模式时提供）
+const templates = ref<PersonaTemplate[]>([])
+const pickedTemplateId = ref<number>(0)
+const builtinTemplates = computed(() => templates.value.filter((t) => t.is_builtin && t.enabled))
+const customTemplates = computed(() => templates.value.filter((t) => !t.is_builtin && t.enabled))
+
+/** 选中模板 → 预填名称与提示词（之后可自由编辑；不建立绑定关系） */
+function applyTemplate(id: number | null) {
+  if (!id) return
+  const t = templates.value.find((x) => x.id === id)
+  if (!t) return
+  if (!modeForm.name?.trim()) modeForm.name = t.name
+  modeForm.system_prompt = t.system_prompt
+  ElMessage.success(`已套用模板「${t.name}」，可按需修改`)
+}
+
+async function loadTemplates() {
+  try {
+    templates.value = await personaApi.list({ enabled: true })
+  } catch {
+    templates.value = []
+  }
+}
 
 const testOpen = ref(false)
 const testMsgs = ref<{ role: string; content: string }[]>([])
@@ -280,6 +339,7 @@ async function save() {
 // 模式
 function openAddMode() {
   editMode.value = null
+  pickedTemplateId.value = 0
   Object.assign(modeForm, { name: '', system_prompt: '', kb_ids: [], skill_ids: [], is_default: false })
   modeOpen.value = true
 }
@@ -340,7 +400,10 @@ async function sendTest() {
   nextTick(() => testListRef.value?.scrollTo({ top: 99999 }))
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  loadTemplates()
+})
 </script>
 
 <style scoped>
@@ -357,4 +420,6 @@ onMounted(load)
 .test-body { margin-top: 4px; }
 .test-plain { white-space: pre-wrap; font-size: 14px; color: var(--text-body); }
 .test-composer { display: flex; gap: 8px; }
+/* 模板下拉里的说明文字 */
+.opt-desc { float: right; color: var(--text-muted); font-size: 12px; margin-left: 12px; }
 </style>

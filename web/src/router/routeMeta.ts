@@ -25,6 +25,7 @@ export const ROUTE_PERMS: Record<string, string> = {
   '/service-tickets': 'service:read',
   '/records': 'record:read',
   '/admin/models': 'model:read',
+  '/admin/persona-templates': 'agent:read',
   '/admin/users': 'user:read',
   '/admin/roles': 'role:read',
   '/admin/depts': 'dept:read',
