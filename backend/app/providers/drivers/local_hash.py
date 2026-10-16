@@ -54,6 +54,9 @@ class LocalHashDriver:
     async def health(self, **kw) -> ProviderHealth:
         return ProviderHealth(ok=True, message="本地离线驱动就绪", latency_ms=0)
 
+    async def list_models(self) -> list[dict]:
+        """离线驱动无远端模型列表，返回内置型号名。"""
+        return [{"id": "local_hash", "owned_by": "local"}]
 
 class LocalHashRerankDriver:
     def __init__(self, *, dim: int = 1024) -> None:

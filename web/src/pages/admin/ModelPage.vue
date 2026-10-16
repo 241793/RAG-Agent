@@ -103,7 +103,10 @@
           </el-select>
         </el-form-item>
         <el-form-item label="接入地址 Base URL">
-          <el-input v-model="pForm.base_url" placeholder="https://api.openai.com/v1" />
+          <el-input
+            v-model="pForm.base_url"
+            :placeholder="KIND_HINT[pForm.kind] || 'https://api.openai.com/v1'"
+          />
         </el-form-item>
         <el-form-item :label="editProvider ? 'API Key（留空则不变）' : 'API Key'">
           <el-input v-model="pForm.api_key" type="password" show-password :placeholder="editProvider && editProvider.api_key_set ? '已设置，留空保持不变' : 'sk-...'" />
@@ -128,7 +131,11 @@
     <el-dialog v-model="cOpen" :title="editConfig ? '编辑模型配置' : '新建模型配置'" width="560px">
       <el-form :model="cForm" label-position="top">
         <el-form-item label="Provider" required>
-          <el-select v-model="cForm.provider_id" style="width: 100%">
+          <el-select
+            v-model="cForm.provider_id"
+            style="width: 100%"
+            @change="onProviderChange"
+          >
             <el-option v-for="p in providers" :key="p.id" :value="p.id" :label="p.name" />
           </el-select>
         </el-form-item>
@@ -137,8 +144,37 @@
             <el-option v-for="(label, k) in PURPOSE_LABEL" :key="k" :value="k" :label="label" />
           </el-select>
         </el-form-item>
-        <el-form-item label="模型标识" required><el-input v-model="cForm.model_name" placeholder="如：gpt-4o-mini / text-embedding-3-small" /></el-form-item>
-        <el-form-item label="显示名"><el-input v-model="cForm.display_name" /></el-form-item>
+        <el-form-item label="模型标识" required>
+          <!-- 可选可填：优先从 Provider 拉取模型列表，拉不到（或本地/离线驱动）时手动输入 -->
+          <div class="model-pick">
+            <el-select
+              v-model="cForm.model_name"
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              :loading="modelsLoading"
+              :placeholder="modelsLoading ? '正在获取模型列表…' : '选择或直接输入模型标识'"
+              style="flex: 1"
+            >
+              <el-option v-for="m in modelOptions" :key="m" :value="m" :label="m" />
+            </el-select>
+            <el-button
+              :icon="Refresh"
+              :loading="modelsLoading"
+              :disabled="!cForm.provider_id"
+              title="从 Provider 获取模型列表"
+              @click="loadModelOptions(cForm.provider_id)"
+            />
+          </div>
+          <div v-if="modelPickMsg" class="model-msg">{{ modelPickMsg }}</div>
+          <div v-else class="model-msg dim">
+            可直接输入型号；点右侧按钮从 Provider 拉取可用列表
+          </div>
+        </el-form-item>
+        <el-form-item label="显示名">
+          <el-input v-model="cForm.display_name" placeholder="留空则显示模型标识" />
+        </el-form-item>
         <el-form-item v-if="cForm.purpose === 'embedding'" label="向量维度">
           <el-input-number v-model="cForm.embedding_dim" :min="0" controls-position="right" />
         </el-form-item>
@@ -175,12 +211,22 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Edit, Delete } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Refresh } from '@element-plus/icons-vue'
 import PageContainer from '@/components/PageContainer.vue'
 import { providerApiFull, type ModelConfig } from '@/api'
 import { errMsg } from '@/api/http'
 
-const KINDS = ['openai', 'azure', 'anthropic', 'dashscope', 'deepseek', 'qwen', 'ollama', 'custom']
+// 与后端 providers/registry.py 的驱动分支保持一致；仍允许 allow-create 填自定义
+const KINDS = [
+  'openai', 'azure', 'anthropi', 'dashscope', 'deepseek', 'qwen', 'ollama',
+  'local_bge', 'local_hash', 'local_agent', 'custom',
+]
+// kind → 接入地址的填写提示（本地驱动用模型路径/标识，不是 URL）
+const KIND_HINT: Record<string, string> = {
+  local_bge: '本地 bge 模型目录路径，如 D:/models/bge-m3',
+  local_hash: '离线自测（无需网络），填 local 即可',
+  local_agent: '本地 Agent 桥接地址',
+}
 const PURPOSE_LABEL: Record<string, string> = {
   chat: '对话', embedding: '向量', rerank: '重排', vision: '视觉', stt: '语音识别', tts: '语音合成',
 }
@@ -266,6 +312,40 @@ const modelsProvider = ref<any>(null)
 const models = ref<{ id: string; owned_by?: string }[]>([])
 const modelsMsg = ref('')
 const modelsOk = ref(true)
+// ---- 模型标识：从 Provider 拉取可选列表（可手填）----
+const modelOptions = ref<string[]>([])
+const modelsLoading = ref(false)
+const modelPickMsg = ref('')
+
+/** 拉取某 Provider 的可用模型，填充「模型标识」下拉。失败不阻断手填。 */
+async function loadModelOptions(providerId: number | null) {
+  modelOptions.value = []
+  modelPickMsg.value = ''
+  if (!providerId) return
+  modelsLoading.value = true
+  try {
+    const r = await providerApiFull.listModels(providerId)
+    const ids = (r.models || []).map((m) => m.id).filter(Boolean)
+    modelOptions.value = ids
+    if (r.ok === false) {
+      // 例如本地/离线驱动：给出原因，引导手填
+      modelPickMsg.value = r.message || '该 Provider 不支持自动获取模型，请手动填写'
+    } else if (!ids.length) {
+      modelPickMsg.value = '未获取到模型，请手动填写模型标识'
+    } else {
+      modelPickMsg.value = `已获取 ${ids.length} 个模型，可从下拉选择`
+    }
+  } catch (e) {
+    modelPickMsg.value = `获取模型列表失败（${errMsg(e)}），可手动填写`
+  } finally {
+    modelsLoading.value = false
+  }
+}
+
+function onProviderChange(id: number | null) {
+  loadModelOptions(id)
+}
+
 async function fetchModels(row: any) {
   modelsProvider.value = row
   models.value = []
@@ -297,6 +377,8 @@ function openConfig(row?: ModelConfig) {
     priority: row?.priority ?? 0, is_default: row?.is_default ?? false, status: row?.status || 'active',
   })
   cOpen.value = true
+  // 打开即尝试拉取该 Provider 的模型列表，供「模型标识」下拉使用
+  loadModelOptions(cForm.provider_id)
 }
 async function submitConfig() {
   if (!cForm.provider_id) { ElMessage.warning('请选择 Provider'); return }
@@ -330,4 +412,9 @@ onMounted(load)
 <style scoped>
 .panel { padding: 18px 20px; }
 .mono { font-family: monospace; font-size: 12px; color: var(--text-secondary); }
+
+/* 模型标识：下拉 + 拉取按钮 */
+.model-pick { display: flex; gap: 8px; width: 100%; align-items: center; }
+.model-msg { font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.5; }
+.model-msg.dim { opacity: 0.85; }
 </style>

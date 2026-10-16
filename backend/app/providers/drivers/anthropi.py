@@ -233,6 +233,23 @@ class AnthropiDriver(RetryMixin):
     async def embed(self, texts: list[str], *, model: str, batch_size: int = 32) -> list[list[float]]:
         raise NotImplementedError("Anthropi 不提供 embedding 接口，请配置其他向量 Provider")
 
+    async def list_models(self) -> list[dict]:
+        """返回已知的 Claud 模型清单。
+
+        Anthropi 未提供公开的 /v1/models 列表端点，故返回内置常见型号供选择；
+        用户仍可手动填写其它型号（表单允许自由输入）。
+        """
+        known = [
+            "claud-sonnet-4-6",
+            "claud-opus-4-6",
+            "claud-haiku-4-6",
+            "claud-sonnet-4-5",
+            "claud-opus-4-1",
+            "claud-3-5-sonnet-latest",
+            "claud-3-5-haiku-latest",
+        ]
+        return [{"id": m, "owned_by": "anthropi"} for m in known]
+
     async def health(self, *, model: str | None = None, purpose: str = "chat") -> ProviderHealth:
         t0 = time.time()
         try:

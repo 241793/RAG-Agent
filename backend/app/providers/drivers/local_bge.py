@@ -40,3 +40,7 @@ class LocalBGEDriver:
             return ProviderHealth(ok=True, message="本地模型就绪")
         except Exception as e:  # noqa: BLE001
             return ProviderHealth(ok=False, message=str(e)[:200])
+
+    async def list_models(self) -> list[dict]:
+        """本地模型无远端列表，用配置的模型路径作为标识。"""
+        return [{"id": self.model_path, "owned_by": "local_bge"}]

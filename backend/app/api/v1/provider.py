@@ -258,6 +258,11 @@ async def list_provider_models(
     if not p:
         raise NotFoundError("Provider 不存在")
     drv = _build_driver(p.kind, p.base_url, p.api_key, p.timeout, p.extra_headers, getattr(p, 'max_retries', 2))
+    # 兜底：驱动不一定都实现了 list_models（Protocol 不强制），缺实现时给出
+    # 明确提示而不是让前端收到 AttributeError 的 500
+    if not hasattr(drv, "list_models"):
+        return {"ok": False, "models": [],
+                "message": f"该 Provider 类型（{p.kind}）不支持自动获取模型列表，请手动填写模型标识"}
     try:
         models = await drv.list_models()
         return {"ok": True, "models": models}
