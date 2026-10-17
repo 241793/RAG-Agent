@@ -143,7 +143,10 @@ def test_check_update_parses_release(monkeypatch):
     assert r["notes"].startswith("### 更新内容")
     assert r["asset"]["name"].endswith("win-x64.zip")
     assert r["asset"]["digest"] == "sha256:bb"
-    assert r["current"] == "1.0.0"
+    # 不硬编码版本号：每次发版都要改测试是脆弱的，改为与配置一致即可
+    from app.core.config import settings
+
+    assert r["current"] == settings.app_version
     # source 形态不可自更新
     assert r["can_self_update"] is False
     U.clear_cache()

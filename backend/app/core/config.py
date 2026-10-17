@@ -100,7 +100,7 @@ class Settings(BaseSettings):
     )
     # 应用
     app_name: str = "RAG Knowledge Base"
-    app_version: str = "1.0.0"
+    app_version: str = "1.0.1"
     app_env: str = "prod" if _is_frozen() else "dev"
     debug: bool = not _is_frozen()
     api_prefix: str = "/api/v1"

@@ -1,27 +1,45 @@
-# Docker Compose：一键起服务（默认 SQLite；PG 为可选 profile）
+# Docker Compose：部署与在线更新
 #
-#   仅跑应用（SQLite，零外部依赖）：
-#     docker compose up -d --build
+#   首次 / 日常启动（用 GHCR 镜像，不本地构建）：
+#     docker compose up -d
+#   拉取新版本镜像后重启：
+#     docker compose pull && docker compose up -d
+#   本地改代码时构建：
+#     docker compose --profile build up -d --build
 #   应用 + PostgreSQL(pgvector)：
-#     docker compose --profile pg up -d --build
+#     docker compose --profile pg up -d
 #
 # 访问 http://127.0.0.1:6677 ，首次登录 admin / admin123
+#
+# 目录说明：./rag-web 挂载到容器 /app，里面包含：
+#   backend/    源码（Web 端「在线更新」会覆盖它）
+#   web/dist/   前端产物（同上）
+#   backend/data/  数据（SQLite + 上传文件，**升级不会丢失**）
+#   updates/    更新暂存与备份
+# 首次启动时容器会自动从镜像内的种子副本初始化这些内容。
 
 services:
   app:
+    # 默认用 GHCR 发布的镜像：up -d 即按镜像启动，不会误触发本地构建
+    image: ${RAG_IMAGE:-ghcr.io/241793/rag-agent:latest}
+    # 本地构建走 profile 隔离：docker compose --profile build up -d --build
     build:
       context: .
       dockerfile: Dockerfile
       # 用 pg profile 时改为 "true"，镜像内会装 asyncpg + pgvector
       args:
         INSTALL_PG: ${INSTALL_PG:-false}
-    image: rag-knowledgebase:latest
+      profiles: ["build"]
+
     container_name: rag-app
+    # 在线更新时进程会退出；靠这条策略自动拉起
     restart: unless-stopped
     ports:
       - "6677:6677"
     environment:
-      # 默认 SQLite：/app/backend/data 由 volume 持久化
+      # 后端据此走 docker 更新分支（下载 *-docker.zip 并覆盖 /app）
+      RAG_DEPLOYMENT: docker
+      # 默认 SQLite：数据在 /app/backend/data（由 ./rag-web 挂载持久化）
       DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/backend/data/rag.db}
       VECTOR_BACKEND: ${VECTOR_BACKEND:-auto}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
@@ -30,13 +48,14 @@ services:
       # DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/rag
       # VECTOR_BACKEND: pgvector
     volumes:
-      - ./data:/app/backend/data
+      # 单目录挂载：源码 + 前端 + 数据 + 更新区都在 /app
+      - ./rag-web:/app
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:6677/health',timeout=4)"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 40s
+      start_period: 60s
 
   # ---- 可选：PostgreSQL + pgvector（用 --profile pg 启用）----
   db:

@@ -93,24 +93,30 @@ def detect_deployment() -> str:
 
 
 def _hint_for(deployment: str, version: str, image: str) -> str:
-    """不同部署形态对应的人工更新命令（桌面版走应用内更新，无需命令）。"""
+    """不同部署形态对应的人工更新方式。"""
     if deployment == "docker":
-        # 容器无法替换自身镜像，因此拿到新镜像得在**宿主机**执行
         return (
-            f"docker compose pull && docker compose up -d\n"
-            f"# 或手动：docker pull {image}:{version}\n"
-            f"# 数据在挂载卷 ./data（容器内 /app/backend/data）中，重建容器不丢数据"
+            "在「关于/更新」中点击「立即更新」：会下载源码包覆盖容器内 /app 并自动重启"
+            "（依赖有变化时自动 pip install）。\n"
+            "也可在宿主机手动升级镜像：docker compose pull && docker compose up -d\n"
+            "数据位于挂载卷 ./rag-web/backend/data，更新或重建容器都不会丢失"
         )
     if deployment == "source":
         return "git pull && cd web && npm ci && npm run build，然后重启后端"
     return "在「关于/更新」中点击「立即更新」，下载完成后会自动重启应用"
 
 
-def _pick_asset(assets: list[dict]) -> dict | None:
-    """挑选桌面版更新包：优先 win-x64.zip。"""
+def _pick_asset(assets: list[dict], deployment: str = "desktop") -> dict | None:
+    """按部署形态挑选更新包。
+
+    - desktop → *win-x64.zip（PyInstaller/Electron 桌面包）
+    - docker  → *docker.zip（后端源码 + 已构建的 web/dist，容器内可直接覆盖）
+    两种包都要求是 zip；找不到返回 None。
+    """
+    want = "docker" if deployment == "docker" else "win-x64"
     for a in assets:
         name = (a.get("name") or "").lower()
-        if name.endswith(".zip") and "win-x64" in name:
+        if name.endswith(".zip") and want in name:
             return a
     return None
 
@@ -174,7 +180,7 @@ async def check_update(*, force: bool = False) -> dict:
     latest_ver = tag.lstrip("vV")
     notes = (data.get("body") or "").strip()
     assets = data.get("assets") or []
-    asset = _pick_asset(assets)
+    asset = _pick_asset(assets, deployment)
     prerelease = bool(data.get("prerelease")) or is_prerelease(tag)
 
     result = {
@@ -186,7 +192,7 @@ async def check_update(*, force: bool = False) -> dict:
         "published_at": data.get("published_at"),
         "notes": notes[:8000],
         "html_url": data.get("html_url"),
-        "can_self_update": deployment == "desktop" and asset is not None,
+        "can_self_update": deployment in ("desktop", "docker") and asset is not None,
         "asset": (
             {
                 "name": asset.get("name"),

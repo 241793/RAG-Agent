@@ -156,7 +156,57 @@ jobs:
           path: ${{ env.ZIP }}
           if-no-files-found: error
 
-  # ---------- 产物 3：源码包 ----------
+  # ---------- 产物 3：Docker 更新包（后端源码 + 已构建前端）----------
+  # 容器内无 Node，无法构建前端，所以必须带上构建好的 web/dist。
+  # 包内结构解压后平铺到容器 /app（宿主机 ./rag-web）：
+  #   backend/   web/dist/   CHANGELOG.md
+  docker-pkg:
+    name: 打包 Docker 更新包
+    needs: version-check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: 安装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 构建前端
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: 组装包（backend/ 与 web/dist 必须同级）
+        env:
+          VER: ${{ needs.version-check.outputs.version }}
+        run: |
+          set -euo pipefail
+          rm -rf pkg && mkdir -p pkg/backend pkg/web
+          # 排除本地数据/缓存，避免把开发环境的东西打进更新包
+          rsync -a --exclude=__pycache__ --exclude='*.pyc' --exclude=data \
+                --exclude=.venv --exclude=.pytest_cache backend/ pkg/backend/
+          cp -a web/dist pkg/web/dist
+          cp CHANGELOG.md pkg/CHANGELOG.md
+          # 结构自检：缺了会让容器更新后起不来
+          test -f pkg/backend/app/main.py
+          test -f pkg/web/dist/index.html
+          (cd pkg && zip -qr "../RAG-knowledgebase-v${VER}-docker.zip" .)
+          ls -lh "RAG-knowledgebase-v${VER}-docker.zip"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v6
+        with:
+          name: docker-pkg
+          path: RAG-knowledgebase-v*-docker.zip
+          if-no-files-found: error
+
+  # ---------- 产物 4：源码包 ----------
   source:
     name: 打包源码
     needs: version-check
@@ -182,7 +232,7 @@ jobs:
   # ---------- 汇总：创建 Release 并挂载产物 ----------
   release:
     name: 发布 GitHub Release
-    needs: [version-check, desktop, source]
+    needs: [version-check, desktop, source, docker-pkg]
     runs-on: ubuntu-24.04
     steps:
       # 按名字显式下载两个产物，不用「下载全部」：
@@ -198,6 +248,12 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: source-zip
+          path: dist
+
+      - name: 下载 Docker 更新包
+        uses: actions/download-artifact@v7
+        with:
+          name: docker-pkg
           path: dist
 
       - name: 列出待发布文件
@@ -236,16 +292,17 @@ jobs:
 
           - **Docker 镜像**（GHCR 要求全小写镜像名）：
             \`\`\`bash
-            docker pull ghcr.io/241793/rag-agent:$VER
-            docker run -d -p 6677:6677 -v "\$PWD/data:/app/backend/data" \\
-              ghcr.io/241793/rag-agent:$VER
+            docker compose pull && docker compose up -d
             \`\`\`
             首次登录 \`admin / admin123\`，访问 http://127.0.0.1:6677
           - **桌面版**：解压 \`*-win-x64.zip\`，运行 \`RAG知识库.exe\`
+          - **Docker 更新包**：\`*-docker.zip\`（后端源码 + 已构建前端，供容器内在线更新使用）
           - **源码包**：\`*-src.zip\`
 
-          升级：桌面版可在应用内「关于/检查更新」一键更新；Docker 在宿主机执行
-          \`docker compose pull && docker compose up -d\`。
+          升级方式：
+          - 桌面版：应用内「关于/检查更新」一键更新
+          - Docker：应用内「关于/检查更新」自动覆盖并重启（也可在宿主机
+            \`docker compose pull && docker compose up -d\` 换镜像）
           EOF
 
       - name: 创建 Release

@@ -43,9 +43,9 @@ async def download_update(
     避免被诱导下载任意文件（SSRF / 供应链）。
     """
     deployment = update_service.detect_deployment()
-    if deployment != "desktop":
-        return {"ok": False, "error": "仅桌面版支持应用内更新；当前为 "
-                                      f"{deployment} 部署，请用相应命令升级"}
+    if deployment not in ("desktop", "docker"):
+        return {"ok": False, "error": f"当前为 {deployment} 部署，不支持应用内更新；"
+                                      "请按「关于/更新」中的指引手动升级"}
 
     info = await update_service.check_update(force=True)
     if not info.get("ok"):
@@ -55,7 +55,8 @@ async def download_update(
     asset = info.get("asset") or {}
     url = asset.get("url")
     if not url:
-        return {"ok": False, "error": "该 Release 未提供桌面版更新包（win-x64.zip）"}
+        kind = "docker.zip" if deployment == "docker" else "win-x64.zip"
+        return {"ok": False, "error": f"该 Release 未提供适配的更新包（{kind}）"}
 
     version = info.get("latest") or ""
     # 版本号白名单校验：进入下载/解压/换盘链路的版本号必须是纯数字点分格式，
@@ -70,6 +71,27 @@ async def download_update(
     ex = update_service.extract_update(zip_path=r["path"], version=version)
     if not ex.get("ok"):
         return ex
+
+    if deployment == "docker":
+        # Docker：不写换盘脚本，直接写信号；容器内看门狗覆盖 /app 后退出，
+        # 由 compose 的 restart: unless-stopped 拉起新代码。
+        import json
+
+        from app.core.config import BASE_DIR
+
+        upd = BASE_DIR / "updates"
+        upd.mkdir(parents=True, exist_ok=True)
+        (upd / "pending.json").write_text(
+            json.dumps({"version": version, "staging": ex["staging"]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return {
+            "ok": True,
+            "version": version,
+            "verified": r.get("verified", False),
+            "size": r.get("size", 0),
+            "message": "更新包已下载并校验，点击「重启并应用」后容器将自动覆盖并重启",
+        }
 
     script = update_service.write_apply_script()
     update_service.write_pending(
@@ -97,15 +119,39 @@ async def download_progress(
 async def apply_update(
     user: User = Depends(require_permission("system:manage")),
 ) -> dict:
-    """写换盘信号：Electron 收到后退出应用并执行换盘脚本。"""
-    deployment = update_service.detect_deployment()
-    if deployment != "desktop":
-        return {"ok": False, "error": "仅桌面版支持应用内更新"}
+    """写应用信号：桌面版由 Electron 换盘；Docker 由容器内看门狗覆盖源码后退出重启。"""
+    import json
 
-    sig = update_service.write_apply_signal()
+    from app.core.config import BASE_DIR
     from app.core.logging import get_logger
 
-    get_logger("update").info("update_apply_requested", signal=sig, by=user.id)
+    deployment = update_service.detect_deployment()
+    log = get_logger("update")
+
+    if deployment == "docker":
+        upd = BASE_DIR / "updates"
+        pending = upd / "pending.json"
+        if not pending.is_file():
+            return {"ok": False, "error": "未找到已下载的更新包，请先点击「立即更新」"}
+        try:
+            info = json.loads(pending.read_text(encoding="utf-8") or "{}")
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "error": "更新状态文件损坏，请重新下载"}
+        (upd / "apply.requested").write_text(
+            json.dumps(info, ensure_ascii=False), encoding="utf-8"
+        )
+        pending.unlink(missing_ok=True)
+        log.info("docker_update_requested", version=info.get("version"), by=user.id)
+        return {
+            "ok": True,
+            "message": "正在应用更新：容器将在数秒内覆盖源码并自动重启，请稍候刷新页面",
+        }
+
+    if deployment != "desktop":
+        return {"ok": False, "error": f"当前为 {deployment} 部署，不支持应用内更新"}
+
+    sig = update_service.write_apply_signal()
+    log.info("update_apply_requested", signal=sig, by=user.id)
     return {
         "ok": True,
         "message": "正在重启并应用更新，应用将短暂关闭后自动启动……",

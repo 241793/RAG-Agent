@@ -171,6 +171,19 @@ async def lifespan(app: FastAPI):
 
     reminder_task = asyncio.create_task(periodic_reminder_check(60))
 
+    # Docker 在线更新看门狗：仅容器部署启用（覆盖源码后退出，由 compose 拉起）
+    docker_update_task = None
+    try:
+        from app.services.update_service import detect_deployment
+
+        if detect_deployment() == "docker":
+            from app.tasks.docker_update_tasks import periodic_docker_update_check
+
+            docker_update_task = asyncio.create_task(periodic_docker_update_check(10))
+            logger.info("docker_update_watchdog_started")
+    except Exception:  # noqa: BLE001
+        logger.exception("docker_update_watchdog_start_failed")
+
     # 外部 IM 渠道宿主（长连接）
     from app.channels.manager import channel_manager
 
@@ -194,6 +207,8 @@ async def lifespan(app: FastAPI):
     mail_task.cancel()
     sla_task.cancel()
     reminder_task.cancel()
+    if docker_update_task is not None:
+        docker_update_task.cancel()
     try:
         await channel_manager.stop_all()
     except Exception:  # noqa: BLE001
