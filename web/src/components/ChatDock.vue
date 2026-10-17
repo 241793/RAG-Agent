@@ -24,10 +24,12 @@
   </Teleport>
 
   <!-- 大窗聊天（内嵌，不跳转页面） -->
+  <!-- 宽度自适应：宽屏给足空间（最大 1280px），窄屏按比例收缩；
+       下限 720px 保证「会话列表 + 消息区」双栏不被压扁 -->
   <el-drawer
     v-model="open"
     title="企业聊天"
-    size="min(1100px, 92vw)"
+    size="clamp(560px, 78vw, 1280px)"
     :with-header="true"
     destroy-on-close
     @closed="onDrawerClosed"

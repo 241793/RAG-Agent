@@ -352,7 +352,8 @@ const auth = useAuthStore()
 withDefaults(
   defineProps<{
     height?: string
-    /** 紧凑模式：嵌在悬浮抽屉等窄容器里时使用 —— 收起左侧会话列表、压缩间距 */
+    /** 紧凑模式：嵌在悬浮抽屉等较窄容器里时使用 —— 列表列自适应收窄、压缩间距，
+        让消息区获得更多可用宽度（**不解散两栏布局**） */
     compact?: boolean
   }>(),
   { height: 'calc(100vh - var(--header-h) - 48px)', compact: false },
@@ -1066,15 +1067,15 @@ onBeforeUnmount(() => {
   .room-list { display: none; }
 }
 
-/* 紧凑模式：嵌在悬浮抽屉等窄容器里。
-   隐藏左侧会话列表，让消息区独占宽度；同时压缩内外边距，
-   避免内容被挤压后需要左右滑动才能看全。 */
+/* 紧凑模式：嵌在悬浮抽屉等较窄容器里。
+   保留左侧会话列表（导航必需），只做**宽度适配**：
+   列表列随容器收窄（260→180px 区间自适应），把省下的宽度让给消息区。 */
 .room-page.is-compact .room-shell {
-  grid-template-columns: 1fr;
-  gap: 0;
+  grid-template-columns: clamp(160px, 22%, 220px) 1fr;
+  gap: 10px;
   min-height: 0;
 }
-.room-page.is-compact .room-list { display: none; }
+.room-page.is-compact .room-list { padding: 6px; }
 .room-page.is-compact .rm-head { padding: 8px 10px; gap: 6px; }
 .room-page.is-compact .rm-status { padding: 4px 10px 0; }
 .room-page.is-compact .rm-scroll { padding: 8px 10px; }
