@@ -24,14 +24,16 @@
   </Teleport>
 
   <!-- 大窗聊天（内嵌，不跳转页面） -->
-  <!-- 宽度自适应：宽屏给足空间（最大 1280px），窄屏按比例收缩；
-       下限 720px 保证「会话列表 + 消息区」双栏不被压扁 -->
+  <!-- teleported=false：让 drawer 留在本组件树内，便于作用域样式生效；
+       否则 el-drawer 会被 teleport 到 body，scoped 的 :deep 无法命中它 -->
   <el-drawer
     v-model="open"
     title="企业聊天"
     size="clamp(560px, 78vw, 1280px)"
     :with-header="true"
+    :teleported="false"
     destroy-on-close
+    class="chat-dock-drawer"
     @closed="onDrawerClosed"
   >
     <template #header>
@@ -189,20 +191,32 @@ onBeforeUnmount(() => {
   border: 2px solid #fff;
 }
 .drawer-title { font-size: 15px; font-weight: 600; color: var(--text-title); }
-/* 让内容撑满 drawer body：body 本身是 flex 容器，dock-body 才能拿到确定高度，
-   内部的 ChatRoomPage（height:100%）才不会再按 100vh 计算导致超出屏幕。 */
-:deep(.el-drawer__body) {
-  padding: 0;
+.dock-body { flex: 1; min-height: 0; padding: 4px 8px 8px; box-sizing: border-box; overflow: hidden; }
+</style>
+
+<style>
+/* 悬浮聊天抽屉：高度必须严格等于视口，内容在内部滚动 —— 与企业聊天整页一致。
+   写全局样式（非 scoped）：el-drawer 的 header/body 是组件内部节点，
+   scoped 的 :deep 在 teleport 场景下不可靠。 */
+.chat-dock-drawer {
+  height: 100vh !important;
+  max-height: 100vh;
   display: flex;
-  min-height: 0;
-  overflow: hidden;
+  flex-direction: column;
 }
-.dock-body {
+.chat-dock-drawer .el-drawer__header {
+  margin-bottom: 0;   /* 默认有 32px 下边距，会白白占掉高度 */
+  padding: 12px 16px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+.chat-dock-drawer .el-drawer__body {
+  padding: 0;
   flex: 1;
-  min-height: 0;
-  padding: 4px 8px 8px;
-  box-sizing: border-box;
+  min-height: 0;      /* 关键：否则 flex 子项不会收缩，内容会把 body 撑高 */
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 </style>
 
