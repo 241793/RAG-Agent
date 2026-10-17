@@ -235,7 +235,12 @@ jobs:
     needs: [version-check, desktop, source, docker-pkg]
     runs-on: ubuntu-24.04
     steps:
-      # 按名字显式下载两个产物，不用「下载全部」：
+      # 必须 checkout：下面要从 CHANGELOG.md 提取正文，文件得在工作区里
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # 按名字显式下载产物，不用「下载全部」：
       # docker/build-push-action 的 type=gha 缓存会在本次运行里留下一个内部产物
       # (241793~RAG-Agent~xxxx.dockerbuild)，「下载全部」会把它一并拉取而导致失败。
       - name: 下载桌面版产物
