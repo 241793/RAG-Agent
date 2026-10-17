@@ -39,7 +39,9 @@
       <el-button size="small" :icon="TopRight" style="margin-left: auto" @click="openPage">独立页打开</el-button>
     </template>
     <div class="dock-body">
-      <ChatRoomPage v-if="open" height="calc(100vh - 90px)" compact />
+      <!-- 高度交给 drawer body 撑满（height:100%），不再自行按 100vh 计算 ——
+           否则会漏算 drawer 的 header 与 padding，导致整体超出屏幕 -->
+      <ChatRoomPage v-if="open" height="100%" compact />
     </div>
   </el-drawer>
 </template>
@@ -187,9 +189,21 @@ onBeforeUnmount(() => {
   border: 2px solid #fff;
 }
 .drawer-title { font-size: 15px; font-weight: 600; color: var(--text-title); }
-/* 抽屉内空间有限：去掉 el-drawer__body 默认内边距，交由内部紧凑模式控制 */
-.dock-body { height: 100%; padding: 4px 8px 8px; box-sizing: border-box; overflow: hidden; }
-:deep(.el-drawer__body) { padding: 0; }
+/* 让内容撑满 drawer body：body 本身是 flex 容器，dock-body 才能拿到确定高度，
+   内部的 ChatRoomPage（height:100%）才不会再按 100vh 计算导致超出屏幕。 */
+:deep(.el-drawer__body) {
+  padding: 0;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+.dock-body {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 8px 8px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
 </style>
 
 <style>
