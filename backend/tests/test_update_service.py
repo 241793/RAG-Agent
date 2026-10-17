@@ -201,3 +201,46 @@ def test_check_update_cache_hit_avoids_second_call(monkeypatch):
     loop.run_until_complete(U.check_update(force=True))
     assert called["n"] == 2
     U.clear_cache()
+
+
+# ---------- Release 正文：剥离部署教程 ----------
+
+def test_strip_deploy_guide_removes_section():
+    """应用内只展示更新内容，部署教程段落应被剥掉。"""
+    body = """## [1.0.1] - 2026-10-17
+
+### 新增
+- Docker 在线更新
+
+---
+
+<!-- deploy-guide:start -->
+## 🚀 部署与升级
+
+### Docker
+```bash
+docker compose up -d
+```
+<!-- deploy-guide:end -->"""
+    out = U._strip_deploy_guide(body)
+    assert "Docker 在线更新" in out
+    assert "部署与升级" not in out
+    assert "deploy-guide" not in out
+    assert "docker compose up -d" not in out
+
+
+def test_strip_deploy_guide_keeps_body_without_marker():
+    """没有标记（旧 Release / 手写正文）时原样保留，不能误删内容。"""
+    body = "## [1.0.0]\n\n- 首发"
+    assert U._strip_deploy_guide(body) == body
+
+
+def test_strip_deploy_guide_handles_empty():
+    assert U._strip_deploy_guide("") == ""
+
+
+def test_strip_deploy_guide_multiline_and_case_insensitive():
+    body = "更新A\n\n<!--DEPLOY-GUIDE:START-->\n部署说明\n第二行\n<!--deploy-guide:end-->\n\n更新B"
+    out = U._strip_deploy_guide(body)
+    assert "更新A" in out and "更新B" in out
+    assert "部署说明" not in out

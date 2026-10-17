@@ -150,18 +150,33 @@ Vite 跑在 5173 并把 `/api` 代理到 6677。改完后 `npm run build` 让后
 ### Docker（服务器 / 内网部署）
 
 ```bash
-# SQLite，零外部依赖
-docker compose up -d --build
+# 首次启动：直接用 GHCR 发布的镜像（不本地构建）
+docker compose up -d
 
 # 应用 + PostgreSQL(pgvector)
-docker compose --profile pg up -d --build      # 并把 INSTALL_PG 设为 true
+docker compose --profile pg up -d      # 并把 INSTALL_PG 设为 true 后重建镜像
 
-# 或直接构建镜像
-docker build -t rag-knowledgebase:1.0.0 .
-docker run -d -p 6677:6677 -v "$PWD/data:/app/backend/data" rag-knowledgebase:1.0.0
+# 本地改代码时自己构建
+docker compose --profile build up -d --build
+
+# 指定版本
+RAG_IMAGE=ghcr.io/241793/rag-agent:1.0.1 docker compose up -d
 ```
 
-数据（SQLite 库 + 上传文件 + 技能包）统一落在容器内 `/app/backend/data`，已挂 `VOLUME`，映射出来后**重建容器不丢数据**。健康检查走 `/health`（真实探 DB 连通性）。
+**目录结构**：`./rag-web` 单目录挂载到容器 `/app`，包含
+
+```
+rag-web/
+├── backend/          # 源码（在线更新会覆盖）
+│   └── data/         # ★ 数据：SQLite 库 + 上传文件 + 技能包（升级不丢）
+├── web/dist/         # 前端产物（在线更新会覆盖）
+└── updates/          # 更新暂存与备份
+```
+
+首次启动时若 `./rag-web` 为空，容器会**自动从镜像内置的种子副本初始化**（`docker/entrypoint.sh`），无需手工准备。
+
+> **从旧版本升级注意**：v1.0.0 的数据在 `./data`，v1.0.1 起在 `./rag-web/backend/data`。
+> 升级前请迁移：`mkdir -p rag-web/backend && mv data rag-web/backend/data`
 
 > **中文字体**：镜像内已装 `fonts-wqy-zenhei`。AI 生成 PDF 走 reportlab 嵌入字体，若基础镜像缺中文字体，PDF 里的中文会**静默变成乱码**（`I`/`II` 之类的占位符）。reportlab 只接受 **TrueType** 轮廓字体，因此**不能用 `fonts-noto-cjk`**（它是 CFF/PostScript 轮廓，会被直接拒绝）。自托管字体可用 `RAG_PDF_FONT` / `RAG_PDF_FONT_BOLD` 环境变量指定。
 
@@ -187,51 +202,85 @@ cd ../desktop && npm install && npm run dist
 | 工作流 | 触发 | 做什么 |
 |---|---|---|
 | `.github/workflows/ci.yml` | push main / PR | 后端 `pytest` + 前端 `vue-tsc` 类型检查与构建 |
-| `.github/workflows/release.yml` | 推 `v*` tag / 手动 | 校验版本号 → 推 Docker 镜像到 GHCR → 打桌面 exe zip + 源码 zip → 发 GitHub Release |
+| `.github/workflows/release.yml` | 推 `v*` tag / 手动 | 校验版本号 → 推 Docker 镜像到 GHCR → 产出 3 个 zip → 发 GitHub Release |
 
-发版流程：改 `backend/app/core/config.py` 的 `app_version`（及 `pyproject.toml` / `package.json`）→ 提交 → `git tag -a v1.0.0 -m "..."` → `git push origin v1.0.0`。
+**Release 产物**：
+
+| 产物 | 用途 |
+|---|---|
+| `*-win-x64.zip` | 桌面版（Windows，解压双击 `RAG知识库.exe`） |
+| `*-docker.zip` | **Docker 在线更新包**（后端源码 + 已构建前端，约 2 MB） |
+| `*-src.zip` | 纯源码 |
+
+**Release 正文**由 CI 从 `CHANGELOG.md` 提取该版本段落**原样写入**，
+所以发版前必须在 `CHANGELOG.md` 顶部补齐对应版本段落，否则 CI 会**拒绝发版**。
+
+发版流程：
+
+```bash
+# 1. 改版本号（4 处需一致）
+#    backend/app/core/config.py 的 app_version
+#    backend/pyproject.toml / web/package.json / desktop/package.json
+# 2. 在 CHANGELOG.md 顶部写该版本段落
+# 3. 提交并打 tag
+git tag -a v1.0.2 -m "v1.0.2"
+git push origin v1.0.2
+```
 
 > 首次推送到 GHCR 的包默认是 **private**，需在 GitHub Packages 页面手动改为 public；再次推送沿用该可见性。
 
 ### 应用内更新
 
-侧边栏底部显示当前版本，点击打开「关于 / 检查更新」：
+侧边栏底部显示当前版本，点击打开「关于 / 检查更新」，可查看新版本与**更新内容**（来源见下）。
 
-- **检查**：查询 GitHub Release 与当前版本比较（15 分钟缓存；离线/限流时只提示、不报错）- **桌面版**：可一键下载 → 校验 sha256 → 解压 → **重启并应用**。更新包完整性用 Release 资源自带的
-  `sha256` 摘要校验，校验失败即丢弃，不会安装被篡改的包
-- **Docker / 源码**：**只提示新版本与对应命令，不做自更新**
+| 部署形态 | 能否应用内更新 | 方式 |
+|---|---|---|
+| **桌面版** | ✅ | 下载 → sha256 校验 → 换盘 → 自动重启 |
+| **Docker** | ✅ | 下载源码包覆盖 `/app` → `pip install` → 退出进程 → compose 自动拉起 |
+| **源码运行** | ❌ | 只提示新版本，按 `git pull` 指引手动升级 |
 
-#### 为什么 Docker 不能自更新
-
-容器**无法替换自己的镜像**（正在运行的容器不能改自身文件系统映像），这是容器模型的限制，不是本功能没做。
-在容器里执行 `docker pull` 也只是拉到文件系统里、不会生效。Docker 部署请**在宿主机**执行：
-
-```bash
-docker compose pull && docker compose up -d      # 推荐
-# 或手动指定版本
-docker pull ghcr.io/241793/rag-agent:1.0.1
-docker run -d -p 6677:6677 -v "$PWD/data:/app/backend/data" ghcr.io/241793/rag-agent:1.0.1
-```
-
-数据在挂载卷 `./data`（容器内 `/app/backend/data`），**重建容器不丢数据**，
-所以 `pull + up -d` 是安全的。
-
-> 想进一步减少停机：把 `db`（如 postgres）与 `app` 分开，只重建 `app`；
-> 或前面挂一层反向代理做滚动切换。
-
-更新如何落地（桌面版）：Windows 不允许覆盖正在运行的 exe，所以**换盘由应用退出后的外部脚本执行**：
+#### 更新内容从哪来
 
 ```
-应用内点「立即更新」
-  → 后端流式下载 zip 到 %APPDATA%\RAG知识库\updates\download\
-  → 校验 sha256 → 解压到 …\updates\staging\vX.Y.Z\
-  → 点「重启并应用」→ 后端写 …\updates\apply.requested
-  → Electron 轮询到信号 → 拉起 apply_update.bat → 退出（释放 exe 文件锁）
+CHANGELOG.md（仓库根，你维护）
+      ↓ CI 在发版时提取该版本段落
+GitHub Release 正文
+      ↓ 后端读取
+应用内「检查更新」弹窗 + 顶部更新日志滚动条
+```
+
+所以**只需维护 `CHANGELOG.md`**，三处展示自动一致。
+
+#### 桌面版更新流程
+
+Windows 不允许覆盖正在运行的 exe，所以换盘由应用退出后的外部脚本执行：
+
+```
+点「立即更新」→ 流式下载 zip → 校验 sha256 → 解压到 …\updates\staging\vX.Y.Z\
+  → 点「重启并应用」→ 写 …\updates\apply.requested
+  → Electron 拉起 apply_update.bat → 退出（释放 exe 文件锁）
   → 脚本等进程退出 → 备份 → robocopy 覆盖 → 启动新版
-  → 失败则还原 .bak 并启动旧版（不会变砖），日志写 …\updates\update_apply.log
+  → 失败则还原 .bak 并启动旧版（不会变砖）
 ```
 
 用户数据在 `%APPDATA%\RAG知识库\data`，与安装目录分离，**更新不影响数据**。
+
+#### Docker 更新流程
+
+```
+点「立即更新」→ 下载 *-docker.zip（backend 源码 + 已构建的 web/dist）
+  → 校验 sha256 → 解压到 /app/updates/staging/
+  → 点「重启并应用」→ 写 /app/updates/apply.requested
+  → 容器内看门狗：备份 → 覆盖 backend/ 与 web/dist → pip install → os._exit(0)
+  → docker compose 的 restart: unless-stopped 拉起新版本
+  → 任一步失败自动从备份回滚
+```
+
+数据在 `./rag-web/backend/data`，**更新与重建容器都不会丢失**。
+
+> 也可在宿主机用镜像方式升级：`docker compose pull && docker compose up -d`
+> （两种方式等价；应用内更新适合不能随意连外网拉镜像的场景。）
+
 相关设置：`update_check_enabled` / `update_repo`（系统设置 → 高级）。
 
 > **注意**：v1.0.0 是引入本功能前的版本，从 v1.0.0 升级到 v1.0.1 仍需手动替换；

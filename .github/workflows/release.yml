@@ -265,9 +265,10 @@ jobs:
         run: ls -lh dist
 
       - name: 从 CHANGELOG.md 提取本版本段落作为 Release 正文
-        # 正文 = 纯更新内容：应用内「更新日志」在拿不到本地文件时会回退读取它，
-        # 所以这里不能混入 docker 安装命令之类的模板文字。
-        # 安装说明放 job summary 与 README，不污染更新内容。
+        # 正文 = 更新内容（与 CHANGELOG 一致）+ 部署教程。
+        # 两部分用 HTML 注释标记分隔：
+        #   <!-- deploy-guide:start --> ... <!-- deploy-guide:end -->
+        # 应用内读取时会剥掉部署段落（它只需要更新内容），GitHub 页面则完整显示。
         env:
           VER: ${{ needs.version-check.outputs.version }}
         run: |
@@ -280,13 +281,67 @@ jobs:
               if (index($0, "[" ver "]") > 0 || index($0, "## " ver) == 1) { started = 1 }
             }
             started { print }
-          ' CHANGELOG.md > release_body.md
-          if [ ! -s release_body.md ]; then
+          ' CHANGELOG.md > changelog_section.md
+          if [ ! -s changelog_section.md ]; then
             echo "::error::未能从 CHANGELOG.md 提取 $VER 段落"
             exit 1
           fi
-          echo "--- Release 正文 ---"
-          cat release_body.md
+          echo "--- 更新内容段落 ---"
+          cat changelog_section.md
+
+      - name: 生成 Release 正文（更新内容 + 部署教程）
+        env:
+          VER: ${{ needs.version-check.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            cat changelog_section.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "<!-- deploy-guide:start -->"
+            echo "## 🚀 部署与升级"
+            echo ""
+            echo "### Docker（推荐）"
+            echo ""
+            echo '```bash'
+            echo "# 首次部署"
+            echo "mkdir -p rag-web"
+            echo "docker compose up -d          # 直接用 GHCR 镜像，不本地构建"
+            echo ""
+            echo "# 后续升级（二选一）"
+            echo "#  ① 应用内：底部版本号 → 检查更新 → 立即更新 → 重启并应用"
+            echo "#  ② 宿主机换镜像："
+            echo "docker compose pull && docker compose up -d"
+            echo '```'
+            echo ""
+            echo "- 访问 http://127.0.0.1:6677 ，首次登录 \`admin / admin123\`"
+            echo "- 数据在 \`./rag-web/backend/data\`，升级/重建容器都不会丢失"
+            echo "- 首次启动会自动从镜像内置副本初始化 \`./rag-web\`，无需手工准备"
+            echo "- 需 PostgreSQL：\`docker compose --profile pg up -d\`"
+            echo ""
+            echo "### 桌面版（Windows）"
+            echo ""
+            echo "1. 下载 \`RAG-knowledgebase-v${VER}-win-x64.zip\` 并解压"
+            echo "2. 双击 \`RAG知识库.exe\` 运行（首次启动稍慢，需初始化数据）"
+            echo "3. 后续升级：应用内「关于 / 检查更新」一键更新"
+            echo ""
+            echo "数据保存在 \`%APPDATA%\\RAG知识库\`，与安装目录分离。"
+            echo ""
+            echo "### 源码运行"
+            echo ""
+            echo '```bash'
+            echo "git clone https://github.com/241793/RAG-Agent.git"
+            echo "cd RAG-Agent && ./start.bat   # Windows 一键启动"
+            echo '```'
+            echo ""
+            echo "### 更新说明"
+            echo ""
+            echo "应用内「检查更新」会读取本页正文的**更新内容**部分（部署段落自动忽略），"
+            echo "所以升级时可直接在界面里看到改了什么。"
+            echo "<!-- deploy-guide:end -->"
+          } > release_body.md
+          echo "--- Release 正文已生成（$(wc -l < release_body.md) 行）---"
 
       - name: 安装说明写入 job summary
         env:

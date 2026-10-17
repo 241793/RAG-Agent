@@ -106,6 +106,32 @@ def _hint_for(deployment: str, version: str, image: str) -> str:
     return "在「关于/更新」中点击「立即更新」，下载完成后会自动重启应用"
 
 
+def _strip_deploy_guide(body: str) -> str:
+    """剥掉 Release 正文里的「部署教程」段落，只留更新内容。
+
+    CI 生成的 Release 正文 = 更新内容 + 部署教程，用 HTML 注释标记分隔：
+      <!-- deploy-guide:start --> ... <!-- deploy-guide:end -->
+    应用内只需要「改了什么」，部署说明在 GitHub 页面看即可。
+    若没有标记（旧版本 Release 或手写正文），原样返回。
+
+    注意：标记本身在 GitHub 页面不渲染，所以对页面展示无副作用。
+    """
+    import re
+
+    if not body:
+        return body
+    cleaned = re.sub(
+        r"<!--\s*deploy-guide:start\s*-->.*?<!--\s*deploy-guide:end\s*-->",
+        "",
+        body,
+        flags=re.S | re.I,
+    )
+    # 去掉因此留下的分隔线/多余空行
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    cleaned = re.sub(r"-{3,}\s*$", "", cleaned).strip()
+    return cleaned
+
+
 def _pick_asset(assets: list[dict], deployment: str = "desktop") -> dict | None:
     """按部署形态挑选更新包。
 
@@ -178,7 +204,7 @@ async def check_update(*, force: bool = False) -> dict:
 
     tag = (data.get("tag_name") or "").strip()
     latest_ver = tag.lstrip("vV")
-    notes = (data.get("body") or "").strip()
+    notes = _strip_deploy_guide((data.get("body") or "").strip())
     assets = data.get("assets") or []
     asset = _pick_asset(assets, deployment)
     prerelease = bool(data.get("prerelease")) or is_prerelease(tag)
