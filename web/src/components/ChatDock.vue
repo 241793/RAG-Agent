@@ -37,7 +37,7 @@
       <el-button size="small" :icon="TopRight" style="margin-left: auto" @click="openPage">独立页打开</el-button>
     </template>
     <div class="dock-body">
-      <ChatRoomPage v-if="open" height="calc(100vh - 90px)" />
+      <ChatRoomPage v-if="open" height="calc(100vh - 90px)" compact />
     </div>
   </el-drawer>
 </template>
@@ -185,7 +185,9 @@ onBeforeUnmount(() => {
   border: 2px solid #fff;
 }
 .drawer-title { font-size: 15px; font-weight: 600; color: var(--text-title); }
-.dock-body { height: 100%; padding: 8px; box-sizing: border-box; }
+/* 抽屉内空间有限：去掉 el-drawer__body 默认内边距，交由内部紧凑模式控制 */
+.dock-body { height: 100%; padding: 4px 8px 8px; box-sizing: border-box; overflow: hidden; }
+:deep(.el-drawer__body) { padding: 0; }
 </style>
 
 <style>

@@ -1,6 +1,7 @@
 <template>
   <div
     class="room-page"
+    :class="{ 'is-compact': compact }"
     :style="{ height }"
     @dragenter="onDragEnter"
     @dragover="onDragOver"
@@ -349,8 +350,12 @@ import { useAuthStore } from '@/stores/auth'
 const auth = useAuthStore()
 
 withDefaults(
-  defineProps<{ height?: string }>(),
-  { height: 'calc(100vh - var(--header-h) - 48px)' },
+  defineProps<{
+    height?: string
+    /** 紧凑模式：嵌在悬浮抽屉等窄容器里时使用 —— 收起左侧会话列表、压缩间距 */
+    compact?: boolean
+  }>(),
+  { height: 'calc(100vh - var(--header-h) - 48px)', compact: false },
 )
 
 const ROLE_LABEL: Record<string, string> = { owner: '群主', admin: '管理员', member: '成员' }
@@ -957,6 +962,9 @@ onBeforeUnmount(() => {
   display: grid; grid-template-columns: 264px 1fr; gap: 16px;
   height: 100%; min-height: 520px;
 }
+/* grid 子项默认 min-width:auto，长消息/宽工具栏会把列撑破，导致需要横向滚动。
+   显式置 0 让 1fr 列真正可收缩，溢出交给内部元素处理。 */
+.room-shell > * { min-width: 0; }
 
 /* 左列表 */
 .room-list { display: flex; flex-direction: column; overflow: hidden; padding: 10px; }
@@ -1057,4 +1065,19 @@ onBeforeUnmount(() => {
   .room-shell { grid-template-columns: 1fr; }
   .room-list { display: none; }
 }
+
+/* 紧凑模式：嵌在悬浮抽屉等窄容器里。
+   隐藏左侧会话列表，让消息区独占宽度；同时压缩内外边距，
+   避免内容被挤压后需要左右滑动才能看全。 */
+.room-page.is-compact .room-shell {
+  grid-template-columns: 1fr;
+  gap: 0;
+  min-height: 0;
+}
+.room-page.is-compact .room-list { display: none; }
+.room-page.is-compact .rm-head { padding: 8px 10px; gap: 6px; }
+.room-page.is-compact .rm-status { padding: 4px 10px 0; }
+.room-page.is-compact .rm-scroll { padding: 8px 10px; }
+.room-page.is-compact .bubble-col { max-width: 82%; }
+.room-page.is-compact .capsule { max-width: 100%; }
 </style>

@@ -158,6 +158,9 @@ export interface NotificationItem {
   title: string
   content?: string
   kind?: string
+  level?: string
+  /** 点击通知要跳转的前端路由（后端按通知类型设置，如注册申请 → /admin/users） */
+  link?: string | null
   read: boolean
   created_at: number
 }
@@ -508,6 +511,7 @@ export const notificationApi = {
       })
       .then((r) => r.data),
   unreadCount: () => http.get<{ unread: number }>('/notifications/unread-count').then((r) => r.data),
+  markRead: (ids: number[]) => http.post('/notifications/read', { ids }).then((r) => r.data),
   markAllRead: () => http.post('/notifications/read-all').then((r) => r.data),
 }
 
