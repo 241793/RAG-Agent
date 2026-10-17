@@ -43,9 +43,8 @@ async def download_update(
     避免被诱导下载任意文件（SSRF / 供应链）。
     """
     deployment = update_service.detect_deployment()
-    if deployment not in ("desktop", "docker"):
-        return {"ok": False, "error": f"当前为 {deployment} 部署，不支持应用内更新；"
-                                      "请按「关于/更新」中的指引手动升级"}
+    if deployment not in ("desktop", "docker", "source"):
+        return {"ok": False, "error": f"当前为 {deployment} 部署，不支持应用内更新"}
 
     info = await update_service.check_update(force=True)
     if not info.get("ok"):
@@ -55,7 +54,7 @@ async def download_update(
     asset = info.get("asset") or {}
     url = asset.get("url")
     if not url:
-        kind = "docker.zip" if deployment == "docker" else "win-x64.zip"
+        kind = "win-x64.zip" if deployment == "desktop" else "docker.zip"
         return {"ok": False, "error": f"该 Release 未提供适配的更新包（{kind}）"}
 
     version = info.get("latest") or ""
@@ -72,9 +71,9 @@ async def download_update(
     if not ex.get("ok"):
         return ex
 
-    if deployment == "docker":
-        # Docker：不写换盘脚本，直接写信号；容器内看门狗覆盖 /app 后退出，
-        # 由 compose 的 restart: unless-stopped 拉起新代码。
+    if deployment in ("docker", "source"):
+        # Docker / 源码：不写换盘脚本。Docker 由容器内看门狗覆盖 /app 后退出，
+        # 由 compose 拉起；源码由 apply 接口直接覆盖并 os.execv 重启。
         import json
 
         from app.core.config import BASE_DIR
@@ -90,7 +89,11 @@ async def download_update(
             "version": version,
             "verified": r.get("verified", False),
             "size": r.get("size", 0),
-            "message": "更新包已下载并校验，点击「重启并应用」后容器将自动覆盖并重启",
+            "message": (
+                "更新包已下载并校验，点击「重启并应用」后容器将自动覆盖并重启"
+                if deployment == "docker"
+                else "更新包已下载并校验，点击「重启并应用」后服务将覆盖文件并自动重启"
+            ),
         }
 
     script = update_service.write_apply_script()
@@ -145,6 +148,48 @@ async def apply_update(
         return {
             "ok": True,
             "message": "正在应用更新：容器将在数秒内覆盖源码并自动重启，请稍候刷新页面",
+        }
+
+    if deployment == "source":
+        # 源码态：直接覆盖项目目录，然后 os.execv 原地重启。
+        # 覆盖是同步的（可能要 pip install 几十秒），故放到线程里跑，避免阻塞事件循环。
+        import asyncio
+        import json
+        from pathlib import Path
+
+        from app.core.config import BASE_DIR
+        from app.services import source_update
+
+        upd = BASE_DIR / "updates"
+        pending = upd / "pending.json"
+        if not pending.is_file():
+            return {"ok": False, "error": "未找到已下载的更新包，请先点击「立即更新」"}
+        try:
+            info = json.loads(pending.read_text(encoding="utf-8") or "{}")
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "error": "更新状态文件损坏，请重新下载"}
+
+        staging = Path(str(info.get("staging") or ""))
+        version = str(info.get("version") or "")
+        if not staging.is_dir():
+            return {"ok": False, "error": "暂存目录不存在，请重新下载"}
+
+        result = await asyncio.to_thread(source_update.apply_package, staging, version)
+        if not result.get("ok"):
+            return {"ok": False, "error": result.get("error") or "应用更新失败"}
+
+        pending.unlink(missing_ok=True)
+        log.info("source_update_applied", version=version, by=user.id)
+
+        # 延迟重启：先让响应返回，再 execv
+        async def _restart() -> None:
+            await asyncio.sleep(1.0)
+            source_update.restart_process()
+
+        asyncio.get_running_loop().create_task(_restart())
+        return {
+            "ok": True,
+            "message": "更新已应用，服务正在重启，请稍候刷新页面（约 10 秒）",
         }
 
     if deployment != "desktop":

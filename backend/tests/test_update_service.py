@@ -132,6 +132,8 @@ def test_check_update_parses_release(monkeypatch):
              "browser_download_url": "https://github.com/x/src.zip"},
             {"name": "RAG-knowledgebase-v9.9.9-win-x64.zip", "size": 208, "digest": "sha256:bb",
              "browser_download_url": "https://github.com/x/win.zip"},
+            {"name": "RAG-knowledgebase-v9.9.9-docker.zip", "size": 2, "digest": "sha256:cc",
+             "browser_download_url": "https://github.com/x/docker.zip"},
         ],
     }
     monkeypatch.setattr(S, "_gh_get", _fake_gh(200, payload))
@@ -141,14 +143,16 @@ def test_check_update_parses_release(monkeypatch):
     assert r["latest"] == "9.9.9"
     assert r["update_available"] is True
     assert r["notes"].startswith("### 更新内容")
-    assert r["asset"]["name"].endswith("win-x64.zip")
-    assert r["asset"]["digest"] == "sha256:bb"
-    # 不硬编码版本号：每次发版都要改测试是脆弱的，改为与配置一致即可
+
+    # 资产选择按部署形态：测试环境是 source → 应选 docker.zip（源码+已构建前端）
+    # 不再硬编码 win-x64，避免部署形态语义变化时测试假失败
     from app.core.config import settings
 
+    expected = "win-x64.zip" if r["deployment"] == "desktop" else "docker.zip"
+    assert r["asset"]["name"].endswith(expected), f"{r['deployment']} 应选 {expected}"
+    # 源码态现在也支持应用内更新（覆盖 backend/ + web/dist 后 os.execv 重启）
+    assert r["can_self_update"] is True
     assert r["current"] == settings.app_version
-    # source 形态不可自更新
-    assert r["can_self_update"] is False
     U.clear_cache()
 
 

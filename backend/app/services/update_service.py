@@ -102,7 +102,11 @@ def _hint_for(deployment: str, version: str, image: str) -> str:
             "数据位于挂载卷 ./rag-web/backend/data，更新或重建容器都不会丢失"
         )
     if deployment == "source":
-        return "git pull && cd web && npm ci && npm run build，然后重启后端"
+        return (
+            "在「关于/更新」中点击「立即更新」：会下载源码包覆盖 backend/ 与 web/dist/ "
+            "并自动重启（依赖有变化时自动 pip install）。也可手动："
+            "git pull && cd web && npm ci && npm run build，然后重启后端"
+        )
     return "在「关于/更新」中点击「立即更新」，下载完成后会自动重启应用"
 
 
@@ -137,9 +141,10 @@ def _pick_asset(assets: list[dict], deployment: str = "desktop") -> dict | None:
 
     - desktop → *win-x64.zip（PyInstaller/Electron 桌面包）
     - docker  → *docker.zip（后端源码 + 已构建的 web/dist，容器内可直接覆盖）
+    - source  → 同样用 *docker.zip（同为「源码 + 已构建前端」，只是覆盖到项目目录）
     两种包都要求是 zip；找不到返回 None。
     """
-    want = "docker" if deployment == "docker" else "win-x64"
+    want = "docker" if deployment in ("docker", "source") else "win-x64"
     for a in assets:
         name = (a.get("name") or "").lower()
         if name.endswith(".zip") and want in name:
@@ -218,7 +223,7 @@ async def check_update(*, force: bool = False) -> dict:
         "published_at": data.get("published_at"),
         "notes": notes[:8000],
         "html_url": data.get("html_url"),
-        "can_self_update": deployment in ("desktop", "docker") and asset is not None,
+        "can_self_update": deployment in ("desktop", "docker", "source") and asset is not None,
         "asset": (
             {
                 "name": asset.get("name"),

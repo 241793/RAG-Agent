@@ -237,7 +237,9 @@ git push origin v1.0.2
 |---|---|---|
 | **桌面版** | ✅ | 下载 → sha256 校验 → 换盘 → 自动重启 |
 | **Docker** | ✅ | 下载源码包覆盖 `/app` → `pip install` → 退出进程 → compose 自动拉起 |
-| **源码运行** | ❌ | 只提示新版本，按 `git pull` 指引手动升级 |
+| **源码运行** | ✅ | 下载源码包覆盖 `backend/` 与 `web/dist/` → `pip install` → `os.execv` 原地重启 |
+
+> 源码运行更新时**只替换代码与前端产物**，`backend/data/`（数据库、上传文件）、`.env`、`.venv` **一律不动**；失败自动从备份回滚。
 
 #### 更新内容从哪来
 
@@ -280,6 +282,22 @@ Windows 不允许覆盖正在运行的 exe，所以换盘由应用退出后的�
 
 > 也可在宿主机用镜像方式升级：`docker compose pull && docker compose up -d`
 > （两种方式等价；应用内更新适合不能随意连外网拉镜像的场景。）
+
+#### 源码运行更新流程
+
+```
+点「立即更新」→ 下载 *-docker.zip（backend 源码 + 已构建的 web/dist）
+  → 校验 sha256 → 解压到 backend/updates/staging/
+  → 点「重启并应用」→ 备份 backend/ 与 web/dist → 覆盖 → pip install
+  → os.execv 原地重启（约 10 秒）
+  → 任一步失败自动从备份回滚
+```
+
+**不会被覆盖的内容**：`backend/data/`（数据库与上传文件）、`.env`、`.venv`。
+即使更新包内误带了 `data/`，也会被跳过 —— 由测试固化。
+
+> 前提：进程需有项目目录写权限；用 `start.bat` 或直接 `uvicorn` 启动均可。
+> `start.bat` 本身无需改动 —— 它只是启动脚本，更新由运行中的服务完成。
 
 相关设置：`update_check_enabled` / `update_repo`（系统设置 → 高级）。
 
