@@ -22,6 +22,10 @@ data/
 *.db
 *.sqlite3
 
+# ---- 在线更新的暂存与备份（运行时产生，不入库）----
+backend/updates/
+updates/
+
 # ---- 日志 ----
 *.log
 logs/
@@ -35,6 +39,7 @@ release/
 
 # ---- 工具 / IDE ----
 .claud/
+.claude/
 .e2e/
 .idea/
 .vscode/
